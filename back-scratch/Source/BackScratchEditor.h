@@ -84,8 +84,12 @@ private:
         std::optional<juce::MouseEvent> dragStart;
     };
 
+    void paintEnclosure(juce::Graphics&);
+
     BackScratchProcessor& scratchProcessor;
     juce::Image shell, originalShell;
+    // The enclosure composited once at the screen's physical resolution; repainted frames just blit it.
+    juce::Image enclosureCache;
     juce::Typeface::Ptr regularTypeface, italicTypeface;
     std::unique_ptr<juce::LookAndFeel> knobLookAndFeel;
     DurationKnob durationKnob;

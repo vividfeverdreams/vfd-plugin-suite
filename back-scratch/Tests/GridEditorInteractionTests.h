@@ -167,7 +167,7 @@ inline void runGridEditorInteractionTests()
     editor->mouseUp(event(*editor, gridPoint(15.8f, 0.5f), gridPoint(0.3f, 0.5f), true));
     check(samePlayback(beforeCancel, processor.currentPattern()), "Escape restores every cell touched during an eraser drag");
 
-    editor->setSize(560, 752);
+    editor->setSize(560, 754);
     checkToolbarLayout(*editor);
     click(*editor, Control::pencil);
     stroke(*editor, gridPoint(14.6f, 0.35f), gridPoint(9.0f, 0.75f));
@@ -214,7 +214,7 @@ inline void runGridEditorInteractionTests()
     click(*editor, Control::undo);
     check(samePlayback(dry, processor.currentPattern()), "undo restores a right-boundary click");
 
-    editor->setSize(560, 752);
+    editor->setSize(560, 754);
     stroke(*editor, gridPoint(16.0f, 0.0f), gridPoint(12.0f, 0.3f));
     check(!samePlayback(dry, processor.currentPattern()) && validateEditedPattern(processor.currentPattern()),
           "the bottom-right corner starts a valid backwards stroke after scaling");

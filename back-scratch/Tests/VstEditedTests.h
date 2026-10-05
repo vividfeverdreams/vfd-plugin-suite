@@ -96,7 +96,7 @@ inline void runVstEditedTests(juce::AudioPluginInstance& plugin, backScratch::Ba
     plugin.releaseResources(); direct.releaseResources();
     plugin.setPlayHead(&head); direct.setPlayHead(&head);
     auto directEditor = std::make_unique<BackScratchEditor>(direct);
-    directEditor->setSize(700, 940);
+    directEditor->setSize(700, 942);
     const auto beforeEdit = patternTests::fingerprint(direct.currentPattern());
     pencilStroke(*directEditor);
     loadDrawnState(plugin, direct);

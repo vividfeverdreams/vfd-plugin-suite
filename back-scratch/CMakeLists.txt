@@ -13,7 +13,7 @@ add_subdirectory("${JUCE_SOURCE_DIR}" "${CMAKE_BINARY_DIR}/JUCE")
 
 juce_add_binary_data(BackScratchAssets SOURCES
     Assets/Shell.png
-    Assets/Interior-v7.png
+    Assets/Interior-v8.png
     ../shared/VfdLogo.svg
     Assets/ChakraPetch-SemiBold.ttf
     Assets/ChakraPetch-BoldItalic.ttf)

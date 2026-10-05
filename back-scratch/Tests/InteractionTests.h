@@ -360,9 +360,11 @@ inline void runInteractionTests(backScratch::BackScratchProcessor& processor)
     editor->mouseUp(event(*editor, button, button));
     check(processor.generationSeed() == seed, "Escape cancels a pending button press");
 
-    check(editor->getWidth() == 700 && editor->getHeight() == 940,
-          "the default editor is cropped closely to the original enclosure");
-    editor->setSize(560, 752);
+    check(editor->getWidth() <= 700 && editor->getWidth() >= 420
+              && std::abs(editor->getHeight() - editor->getWidth() * 942.0 / 700.0) <= 1.0,
+          "the default editor shows the enclosure edge to edge at its fixed aspect ratio");
+    check(editor->isResizable(), "hosts can resize the editor");
+    editor->setSize(560, 754);
     checkControlLayout(*editor);
     checkInfoInteraction(*editor, processor);
     check(editor->getLocalBounds().contains(knob->getBounds()), "the duration knob remains inside the cropped editor");

@@ -11,6 +11,8 @@ namespace backScratch {
 
 namespace {
 constexpr float canvasWidth = 1122.0f, canvasHeight = 1402.0f;
+// Default editor size: the enclosure fills the window edge to edge (design viewport 972 x 1308 at 1/1.3886).
+constexpr int editorWidth = 700, editorHeight = 942, minimumEditorWidth = 420, maximumEditorWidth = 1050;
 const auto cream = juce::Colour::fromRGB(246, 232, 215);
 const auto cyan = juce::Colour::fromRGB(179, 237, 242);
 const auto deep = juce::Colour::fromRGB(22, 10, 13);
@@ -19,6 +21,19 @@ const auto red = juce::Colour::fromRGB(226, 41, 62);
 const auto lime = juce::Colour(0xffd7f76c);
 const auto midnight = juce::Colour(0xff071343);
 juce::Rectangle<float> rectangle(float x, float y, float w, float h) { return {x, y, w, h}; }
+// The physical INFO key on the lower shell, in design coordinates.
+const juce::Rectangle<float> infoKeyBounds {492.8f, 1211.8f, 134.4f, 53.2f};
+
+int initialEditorWidth()
+{
+    // Keep the whole device on screen on 13-14" laptops: leave room for the host's window chrome.
+    if (const auto* display = juce::Desktop::getInstance().getDisplays().getPrimaryDisplay()) {
+        const int available = display->userArea.getHeight() - 110;
+        if (available < editorHeight)
+            return juce::jmax(minimumEditorWidth, editorWidth * available / editorHeight);
+    }
+    return editorWidth;
+}
 
 // Shared visual language with YOI-BOI: rounded lime die, five dark pips,
 // a cream physical cap and the same italic Chakra Petch label.
@@ -171,7 +186,7 @@ public:
 BackScratchEditor::BackScratchEditor(BackScratchProcessor& owner)
     : AudioProcessorEditor(owner), scratchProcessor(owner)
 {
-    shell = juce::ImageFileFormat::loadFrom(BinaryData::Interiorv7_png, BinaryData::Interiorv7_pngSize);
+    shell = juce::ImageFileFormat::loadFrom(BinaryData::Interiorv8_png, BinaryData::Interiorv8_pngSize);
     originalShell = juce::ImageFileFormat::loadFrom(BinaryData::Shell_png, BinaryData::Shell_pngSize);
     regularTypeface = juce::Typeface::createSystemTypefaceFor(BinaryData::ChakraPetchSemiBold_ttf,
                                                               BinaryData::ChakraPetchSemiBold_ttfSize);
@@ -205,7 +220,13 @@ BackScratchEditor::BackScratchEditor(BackScratchProcessor& owner)
     infoButton->onClick = [this] { infoOverlay->open(infoButton.get()); };
     addAndMakeVisible(*infoButton);
     addChildComponent(*infoOverlay);
-    setSize(700, 940);
+    setOpaque(true);
+    setResizable(true, false);
+    setResizeLimits(minimumEditorWidth, minimumEditorWidth * editorHeight / editorWidth,
+                    maximumEditorWidth, maximumEditorWidth * editorHeight / editorWidth);
+    if (auto* constrainer = getConstrainer()) constrainer->setFixedAspectRatio(double(editorWidth) / editorHeight);
+    const int width = initialEditorWidth();
+    setSize(width, juce::roundToInt(width * double(editorHeight) / editorWidth));
     setWantsKeyboardFocus(true);
     setTitle("BACK-SCRATCH — live scratch variations");
     startTimerHz(30);
@@ -267,8 +288,9 @@ bool BackScratchEditor::patternHitTest(juce::Point<float> point) noexcept
 
 juce::Rectangle<float> BackScratchEditor::designViewport() noexcept
 {
-    // Keep the original enclosure intact; remove the dark image padding around it.
-    return rectangle(70, 47, 980, 1316);
+    // Hug the enclosure's straight edges so it meets the window on every side; the artwork's corners
+    // were tightened (Assets/Interior-v8.png, shared/tools/tighten_shell_corners.py) to match.
+    return rectangle(73, 49, 972, 1308);
 }
 
 juce::AffineTransform BackScratchEditor::designToEditor() const noexcept
@@ -282,9 +304,9 @@ juce::AffineTransform BackScratchEditor::designToEditor() const noexcept
 void BackScratchEditor::resized()
 {
     durationKnob.setBounds(controlBounds(Control::phraseDuration).transformedBy(designToEditor()).toNearestInt());
-    if (infoButton) infoButton->setBounds(juce::Rectangle<float>(302, 832, 96, 38)
-        .transformedBy(juce::AffineTransform::scale(getWidth() / 700.0f, getHeight() / 940.0f)).toNearestInt());
+    if (infoButton) infoButton->setBounds(infoKeyBounds.transformedBy(designToEditor()).toNearestInt());
     if (infoOverlay) infoOverlay->setBounds(getLocalBounds());
+    enclosureCache = {};
 }
 
 juce::Point<float> BackScratchEditor::designPoint(juce::Point<float> point) const noexcept
@@ -310,19 +332,35 @@ void BackScratchEditor::drawText(juce::Graphics& g, const juce::String& text, ju
     g.drawFittedText(text, box.toNearestInt(), align, 1, 0.72f);
 }
 
+void BackScratchEditor::paintEnclosure(juce::Graphics& g)
+{
+    // Composite the shell once per size and screen density, then blit it 1:1 on every frame. Resampling
+    // two 1122 x 1402 images each repaint was the editor's dominant cost and looked soft on Retina.
+    const float scale = g.getInternalContext().getPhysicalPixelScaleFactor();
+    const int width = juce::jmax(1, juce::roundToInt(getWidth() * scale));
+    const int height = juce::jmax(1, juce::roundToInt(getHeight() * scale));
+    if (enclosureCache.getWidth() != width || enclosureCache.getHeight() != height) {
+        enclosureCache = juce::Image(juce::Image::RGB, width, height, false);
+        juce::Graphics cache(enclosureCache);
+        cache.fillAll(juce::Colour::fromRGB(28, 4, 7));
+        cache.setImageResamplingQuality(juce::Graphics::highResamplingQuality);
+        cache.addTransform(designToEditor().scaled(scale));
+        if (shell.isValid()) cache.drawImage(shell, rectangle(0, 0, canvasWidth, canvasHeight));
+        // Keep the original hardware light completely intact. No banner or control
+        // extends into this reserved physical part of the enclosure.
+        if (originalShell.isValid()) {
+            juce::Path light; light.addEllipse(905, 92, 52, 55);
+            cache.reduceClipRegion(light);
+            cache.drawImage(originalShell, rectangle(0, 0, canvasWidth, canvasHeight));
+        }
+    }
+    g.drawImage(enclosureCache, getLocalBounds().toFloat());
+}
+
 void BackScratchEditor::paint(juce::Graphics& g)
 {
-    g.fillAll(juce::Colour::fromRGB(28, 4, 7));
+    paintEnclosure(g);
     g.addTransform(designToEditor());
-    if (shell.isValid()) g.drawImage(shell, rectangle(0, 0, canvasWidth, canvasHeight));
-    // Keep the original hardware light completely intact. No banner or control
-    // extends into this reserved physical part of the enclosure.
-    if (originalShell.isValid()) {
-        juce::Graphics::ScopedSaveState saved(g);
-        juce::Path light; light.addEllipse(905, 92, 52, 55);
-        g.reduceClipRegion(light);
-        g.drawImage(originalShell, rectangle(0, 0, canvasWidth, canvasHeight));
-    }
     const auto display = scratchProcessor.displayState();
     drawPresetBrowser(g, display);
     drawEditTools(g);
