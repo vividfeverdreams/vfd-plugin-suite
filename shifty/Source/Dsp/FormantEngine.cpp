@@ -11,6 +11,16 @@ namespace
 constexpr float pi = juce::MathConstants<float>::pi;
 constexpr float decibelsToLog = 0.11512925465f;
 constexpr float maximumLogGain = 24.0f * decibelsToLog;
+// Linked level compensation: a short symmetric smoother on each frame's own
+// measured energy ratio. The +12 dB ceiling lets bright sources keep their
+// level when shifted far down; the result is energy matched, not boosted.
+constexpr float minimumCompensation = -12.0f * decibelsToLog;
+constexpr float maximumCompensation = 12.0f * decibelsToLog;
+constexpr double compensationSmoothingSeconds = 0.005;
+// Moving-gain smoothing: 8 binomial passes (about +/-2 bins, sigma 47 Hz at
+// 48 kHz), fully applied once SHIFT changes by 2 semitones across one frame.
+constexpr int motionSmoothingPasses = 8;
+constexpr float fullSmoothingShiftChange = 2.0f;
 
 float guideEnvelope (float logFrequency, float width) noexcept
 {
@@ -57,17 +67,21 @@ void FormantEngine::prepare (double sampleRate, int maxBlockSize, int channels)
 
     hopSize_ = fftSize_ / 4;
     outputRingSize_ = fftSize_ * 2;
-    levelAttackCoefficient_ = static_cast<float> (1.0 - std::exp (-hopSize_ / (0.035 * sampleRate_)));
-    levelReleaseCoefficient_ = static_cast<float> (1.0 - std::exp (-hopSize_ / (0.120 * sampleRate_)));
+    levelSmoothingCoefficient_ = static_cast<float> (
+        1.0 - std::exp (-hopSize_ / (compensationSmoothingSeconds * sampleRate_)));
     smoothingCoefficient_ = static_cast<float> (1.0 - std::exp (-1.0 / (0.02 * sampleRate_)));
 
     int order = 0;
     while ((1 << order) < fftSize_)
         ++order;
+    // juce::dsp::FFT uses vDSP on Apple platforms. Construction allocates, so
+    // it happens here rather than on the audio thread.
+    if (fft_ == nullptr || fft_->getSize() != fftSize_)
+        fft_ = std::make_unique<juce::dsp::FFT> (order);
 
-    bitReversal_.resize (static_cast<size_t> (fftSize_));
-    twiddles_.resize (static_cast<size_t> (fftSize_ / 2));
     window_.resize (static_cast<size_t> (fftSize_));
+    motionRing_.resize (static_cast<size_t> (fftSize_));
+    lifterTaper_.resize (static_cast<size_t> (fftSize_ / 6 + 2));
     const auto bins = static_cast<size_t> (fftSize_ / 2 + 1);
     logFrequencies_.resize (bins);
     spectralFade_.resize (bins);
@@ -85,24 +99,8 @@ void FormantEngine::prepare (double sampleRate, int maxBlockSize, int channels)
     }
 
     for (int i = 0; i < fftSize_; ++i)
-    {
-        unsigned int reversed = 0;
-        unsigned int value = static_cast<unsigned int> (i);
-        for (int bit = 0; bit < order; ++bit)
-        {
-            reversed = (reversed << 1) | (value & 1u);
-            value >>= 1;
-        }
-        bitReversal_[static_cast<size_t> (i)] = static_cast<int> (reversed);
         window_[static_cast<size_t> (i)] = std::sin (pi * (static_cast<float> (i) + 0.5f)
                                                    / static_cast<float> (fftSize_));
-    }
-
-    for (int i = 0; i < fftSize_ / 2; ++i)
-    {
-        const float angle = -2.0f * pi * static_cast<float> (i) / static_cast<float> (fftSize_);
-        twiddles_[static_cast<size_t> (i)] = { std::cos (angle), std::sin (angle) };
-    }
 
     channelStates_.resize (static_cast<size_t> (std::max (1, channels)));
     for (auto& state : channelStates_)
@@ -114,6 +112,7 @@ void FormantEngine::prepare (double sampleRate, int maxBlockSize, int channels)
         state.logEnvelope.resize (static_cast<size_t> (fftSize_ / 2 + 1));
         state.envelopeTarget.resize (static_cast<size_t> (fftSize_ / 2 + 1));
         state.logGains.resize (static_cast<size_t> (fftSize_ / 2 + 1));
+        state.gainScratch.resize (static_cast<size_t> (fftSize_ / 2 + 1));
         state.peakDistances.resize (static_cast<size_t> (fftSize_ / 2 + 1));
         state.spectrum.resize (static_cast<size_t> (fftSize_));
         state.originalSpectrum.resize (static_cast<size_t> (fftSize_));
@@ -134,6 +133,7 @@ void FormantEngine::reset()
         std::fill (state.logEnvelope.begin(), state.logEnvelope.end(), 0.0f);
         std::fill (state.envelopeTarget.begin(), state.envelopeTarget.end(), 0.0f);
         std::fill (state.logGains.begin(), state.logGains.end(), 0.0f);
+        std::fill (state.gainScratch.begin(), state.gainScratch.end(), 0.0f);
         std::fill (state.peakDistances.begin(), state.peakDistances.end(), 0);
         state.frameActive = false;
         std::fill (state.spectrum.begin(), state.spectrum.end(), Complex {});
@@ -141,7 +141,10 @@ void FormantEngine::reset()
         std::fill (state.cepstrum.begin(), state.cepstrum.end(), Complex {});
     }
 
+    std::fill (motionRing_.begin(), motionRing_.end(), 0.0f);
     levelCompensation_ = 0.0f;
+    compensationSeeded_ = false;
+    motionSmoothing_ = 0.0f;
     inputPosition_ = 0;
     outputPosition_ = 0;
     samplesUntilFrame_ = hopSize_;
@@ -153,6 +156,7 @@ void FormantEngine::reset()
     current_.subCut = targetSubCut_.load (std::memory_order_relaxed);
     current_.subSafe = targetSubSafe_.load (std::memory_order_relaxed) ? 1.0f : 0.0f;
     current_.vowel = targetVowel_.load (std::memory_order_relaxed) ? 1.0f : 0.0f;
+    frameShift_ = current_.shift;
 }
 
 void FormantEngine::setParameters (const EngineParams& params) noexcept
@@ -167,44 +171,18 @@ void FormantEngine::setParameters (const EngineParams& params) noexcept
     targetVowel_.store (params.vowel, std::memory_order_relaxed);
 }
 
-void FormantEngine::transform (std::vector<Complex>& data, bool inverse) const noexcept
+void FormantEngine::forwardReal (std::vector<Complex>& data) const noexcept
 {
-    const int size = fftSize_;
-    for (int i = 0; i < size; ++i)
-    {
-        const int j = bitReversal_[static_cast<size_t> (i)];
-        if (j > i)
-            std::swap (data[static_cast<size_t> (i)], data[static_cast<size_t> (j)]);
-    }
+    // Input: fftSize_ real samples in the first half of the float view.
+    // Output: bins 0..fftSize_/2 as complex values (unnormalised DFT).
+    fft_->performRealOnlyForwardTransform (reinterpret_cast<float*> (data.data()), true);
+}
 
-    for (int length = 2; length <= size; length *= 2)
-    {
-        const int half = length / 2;
-        const int twiddleStep = size / length;
-        for (int start = 0; start < size; start += length)
-        {
-            for (int i = 0; i < half; ++i)
-            {
-                Complex twiddle = twiddles_[static_cast<size_t> (i * twiddleStep)];
-                if (inverse)
-                    twiddle = std::conj (twiddle);
-
-                const int a = start + i;
-                const int b = a + half;
-                const Complex rotated = data[static_cast<size_t> (b)] * twiddle;
-                const Complex original = data[static_cast<size_t> (a)];
-                data[static_cast<size_t> (a)] = original + rotated;
-                data[static_cast<size_t> (b)] = original - rotated;
-            }
-        }
-    }
-
-    if (inverse)
-    {
-        const float scale = 1.0f / static_cast<float> (size);
-        for (auto& sample : data)
-            sample *= scale;
-    }
+void FormantEngine::inverseReal (std::vector<Complex>& data) const noexcept
+{
+    // Input: bins 0..fftSize_/2. Output: fftSize_ real samples scaled by
+    // 1/fftSize_, matching the previous complex inverse transform.
+    fft_->performRealOnlyInverseTransform (reinterpret_cast<float*> (data.data()));
 }
 
 float FormantEngine::envelopeAt (const ChannelState& state, float bin) const noexcept
@@ -220,12 +198,25 @@ float FormantEngine::envelopeAt (const ChannelState& state, float bin) const noe
 
 void FormantEngine::processFrame (int inputStart, int outputStart, int channels) noexcept
 {
-    const bool needsFormant = std::abs (current_.shift) >= 0.0001f;
+    // Motion offsets travel with the input samples, so each frame applies the
+    // offset at its own centre (between window samples N/2-1 and N/2): the
+    // modulation stays aligned with the audio it shapes. The change across
+    // the frame measures how fast Motion is moving.
+    const int inputMask = fftSize_ - 1;
+    const float motionCentre = 0.5f * (motionRing_[static_cast<size_t> ((inputStart + fftSize_ / 2 - 1) & inputMask)]
+                                     + motionRing_[static_cast<size_t> ((inputStart + fftSize_ / 2) & inputMask)]);
+    const float motionStart = motionRing_[static_cast<size_t> (inputStart & inputMask)];
+    const float motionEnd = motionRing_[static_cast<size_t> ((inputStart + fftSize_ - 1) & inputMask)];
+    frameShift_ = juce::jlimit (-12.0f, 12.0f, current_.shift + motionCentre);
+    const float shiftChange = std::abs (juce::jlimit (-12.0f, 12.0f, current_.shift + motionEnd)
+                                      - juce::jlimit (-12.0f, 12.0f, current_.shift + motionStart));
+    motionSmoothing_ = juce::jlimit (0.0f, 1.0f, shiftChange / fullSmoothingShiftChange);
+
+    const bool needsFormant = std::abs (frameShift_) >= 0.0001f;
     const bool needsOriginalSpectrum = current_.subSafe > 0.0001f && current_.drive > 0.0001f;
     if (! needsFormant && ! needsOriginalSpectrum)
     {
         // Preserve the exact neutral overlap-add identity path.
-        const int inputMask = fftSize_ - 1;
         const int outputMask = outputRingSize_ - 1;
         for (int channel = 0; channel < channels; ++channel)
         {
@@ -239,20 +230,15 @@ void FormantEngine::processFrame (int inputStart, int outputStart, int channels)
             }
         }
         levelCompensation_ = 0.0f;
+        compensationSeeded_ = false;
         return;
     }
 
-    const float shiftOctaves = current_.shift / 12.0f;
-    const float width = 0.55f - 0.33f * current_.focus;
-    const float guideDepth = current_.vowel * (8.0f + 10.0f * current_.bite) * decibelsToLog;
+    computeGuide (frameShift_, guideDifference_);
     const float binToHz = static_cast<float> (sampleRate_ / fftSize_);
     for (int i = 0; i <= fftSize_ / 2; ++i)
     {
         const auto bin = static_cast<size_t> (i);
-        const float logFrequency = logFrequencies_[bin];
-        guideDifference_[bin] = needsFormant && current_.vowel > 0.0001f
-            ? guideDepth * (guideEnvelope (logFrequency - shiftOctaves, width)
-                          - guideEnvelope (logFrequency, width)) : 0.0f;
         const float frequency = i * binToHz;
         const float transition = juce::jlimit (0.0f, 1.0f,
                                                (frequency - current_.subCut) / current_.subCut);
@@ -271,16 +257,31 @@ void FormantEngine::processFrame (int inputStart, int outputStart, int channels)
     // loudness follower from moving the stereo image. Measure the processed
     // band before restoring the original sub. Drive keeps its harmonic effect;
     // this correction removes gain changes caused by the formant relocation.
-    float targetCompensation = 0.0f;
+    // The ratio is measured on this frame, so it needs only light symmetric
+    // smoothing. It is seeded directly when leaving the neutral path or
+    // silence instead of ramping from 0 dB (the previous 35/120 ms follower
+    // produced onset bumps of about +3.5/-2.7 dB).
     const double noiseFloor = static_cast<double> (fftSize_) * fftSize_ * 1.0e-12;
-    if (needsFormant && referenceEnergy > noiseFloor && processedEnergy > noiseFloor)
-        targetCompensation = juce::jlimit (-12.0f * decibelsToLog, 6.0f * decibelsToLog,
-            static_cast<float> (0.5 * std::log (referenceEnergy / processedEnergy)));
-    const float coefficient = targetCompensation < levelCompensation_
-                                  ? levelAttackCoefficient_ : levelReleaseCoefficient_;
-    levelCompensation_ += coefficient * (targetCompensation - levelCompensation_);
     if (! needsFormant)
+    {
         levelCompensation_ = 0.0f;
+        compensationSeeded_ = false;
+    }
+    else if (referenceEnergy > noiseFloor && processedEnergy > noiseFloor)
+    {
+        const float targetCompensation = juce::jlimit (minimumCompensation, maximumCompensation,
+            static_cast<float> (0.5 * std::log (referenceEnergy / processedEnergy)));
+        if (compensationSeeded_)
+            levelCompensation_ += levelSmoothingCoefficient_ * (targetCompensation - levelCompensation_);
+        else
+            levelCompensation_ = targetCompensation;
+        compensationSeeded_ = true;
+    }
+    else
+    {
+        // Too quiet to measure: hold the last value and seed on the next frame.
+        compensationSeeded_ = false;
+    }
 
     for (int channel = 0; channel < channels; ++channel)
         synthesiseFrame (channelStates_[static_cast<size_t> (channel)], outputStart,
@@ -358,6 +359,11 @@ void FormantEngine::estimateEnvelope (ChannelState& state) noexcept
     // very resonances being shifted. Two refinements lift those gaps toward
     // the source peaks; a tapered lifter suppresses ringing. Three total
     // passes keep the real-time workload fixed rather than waiting to converge.
+    // The lifter taper is the same for all three passes, so compute it once.
+    for (int quefrency = 0; quefrency <= maximumQuefrency; ++quefrency)
+        lifterTaper_[static_cast<size_t> (quefrency)] =
+            0.5f + 0.5f * std::cos (pi * static_cast<float> (quefrency)
+                                    / static_cast<float> (maximumQuefrency + 1));
     for (int pass = 0; pass < 3; ++pass)
     {
         for (int i = 0; i <= lastBin; ++i)
@@ -365,25 +371,21 @@ void FormantEngine::estimateEnvelope (ChannelState& state) noexcept
             const auto bin = static_cast<size_t> (i);
             if (pass != 0)
                 state.envelopeTarget[bin] = std::max (state.envelopeTarget[bin], state.logEnvelope[bin]);
-            const Complex value { state.envelopeTarget[bin], 0.0f };
-            state.cepstrum[bin] = value;
-            if (i > 0 && i < lastBin)
-                state.cepstrum[static_cast<size_t> (fftSize_ - i)] = value;
+            // The log spectrum is real and even, so its cepstrum is real:
+            // real-only transforms give the same result at a fraction of the cost.
+            state.cepstrum[bin] = Complex { state.envelopeTarget[bin], 0.0f };
         }
-        transform (state.cepstrum, true);
+        inverseReal (state.cepstrum);
+        float* const cepstrum = reinterpret_cast<float*> (state.cepstrum.data());
         for (int i = 0; i < fftSize_; ++i)
         {
             const int quefrency = std::min (i, fftSize_ - i);
             if (quefrency > maximumQuefrency)
-                state.cepstrum[static_cast<size_t> (i)] = {};
+                cepstrum[i] = 0.0f;
             else
-            {
-                const float taper = 0.5f + 0.5f * std::cos (pi * static_cast<float> (quefrency)
-                                                              / static_cast<float> (maximumQuefrency + 1));
-                state.cepstrum[static_cast<size_t> (i)] *= taper;
-            }
+                cepstrum[i] *= lifterTaper_[static_cast<size_t> (quefrency)];
         }
-        transform (state.cepstrum, false);
+        forwardReal (state.cepstrum);
         for (int i = 0; i <= lastBin; ++i)
             state.logEnvelope[static_cast<size_t> (i)] = state.cepstrum[static_cast<size_t> (i)].real();
     }
@@ -395,51 +397,107 @@ void FormantEngine::analyseFrame (ChannelState& state, int inputStart, bool need
 {
     const int inputMask = fftSize_ - 1;
     float energy = 0.0f;
+    float* const frame = reinterpret_cast<float*> (state.spectrum.data());
     for (int i = 0; i < fftSize_; ++i)
     {
         const float sample = state.inputRing[static_cast<size_t> ((inputStart + i) & inputMask)]
                              * window_[static_cast<size_t> (i)];
-        state.spectrum[static_cast<size_t> (i)] = { sample, 0.0f };
+        frame[i] = sample;
         energy += sample * sample;
     }
     state.frameActive = energy >= 1.0e-15f;
     if (! state.frameActive)
         return;
-    transform (state.spectrum, false);
+    forwardReal (state.spectrum);
 
     if (needsOriginalSpectrum)
     {
+        float* const original = reinterpret_cast<float*> (state.originalSpectrum.data());
         for (int i = 0; i < fftSize_; ++i)
-            state.originalSpectrum[static_cast<size_t> (i)] = {
-                state.originalRing[static_cast<size_t> ((inputStart + i) & inputMask)]
-                * window_[static_cast<size_t> (i)], 0.0f
-            };
-        transform (state.originalSpectrum, false);
+            original[i] = state.originalRing[static_cast<size_t> ((inputStart + i) & inputMask)]
+                          * window_[static_cast<size_t> (i)];
+        forwardReal (state.originalSpectrum);
     }
 
     if (needsFormant)
     {
         estimateEnvelope (state);
+        computeLogGains (state, frameShift_, guideDifference_, state.logGains);
+        if (motionSmoothing_ > 0.0f)
+            smoothMovingGains (state);
+    }
+    else
+    {
+        std::fill (state.logGains.begin(), state.logGains.end(), 0.0f);
     }
 
-    const float ratio = std::exp2 (current_.shift / 12.0f);
+    for (int i = 0; i <= fftSize_ / 2; ++i)
+    {
+        const auto bin = static_cast<size_t> (i);
+        const double weightedEnergy = static_cast<double> (std::norm (state.spectrum[bin]))
+                                      * normalizationWeights_[bin];
+        referenceEnergy += weightedEnergy;
+        processedEnergy += weightedEnergy * std::exp (2.0f * state.logGains[bin]);
+    }
+}
+
+void FormantEngine::smoothMovingGains (ChannelState& state) const noexcept
+{
+    // A partial spans neighbouring bins. When their gains differ steeply and
+    // change every frame (fast, deep Motion with BITE), overlap-add no longer
+    // rebuilds the partial cleanly and it can momentarily drop far below any
+    // static setting. While Motion moves, blend toward a frequency-smoothed
+    // gain curve, in proportion to the speed: none at the LFO's turning points
+    // or when Motion is still, so static sound is unchanged. envelopeTarget is
+    // free scratch space once the envelope has been estimated.
+    auto& smoothed = state.gainScratch;
+    auto& scratch = state.envelopeTarget;
+    std::copy (state.logGains.begin(), state.logGains.end(), smoothed.begin());
+    const auto last = static_cast<size_t> (fftSize_ / 2);
+    for (int pass = 0; pass < motionSmoothingPasses; ++pass)
+    {
+        scratch[0] = 0.75f * smoothed[0] + 0.25f * smoothed[1];
+        for (size_t i = 1; i < last; ++i)
+            scratch[i] = 0.25f * smoothed[i - 1] + 0.5f * smoothed[i] + 0.25f * smoothed[i + 1];
+        scratch[last] = 0.25f * smoothed[last - 1] + 0.75f * smoothed[last];
+        std::copy (scratch.begin(), scratch.end(), smoothed.begin());
+    }
+    for (size_t i = 0; i <= last; ++i)
+        state.logGains[i] += motionSmoothing_ * (smoothed[i] - state.logGains[i]);
+}
+
+void FormantEngine::computeGuide (float shift, std::vector<float>& destination) const noexcept
+{
+    if (current_.vowel <= 0.0001f || std::abs (shift) < 0.0001f)
+    {
+        std::fill (destination.begin(), destination.end(), 0.0f);
+        return;
+    }
+    const float shiftOctaves = shift / 12.0f;
+    const float width = 0.55f - 0.33f * current_.focus;
+    const float guideDepth = current_.vowel * (8.0f + 10.0f * current_.bite) * decibelsToLog;
+    for (int i = 0; i <= fftSize_ / 2; ++i)
+    {
+        const auto bin = static_cast<size_t> (i);
+        const float logFrequency = logFrequencies_[bin];
+        destination[bin] = guideDepth * (guideEnvelope (logFrequency - shiftOctaves, width)
+                                       - guideEnvelope (logFrequency, width));
+    }
+}
+
+void FormantEngine::computeLogGains (const ChannelState& state, float shift,
+                                     const std::vector<float>& guide,
+                                     std::vector<float>& destination) const noexcept
+{
+    const float ratio = std::exp2 (shift / 12.0f);
     const float strength = 1.0f + 1.25f * current_.bite;
     for (int i = 0; i <= fftSize_ / 2; ++i)
     {
         const auto bin = static_cast<size_t> (i);
-        float logGain = 0.0f;
-        if (needsFormant)
-        {
-            const float original = state.logEnvelope[bin];
-            const float moved = envelopeAt (state, static_cast<float> (i) / ratio);
-            logGain = juce::jlimit (-maximumLogGain, maximumLogGain,
-                ((moved - original) * strength + guideDifference_[bin]) * spectralFade_[bin]);
-        }
-        state.logGains[bin] = logGain;
-        const double weightedEnergy = static_cast<double> (std::norm (state.spectrum[bin]))
-                                      * normalizationWeights_[bin];
-        referenceEnergy += weightedEnergy;
-        processedEnergy += weightedEnergy * std::exp (2.0f * logGain);
+        const float original = state.logEnvelope[bin];
+        const float moved = envelopeAt (state, static_cast<float> (i) / ratio);
+        destination[bin] = juce::jlimit (-maximumLogGain, maximumLogGain,
+            ((moved - original) * strength + guide[bin]) * spectralFade_[bin]);
     }
 }
 
@@ -450,7 +508,7 @@ void FormantEngine::synthesiseFrame (ChannelState& state, int outputStart,
         return;
     // Let the neutral point remain transparent even while the linked level
     // follower is settling from a large sweep in the preceding frame.
-    const float neutralFade = juce::jlimit (0.0f, 1.0f, std::abs (current_.shift));
+    const float neutralFade = juce::jlimit (0.0f, 1.0f, std::abs (frameShift_));
     for (int i = 0; i <= fftSize_ / 2; ++i)
     {
         const auto bin = static_cast<size_t> (i);
@@ -462,17 +520,17 @@ void FormantEngine::synthesiseFrame (ChannelState& state, int outputStart,
         const Complex original = needsOriginalSpectrum ? state.originalSpectrum[bin] : source;
         shifted += originalWeights_[bin] * (original - shifted);
         state.spectrum[bin] = shifted;
-        if (i > 0 && i < fftSize_ / 2)
-            state.spectrum[static_cast<size_t> (fftSize_ - i)] = std::conj (shifted);
     }
-    transform (state.spectrum, true);
+    // Only bins 0..N/2 are needed: the real inverse supplies the conjugate half.
+    inverseReal (state.spectrum);
+    const float* const frame = reinterpret_cast<const float*> (state.spectrum.data());
     const int outputMask = outputRingSize_ - 1;
     for (int i = 0; i < fftSize_; ++i)
         state.outputRing[static_cast<size_t> ((outputStart + i) & outputMask)] +=
-            0.5f * window_[static_cast<size_t> (i)] * state.spectrum[static_cast<size_t> (i)].real();
+            0.5f * window_[static_cast<size_t> (i)] * frame[i];
 }
 
-void FormantEngine::processBlock (juce::AudioBuffer<float>& buffer)
+void FormantEngine::processBlock (juce::AudioBuffer<float>& buffer, const float* motionOffsets)
 {
     if (fftSize_ == 0 || buffer.getNumSamples() == 0)
         return;
@@ -510,6 +568,10 @@ void FormantEngine::processBlock (juce::AudioBuffer<float>& buffer)
         const bool frameDue = --samplesUntilFrame_ == 0;
         const int inputStart = (inputPosition_ + 1) & inputMask;
         const int outputStart = (outputPosition_ + 1) & outputMask;
+
+        // Motion offsets travel with the input samples they belong to.
+        const float motion = motionOffsets != nullptr ? motionOffsets[sample] : 0.0f;
+        motionRing_[static_cast<size_t> (inputPosition_)] = std::isfinite (motion) ? motion : 0.0f;
 
         for (int channel = 0; channel < channels; ++channel)
         {

@@ -4,11 +4,13 @@
 #include <array>
 #include <atomic>
 #include <memory>
+#include <optional>
 #include "../Dsp/FormantEngine.h"
 
 namespace shifty {
 
-class ShiftyProcessor final : public juce::AudioProcessor {
+class ShiftyProcessor final : public juce::AudioProcessor,
+                              private juce::AudioProcessorParameter::Listener {
 public:
     ShiftyProcessor();
     ~ShiftyProcessor() override;
@@ -17,6 +19,11 @@ public:
     void prepareToPlay(double sampleRate, int samplesPerBlock) override;
     void releaseResources() override;
     void processBlock(juce::AudioBuffer<float>&, juce::MidiBuffer&) override;
+    // Host (VST3 kIsBypass) bypass runs the normal engine with SHIFTY's own
+    // bypass forced on, so the dry signal keeps the reported latency and no
+    // stale audio is left in the engine when the host re-enables it. The host
+    // bypass parameter itself stays the wrapper's, keeping the 0.4.2 list.
+    void processBlockBypassed(juce::AudioBuffer<float>&, juce::MidiBuffer&) override;
     bool isBusesLayoutSupported(const BusesLayout&) const override;
     juce::AudioProcessorEditor* createEditor() override;
     bool hasEditor() const override { return true; }
@@ -44,6 +51,7 @@ public:
     void saveUserPreset(const juce::String& name);
     bool loadUserPreset(const juce::File& file);
     juce::Array<juce::File> userPresetFiles() const;
+    juce::File userPresetDirectory() const;
     void loadFactoryPreset(int index);
     static juce::StringArray factoryPresetNames();
     void randomizeParameters();
@@ -55,12 +63,50 @@ public:
     bool canUndo() const { return undoManager.canUndo(); }
     bool canRedo() const { return undoManager.canRedo(); }
 
+    /** Most recent Motion offset in semitones (last sample of the last block). */
+    float currentMotionOffset() const noexcept { return lastMotionOffset.load(std::memory_order_relaxed); }
+
+    /** Synced Motion phase, 0..1. Cycles restart at each host bar when the bar
+        start is known; otherwise they follow the absolute ppq position. */
+    static double syncedMotionPhase(double ppq, std::optional<double> barStartPpq,
+                                    double barQuarters, double cycleQuarters) noexcept;
+    static double barLengthInQuarters(int numerator, int denominator) noexcept;
+
+    /** User presets live in <root>/Application Support/SHIFTY/Presets on macOS.
+        Releases up to 0.4.2 used <root>/SHIFTY/Presets; its files are copied
+        once, never moved, deleted or overwritten. root is ~/Library on macOS. */
+    static juce::File presetDirectoryForRoot(const juce::File& userDataRoot);
+    static juce::File legacyPresetDirectoryForRoot(const juce::File& userDataRoot);
+    static int migrateLegacyPresets(const juce::File& legacyDirectory, const juce::File& newDirectory);
+    /** Test hook: replaces ~/Library (the user data root) for preset storage. */
+    void setUserDataRootForTesting(const juce::File& root);
+
 private:
+    struct ParameterSnapshot {
+        std::array<float, 16> values {};
+        juce::String presetName;
+    };
+    struct SnapshotAction;
+
     static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
+    void processAudio(juce::AudioBuffer<float>&, bool forceBypass) noexcept;
     void updateSpectrum(const juce::AudioBuffer<float>& buffer, bool output) noexcept;
     void syncPresetNameFromState();
+    void assignPresetName(const juce::String& name);
     juce::File presetDirectory() const;
+    void migrateLegacyPresetsOnce() const;
+    void setParameterAsGesture(const char* id, float value);
+    ParameterSnapshot captureSnapshot() const;
+    void applySnapshot(const ParameterSnapshot& target, const ParameterSnapshot& other);
+    void beginUndoableEdit();
+    void endUndoableEdit(const juce::String& name);
+    void recordUndoStep(const ParameterSnapshot& before, const ParameterSnapshot& after,
+                        const juce::String& name);
+    void parameterValueChanged(int, float) override {}
+    void parameterGestureChanged(int parameterIndex, bool gestureIsStarting) override;
 
+    // Undo is built from UI gestures, Random and preset loads only. The APVTS
+    // is not given this UndoManager, so host automation never enters it.
     juce::UndoManager undoManager;
     juce::AudioProcessorValueTreeState state;
     FormantEngine engine;
@@ -77,11 +123,16 @@ private:
     static constexpr size_t parameterCount = 16;
     static constexpr uint32_t allRandomLocks = (1u << parameterCount) - 1u;
     std::array<std::atomic<float>*, parameterCount> paramValues {};
-    double freeMotionPhase = 0.0;
-    double motionPhaseIncrement = 0.0;
-    int motionSamplesUntilUpdate = 0;
-    float heldMotionWave = 0.0f;
+    double motionPhase = 0.0;
+    juce::SmoothedValue<float, juce::ValueSmoothingTypes::Linear> motionDepth;
+    std::atomic<float> lastMotionOffset { 0.0f };
     juce::SmoothedValue<float, juce::ValueSmoothingTypes::Linear> outputGain;
+    int undoSuppression = 0;
+    int activeGestures = 0;
+    ParameterSnapshot gestureStart;
+    ParameterSnapshot batchStart;
+    juce::File userDataRootOverride;
+    mutable bool presetMigrationChecked = false;
     static constexpr uint32_t defaultRandomLocks = (1u << 7) | (1u << 14) | (1u << 15);
     std::atomic<uint32_t> randomLocks { defaultRandomLocks };
     juce::Random variationRandom;

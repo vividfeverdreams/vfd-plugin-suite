@@ -4,6 +4,7 @@
 
 #include <atomic>
 #include <complex>
+#include <memory>
 #include <vector>
 
 namespace shifty
@@ -30,6 +31,10 @@ struct EngineParams
 
     prepare() and reset() are called off the audio thread. setParameters() may
     be called from another thread; processBlock() allocates no memory.
+
+    processBlock() optionally takes one Motion offset per sample, in semitones.
+    Offsets bypass the 20 ms parameter smoothing and are read at the centre of
+    each analysis frame, so modulation stays aligned with the audio it shapes.
 */
 class FormantEngine
 {
@@ -37,7 +42,7 @@ public:
     void prepare (double sampleRate, int maxBlockSize, int channels);
     void reset();
     void setParameters (const EngineParams&) noexcept;
-    void processBlock (juce::AudioBuffer<float>&);
+    void processBlock (juce::AudioBuffer<float>&, const float* motionOffsets = nullptr);
     int getLatencySamples() const noexcept { return fftSize_; }
 
 private:
@@ -52,8 +57,11 @@ private:
         std::vector<float> logEnvelope;
         std::vector<float> envelopeTarget;
         std::vector<float> logGains;
+        std::vector<float> gainScratch;
         std::vector<int> peakDistances;
         bool frameActive = false;
+        // Each holds fftSize_ complex values (2 * fftSize_ floats), the work
+        // area required by juce::dsp::FFT's in-place real transforms.
         std::vector<Complex> spectrum;
         std::vector<Complex> originalSpectrum;
         std::vector<Complex> cepstrum;
@@ -71,24 +79,30 @@ private:
         float vowel = 0.0f;
     };
 
-    void transform (std::vector<Complex>& data, bool inverse) const noexcept;
+    void forwardReal (std::vector<Complex>& data) const noexcept;
+    void inverseReal (std::vector<Complex>& data) const noexcept;
     void processFrame (int inputStart, int outputStart, int channels) noexcept;
     void analyseFrame (ChannelState&, int inputStart, bool needsFormant,
                        bool needsOriginalSpectrum, double& referenceEnergy,
                        double& processedEnergy) noexcept;
     void synthesiseFrame (ChannelState&, int outputStart, bool needsOriginalSpectrum) noexcept;
+    void smoothMovingGains (ChannelState&) const noexcept;
+    void computeGuide (float shift, std::vector<float>& destination) const noexcept;
+    void computeLogGains (const ChannelState&, float shift, const std::vector<float>& guide,
+                          std::vector<float>& destination) const noexcept;
     void estimateEnvelope (ChannelState&) noexcept;
     float envelopeAt (const ChannelState&, float bin) const noexcept;
 
+    std::unique_ptr<juce::dsp::FFT> fft_;
     std::vector<ChannelState> channelStates_;
-    std::vector<int> bitReversal_;
-    std::vector<Complex> twiddles_;
     std::vector<float> window_;
     std::vector<float> logFrequencies_;
     std::vector<float> spectralFade_;
     std::vector<float> guideDifference_;
     std::vector<float> originalWeights_;
     std::vector<float> normalizationWeights_;
+    std::vector<float> motionRing_;
+    std::vector<float> lifterTaper_;
 
     std::atomic<float> targetShift_ { 0.0f };
     std::atomic<float> targetFocus_ { 0.5f };
@@ -103,8 +117,12 @@ private:
     double sampleRate_ = 48000.0;
     float smoothingCoefficient_ = 1.0f;
     float levelCompensation_ = 0.0f;
-    float levelAttackCoefficient_ = 1.0f;
-    float levelReleaseCoefficient_ = 1.0f;
+    float levelSmoothingCoefficient_ = 1.0f;
+    bool compensationSeeded_ = false;
+    // SHIFT (base + Motion) at the current frame's centre, and how strongly
+    // the frame's gains are smoothed because Motion is moving (0..1).
+    float frameShift_ = 0.0f;
+    float motionSmoothing_ = 0.0f;
     int fftSize_ = 0;
     int hopSize_ = 0;
     int outputRingSize_ = 0;

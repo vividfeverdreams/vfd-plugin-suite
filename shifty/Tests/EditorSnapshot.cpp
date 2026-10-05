@@ -81,7 +81,22 @@ int checkVst3HostLatency(const juce::String& pluginPath) {
     std::cout << "Hosted VST3 latency: before prepare " << beforePrepare
               << ", prepared 48 kHz " << at48k
               << ", prepared 96 kHz " << at96k << " samples.\n";
-    return beforePrepare == 0 && at48k == 2048 && at96k == 4096 ? 0 : 1;
+
+    // The exported parameter list must stay as in 0.4.2: SHIFTY's 16 controls
+    // in order, then the VST3 wrapper's own host bypass.
+    const auto& parameters = hosted->getParameters();
+    juce::StringArray names;
+    for (auto* parameter : parameters) names.add(parameter->getName(64));
+    auto* hostBypass = hosted->getBypassParameter();
+    std::cout << "Hosted VST3 parameters (" << parameters.size() << "): "
+              << names.joinIntoString(", ") << "; host bypass: "
+              << (hostBypass != nullptr ? hostBypass->getName(64) : juce::String("none")) << ".\n";
+    const juce::StringArray expected { "Shift", "Focus", "Bite", "Drive", "Mix", "Sub Safe",
+        "Sub Safe Frequency", "Output", "Motion Enabled", "Motion Shape", "Motion Rate", "Motion Depth",
+        "Motion Sync", "Motion Free Rate", "Bypass", "Vowel Color", "Bypass" };
+    const bool parameterListOk = names == expected && hostBypass != nullptr
+                              && hostBypass == parameters.getLast();
+    return beforePrepare == 0 && at48k == 2048 && at96k == 4096 && parameterListOk ? 0 : 1;
 }
 }
 

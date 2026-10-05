@@ -98,11 +98,36 @@ juce::AudioProcessorValueTreeState::ParameterLayout ShiftyProcessor::createParam
     return layout;
 }
 
+struct ShiftyProcessor::SnapshotAction final : public juce::UndoableAction {
+    SnapshotAction(ShiftyProcessor& ownerToUse, ParameterSnapshot beforeToUse, ParameterSnapshot afterToUse)
+        : owner(ownerToUse), before(std::move(beforeToUse)), after(std::move(afterToUse)) {}
+
+    bool perform() override
+    {
+        // The change has already been made when the action is recorded.
+        if (std::exchange(firstPerform, false)) return true;
+        owner.applySnapshot(after, before);
+        return true;
+    }
+
+    bool undo() override
+    {
+        owner.applySnapshot(before, after);
+        return true;
+    }
+
+    int getSizeInUnits() override { return 1; }
+
+    ShiftyProcessor& owner;
+    ParameterSnapshot before, after;
+    bool firstPerform = true;
+};
+
 ShiftyProcessor::ShiftyProcessor()
   : AudioProcessor(BusesProperties()
         .withInput("Input", juce::AudioChannelSet::stereo(), true)
         .withOutput("Output", juce::AudioChannelSet::stereo(), true)),
-    state(*this, &undoManager, "SHIFTY_STATE", createParameterLayout()),
+    state(*this, nullptr, "SHIFTY_STATE", createParameterLayout()),
     analyzerFft(std::make_unique<juce::dsp::FFT>(10))
 {
     static_assert(std::size(ids) == parameterCount);
@@ -112,9 +137,17 @@ ShiftyProcessor::ShiftyProcessor()
     // value for the actual sample rate during preparation.
     setLatencySamples(2048);
     state.state.setProperty("presetName", presetName, nullptr);
+    // Gestures come only from SHIFTY's own controls; host automation does not
+    // begin or end gestures, so it never becomes an undo step.
+    for (auto* parameter : getParameters())
+        parameter->addListener(this);
 }
 
-ShiftyProcessor::~ShiftyProcessor() = default;
+ShiftyProcessor::~ShiftyProcessor()
+{
+    for (auto* parameter : getParameters())
+        parameter->removeListener(this);
+}
 
 bool ShiftyProcessor::isBusesLayoutSupported(const BusesLayout& layout) const
 {
@@ -131,10 +164,10 @@ void ShiftyProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)
     analyzerInput.fill(0.0f);
     analyzerOutput.fill(0.0f);
     analyzerInputWrite = analyzerOutputWrite = 0;
-    freeMotionPhase = 0.0;
-    motionPhaseIncrement = 0.0;
-    motionSamplesUntilUpdate = 0;
-    heldMotionWave = 0.0f;
+    motionPhase = 0.0;
+    motionDepth.reset(sampleRate, 0.02);
+    motionDepth.setCurrentAndTargetValue(paramValues[8]->load() >= .5f ? paramValues[11]->load() : 0.0f);
+    lastMotionOffset.store(0.0f, std::memory_order_relaxed);
     outputGain.reset(sampleRate, 0.02);
     outputGain.setCurrentAndTargetValue(paramValues[14]->load() >= .5f
         ? 1.0f : juce::Decibels::decibelsToGain(paramValues[7]->load()));
@@ -147,6 +180,37 @@ void ShiftyProcessor::releaseResources() {}
 void ShiftyProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midi)
 {
     juce::ignoreUnused(midi);
+    processAudio(buffer, false);
+}
+
+void ShiftyProcessor::processBlockBypassed(juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midi)
+{
+    juce::ignoreUnused(midi);
+    processAudio(buffer, true);
+}
+
+double ShiftyProcessor::barLengthInQuarters(int numerator, int denominator) noexcept
+{
+    if (numerator <= 0 || denominator <= 0) return 4.0;
+    return 4.0 * static_cast<double>(numerator) / static_cast<double>(denominator);
+}
+
+double ShiftyProcessor::syncedMotionPhase(double ppq, std::optional<double> barStartPpq,
+                                          double barQuarters, double cycleQuarters) noexcept
+{
+    double position = ppq;
+    if (barStartPpq.has_value() && barQuarters > 0.0) {
+        // Position inside the current bar. Wrapping also covers a bar line
+        // that falls inside the host block (constant time signature).
+        position = ppq - *barStartPpq;
+        position -= std::floor(position / barQuarters) * barQuarters;
+    }
+    const double cycles = position / (cycleQuarters > 0.0 ? cycleQuarters : 1.0);
+    return cycles - std::floor(cycles);
+}
+
+void ShiftyProcessor::processAudio(juce::AudioBuffer<float>& buffer, bool forceBypass) noexcept
+{
     juce::ScopedNoDenormals noDenormals;
     const auto n = buffer.getNumSamples();
     const auto channels = juce::jmin(getTotalNumInputChannels(), buffer.getNumChannels());
@@ -168,63 +232,65 @@ void ShiftyProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
     p.subSafe = val(5) >= .5f;
     p.subCutHz = val(6);
     p.vowel = val(15) >= .5f;
-    const bool isBypassed = val(14) >= .5f;
+    const bool isBypassed = forceBypass || val(14) >= .5f;
     if (isBypassed) p.mix = 0.0f;
+    engine.setParameters(p);
 
+    // Motion is evaluated for every sample and handed to the engine as an
+    // unsmoothed offset; only its depth (and on/off) is ramped over 20 ms.
+    // Synced motion locks to the host position while playing and free-runs
+    // at the host tempo (120 BPM without one) when the transport is stopped.
     const bool motionEnabled = val(8) >= .5f;
+    const bool sync = val(12) >= .5f;
     const int shape = juce::jlimit(0, 3, (int) std::round(val(9)));
-    double phase = freeMotionPhase;
-    double cyclesPerSample = 0.0;
-    bool useHostPhase = false;
-    if (motionEnabled) {
-        const bool sync = val(12) >= .5f;
-        if (sync) {
-            static constexpr double quartersPerCycle[] = {.25, .5, 1.0, 2.0, 4.0};
-            const auto qpc = quartersPerCycle[(size_t) juce::jlimit(0, 4, (int)std::round(val(10)))];
-            double bpm = 120.0;
-            bool playing = false;
-            if (auto* playhead = getPlayHead()) {
-                if (const auto position = playhead->getPosition()) {
-                    if (const auto hostBpm = position->getBpm()) bpm = *hostBpm;
-                    playing = position->getIsPlaying();
-                    if (playing && position->getPpqPosition()) {
-                        phase = *position->getPpqPosition() / qpc;
-                        useHostPhase = true;
-                    }
-                }
+    const int rate = juce::jlimit(0, 4, (int) std::round(val(10)));
+    const double sampleRate = getSampleRate() > 0.0 ? getSampleRate() : 48000.0;
+    double bpm = 120.0;
+    bool playing = false;
+    std::optional<double> ppq, barStart;
+    int numerator = 4, denominator = 4;
+    if (auto* playhead = getPlayHead()) {
+        if (const auto position = playhead->getPosition()) {
+            if (const auto hostBpm = position->getBpm())
+                if (std::isfinite(*hostBpm) && *hostBpm > 0.0) bpm = *hostBpm;
+            playing = position->getIsPlaying();
+            if (const auto hostPpq = position->getPpqPosition())
+                if (std::isfinite(*hostPpq)) ppq = *hostPpq;
+            if (const auto hostBar = position->getPpqPositionOfLastBarStart())
+                if (std::isfinite(*hostBar)) barStart = *hostBar;
+            if (const auto signature = position->getTimeSignature()) {
+                numerator = signature->numerator;
+                denominator = signature->denominator;
             }
-            if (playing) cyclesPerSample = bpm / (60.0 * getSampleRate() * qpc);
-        } else {
-            cyclesPerSample = val(13) / getSampleRate();
         }
     }
+    static constexpr double quartersPerNote[] = {.25, .5, 1.0, 2.0};
+    const double barQuarters = barLengthInQuarters(numerator, denominator);
+    const double cycleQuarters = rate == 4 ? barQuarters : quartersPerNote[(size_t) rate];
+    const bool hostLocked = sync && playing && ppq.has_value();
+    const double quartersPerSample = bpm / (60.0 * sampleRate);
+    const double cyclesPerSample = sync ? quartersPerSample / cycleQuarters
+                                        : static_cast<double>(val(13)) / sampleRate;
+    motionDepth.setTargetValue(motionEnabled ? val(11) : 0.0f);
 
-    // Keep modulation on a fixed sample cadence, including when a host splits
-    // its buffers for automation or renders with a much larger buffer.
-    const float baseShift = p.shiftSemitones;
+    std::array<float, 64> offsets {};
     for (int offset = 0; offset < n;) {
-        if (motionSamplesUntilUpdate == 0) {
-            const double tickPhase = useHostPhase ? phase + offset * cyclesPerSample
-                                                  : freeMotionPhase;
-            heldMotionWave = waveAt(tickPhase, shape);
-            freeMotionPhase = tickPhase - std::floor(tickPhase);
-            motionPhaseIncrement = 64.0 * cyclesPerSample;
-            motionSamplesUntilUpdate = 64;
+        const int count = juce::jmin(static_cast<int>(offsets.size()), n - offset);
+        for (int i = 0; i < count; ++i) {
+            double phase = motionPhase;
+            if (hostLocked)
+                phase = syncedMotionPhase(*ppq + (offset + i) * quartersPerSample, barStart,
+                                          barQuarters, cycleQuarters);
+            motionPhase = phase + cyclesPerSample;
+            motionPhase -= std::floor(motionPhase);
+            offsets[(size_t) i] = motionDepth.getNextValue() * waveAt(phase, shape);
         }
-        p.shiftSemitones = juce::jlimit(-12.0f, 12.0f,
-            baseShift + (motionEnabled ? val(11) * heldMotionWave : 0.0f));
-        engine.setParameters(p);
-        const int count = juce::jmin(motionSamplesUntilUpdate, n - offset);
         float* pointers[2] { buffer.getWritePointer(0, offset),
             channels > 1 ? buffer.getWritePointer(1, offset) : nullptr };
         juce::AudioBuffer<float> section(pointers, channels, count);
-        engine.processBlock(section);
+        engine.processBlock(section, offsets.data());
         offset += count;
-        motionSamplesUntilUpdate -= count;
-        if (motionSamplesUntilUpdate == 0) {
-            freeMotionPhase += motionPhaseIncrement;
-            freeMotionPhase -= std::floor(freeMotionPhase);
-        }
+        if (offset >= n) lastMotionOffset.store(offsets[(size_t) count - 1], std::memory_order_relaxed);
     }
 
     const float gain = isBypassed ? 1.0f : juce::Decibels::decibelsToGain(val(7));
@@ -294,10 +360,14 @@ juce::String ShiftyProcessor::currentPresetName() const
 
 void ShiftyProcessor::setPresetName(const juce::String& name)
 {
-    const auto clean = name.trim().isNotEmpty() ? name.trim() : "Untitled";
-    state.state.setProperty("presetName", clean, &undoManager);
+    assignPresetName(name.trim().isNotEmpty() ? name.trim() : "Untitled");
+}
+
+void ShiftyProcessor::assignPresetName(const juce::String& name)
+{
+    state.state.setProperty("presetName", name, nullptr);
     const juce::ScopedLock lock(presetNameMutex);
-    presetName = clean;
+    presetName = name;
 }
 
 void ShiftyProcessor::syncPresetNameFromState()
@@ -306,18 +376,82 @@ void ShiftyProcessor::syncPresetNameFromState()
     presetName = state.state.getProperty("presetName", "Untitled").toString();
 }
 
+ShiftyProcessor::ParameterSnapshot ShiftyProcessor::captureSnapshot() const
+{
+    ParameterSnapshot snapshot;
+    for (size_t i = 0; i < std::size(ids); ++i)
+        if (const auto* parameter = state.getParameter(ids[i]))
+            snapshot.values[i] = parameter->getValue();
+    snapshot.presetName = currentPresetName();
+    return snapshot;
+}
+
+void ShiftyProcessor::applySnapshot(const ParameterSnapshot& target, const ParameterSnapshot& other)
+{
+    // Only the parameters this step changed are restored. Values written since
+    // by host automation (or other edits) are left alone.
+    ++undoSuppression;
+    for (size_t i = 0; i < std::size(ids); ++i) {
+        if (juce::exactlyEqual(target.values[i], other.values[i])) continue;
+        auto* parameter = state.getParameter(ids[i]);
+        if (parameter == nullptr || juce::exactlyEqual(parameter->getValue(), target.values[i])) continue;
+        parameter->beginChangeGesture();
+        parameter->setValueNotifyingHost(target.values[i]);
+        parameter->endChangeGesture();
+    }
+    if (target.presetName != other.presetName) assignPresetName(target.presetName);
+    --undoSuppression;
+}
+
+void ShiftyProcessor::recordUndoStep(const ParameterSnapshot& before, const ParameterSnapshot& after,
+                                     const juce::String& name)
+{
+    if (before.values == after.values && before.presetName == after.presetName) return;
+    undoManager.beginNewTransaction(name);
+    undoManager.perform(new SnapshotAction(*this, before, after));
+    undoManager.beginNewTransaction();
+}
+
+void ShiftyProcessor::beginUndoableEdit()
+{
+    if (undoSuppression++ == 0) batchStart = captureSnapshot();
+}
+
+void ShiftyProcessor::endUndoableEdit(const juce::String& name)
+{
+    if (undoSuppression > 0 && --undoSuppression == 0)
+        recordUndoStep(batchStart, captureSnapshot(), name);
+}
+
+void ShiftyProcessor::parameterGestureChanged(int, bool gestureIsStarting)
+{
+    // Called by SHIFTY's own controls (message thread). Random, preset loads
+    // and Undo/Redo themselves suppress per-gesture recording.
+    if (undoSuppression > 0) return;
+    if (gestureIsStarting) {
+        if (activeGestures++ == 0) gestureStart = captureSnapshot();
+    } else if (activeGestures > 0 && --activeGestures == 0) {
+        recordUndoStep(gestureStart, captureSnapshot(), "Change SHIFTY parameter");
+    }
+}
+
+void ShiftyProcessor::setParameterAsGesture(const char* id, float value)
+{
+    if (auto* parameter = state.getParameter(id)) {
+        parameter->beginChangeGesture();
+        parameter->setValueNotifyingHost(parameter->convertTo0to1(value));
+        parameter->endChangeGesture();
+    }
+}
+
 void ShiftyProcessor::undo()
 {
-    state.copyState();
     undoManager.undo();
-    syncPresetNameFromState();
 }
 
 void ShiftyProcessor::redo()
 {
-    state.copyState();
     undoManager.redo();
-    syncPresetNameFromState();
 }
 
 juce::StringArray ShiftyProcessor::randomizableParameterIds()
@@ -349,8 +483,7 @@ void ShiftyProcessor::randomizeParameters()
 {
     const auto locks = randomLocks.load();
     if ((locks & allRandomLocks) == allRandomLocks) return;
-    state.copyState();
-    undoManager.beginNewTransaction("Randomize SHIFTY");
+    beginUndoableEdit();
     auto range = [this](float lo, float hi) {
         return lo + variationRandom.nextFloat() * (hi - lo);
     };
@@ -370,15 +503,10 @@ void ShiftyProcessor::randomizeParameters()
     static_assert(std::size(values) == std::size(ids));
     for (size_t i = 0; i < std::size(ids); ++i) {
         if ((locks & (1u << i)) != 0) continue;
-        if (auto* parameter = state.getParameter(ids[i])) {
-            parameter->beginChangeGesture();
-            parameter->setValueNotifyingHost(parameter->convertTo0to1(values[i]));
-            parameter->endChangeGesture();
-        }
+        setParameterAsGesture(ids[i], values[i]);
     }
-    state.copyState();
     setPresetName("Random Variation");
-    undoManager.beginNewTransaction();
+    endUndoableEdit("Randomize SHIFTY");
 }
 
 void ShiftyProcessor::getStateInformation(juce::MemoryBlock& dest)
@@ -412,20 +540,81 @@ void ShiftyProcessor::setStateInformation(const void* data, int size)
             randomLocks.store(locks & allRandomLocks);
             state.replaceState(tree);
             syncPresetNameFromState();
+            // A restored host session starts a fresh edit history.
+            undoManager.clearUndoHistory();
         }
     }
 }
 
+juce::File ShiftyProcessor::presetDirectoryForRoot(const juce::File& userDataRoot)
+{
+   #if JUCE_MAC
+    return userDataRoot.getChildFile("Application Support").getChildFile("SHIFTY").getChildFile("Presets");
+   #else
+    return userDataRoot.getChildFile("SHIFTY").getChildFile("Presets");
+   #endif
+}
+
+juce::File ShiftyProcessor::legacyPresetDirectoryForRoot(const juce::File& userDataRoot)
+{
+    return userDataRoot.getChildFile("SHIFTY").getChildFile("Presets");
+}
+
+int ShiftyProcessor::migrateLegacyPresets(const juce::File& legacyDirectory, const juce::File& newDirectory)
+{
+    // One-time and non-destructive: legacy files are copied, never moved or
+    // deleted, and an existing preset of the same name is never overwritten.
+    // A marker prevents presets the user later deletes from returning.
+    if (legacyDirectory == newDirectory || !legacyDirectory.isDirectory()) return 0;
+    const auto marker = newDirectory.getChildFile(".legacy-presets-migrated");
+    if (marker.existsAsFile() || newDirectory.createDirectory().failed()) return 0;
+    int copied = 0;
+    bool complete = true;
+    for (const auto& source : legacyDirectory.findChildFiles(juce::File::findFiles, false, "*.shifty")) {
+        const auto destination = newDirectory.getChildFile(source.getFileName());
+        if (destination.exists()) continue;
+        if (source.copyFileTo(destination)) ++copied;
+        else complete = false;
+    }
+    if (complete)
+        marker.replaceWithText("Presets from " + legacyDirectory.getFullPathName()
+                               + " were copied here once. The originals were left in place.\n");
+    return copied;
+}
+
+void ShiftyProcessor::setUserDataRootForTesting(const juce::File& root)
+{
+    userDataRootOverride = root;
+    presetMigrationChecked = false;
+}
+
 juce::File ShiftyProcessor::presetDirectory() const
 {
-    return juce::File::getSpecialLocation(juce::File::userApplicationDataDirectory)
-        .getChildFile("SHIFTY").getChildFile("Presets");
+    const auto root = userDataRootOverride != juce::File()
+        ? userDataRootOverride
+        : juce::File::getSpecialLocation(juce::File::userApplicationDataDirectory);
+    return presetDirectoryForRoot(root);
+}
+
+void ShiftyProcessor::migrateLegacyPresetsOnce() const
+{
+    if (std::exchange(presetMigrationChecked, true)) return;
+    const auto root = userDataRootOverride != juce::File()
+        ? userDataRootOverride
+        : juce::File::getSpecialLocation(juce::File::userApplicationDataDirectory);
+    migrateLegacyPresets(legacyPresetDirectoryForRoot(root), presetDirectoryForRoot(root));
+}
+
+juce::File ShiftyProcessor::userPresetDirectory() const
+{
+    return presetDirectory();
 }
 
 void ShiftyProcessor::saveUserPreset(const juce::String& name)
 {
     const auto legal = juce::File::createLegalFileName(name.trim());
     if (legal.isEmpty()) return;
+    migrateLegacyPresetsOnce();
     auto dir = presetDirectory();
     if (dir.createDirectory().failed()) return;
     setPresetName(name);
@@ -444,14 +633,24 @@ bool ShiftyProcessor::loadUserPreset(const juce::File& file)
     const auto tree = juce::ValueTree::fromXml(*xml);
     if (!tree.isValid() || tree.getType() != state.state.getType()
         || (int)tree.getProperty("schemaVersion", 1) > 1) return false;
-    const auto locks = randomLocks.load();
-    setStateInformation(data.getData(), (int)data.getSize());
-    randomLocks.store(locks);
+    // Apply the sound as one undoable step, like a factory preset. This
+    // instance keeps its own randomization locks.
+    beginUndoableEdit();
+    for (const auto* id : ids) {
+        const auto child = tree.getChildWithProperty("id", id);
+        if (child.isValid() && child.hasProperty("value"))
+            setParameterAsGesture(id, static_cast<float>(child.getProperty("value")));
+        else if (juce::String(id) == "vowel")
+            setParameterAsGesture(id, 0.0f); // Presets from before Vowel Color load it off.
+    }
+    assignPresetName(tree.getProperty("presetName", file.getFileNameWithoutExtension()).toString());
+    endUndoableEdit("Load SHIFTY user preset");
     return true;
 }
 
 juce::Array<juce::File> ShiftyProcessor::userPresetFiles() const
 {
+    migrateLegacyPresetsOnce();
     return presetDirectory().findChildFiles(juce::File::findFiles, false, "*.shifty");
 }
 
@@ -466,15 +665,8 @@ void ShiftyProcessor::loadFactoryPreset(int index)
 {
     if (!juce::isPositiveAndBelow(index, (int)std::size(presets))) return;
     const auto& p = presets[(size_t)index];
-    const auto set = [this](const char* id, float value) {
-        if (auto* parameter = state.getParameter(id)) {
-            parameter->beginChangeGesture();
-            parameter->setValueNotifyingHost(parameter->convertTo0to1(value));
-            parameter->endChangeGesture();
-        }
-    };
-    state.copyState();
-    undoManager.beginNewTransaction("Load SHIFTY preset");
+    const auto set = [this](const char* id, float value) { setParameterAsGesture(id, value); };
+    beginUndoableEdit();
     set("shift", p.shift);
     set("focus", p.focus);
     set("bite", p.bite);
@@ -491,9 +683,8 @@ void ShiftyProcessor::loadFactoryPreset(int index)
     set("motionFreeHz", p.freeHz);
     set("bypass", 0.0f);
     set("vowel", 0.0f);
-    state.copyState();
     setPresetName(p.name);
-    undoManager.beginNewTransaction();
+    endUndoableEdit("Load SHIFTY preset");
 }
 
 } // namespace shifty

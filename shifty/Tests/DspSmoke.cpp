@@ -402,6 +402,117 @@ bool checkDryAtExtremeSettings (double sampleRate)
     return residual < 1.0e-7;
 }
 
+// Motion offsets of zero must leave the static engine bit-identical.
+bool checkZeroMotionIsStatic (double sampleRate)
+{
+    auto input = makeBass (sampleRate, 1.2, 2, 8192, true);
+    shifty::EngineParams params;
+    params.shiftSemitones = -5.0f;
+    params.focus = 0.8f;
+    params.bite = 0.9f;
+    params.drive = 0.3f;
+    params.vowel = true;
+    auto render = [&] (bool zeroOffsets)
+    {
+        shifty::FormantEngine engine;
+        engine.setParameters (params);
+        engine.prepare (sampleRate, 512, 2);
+        auto audio = input;
+        std::vector<float> zeros (512, 0.0f);
+        for (int position = 0; position < sampleCount (audio); position += 512)
+        {
+            const int count = std::min (512, sampleCount (audio) - position);
+            float* channels[2] = { audio[0].data() + position, audio[1].data() + position };
+            juce::AudioBuffer<float> buffer (channels, 2, count);
+            engine.processBlock (buffer, zeroOffsets ? zeros.data() : nullptr);
+        }
+        return audio;
+    };
+    const auto withoutMotion = render (false);
+    const auto zeroMotion = render (true);
+    const bool identical = withoutMotion == zeroMotion;
+    std::cout << "zero Motion offsets " << sampleRate << " Hz: bit-identical to no Motion " << std::boolalpha
+              << identical << '\n';
+    return identical;
+}
+
+// Linked level compensation follows the current frame instead of a slow
+// follower: a SHIFT jump must not bump the level, and a large downward shift
+// of a bright source must not lose level against the old +6 dB ceiling.
+bool checkCompensationTransients (double sampleRate)
+{
+    auto resonant = makeAudio (1, static_cast<int> (sampleRate * 3.0));
+    auto fm = makeAudio (1, static_cast<int> (sampleRate * 3.0));
+    for (int i = 0; i < sampleCount (resonant); ++i)
+    {
+        const double t = i / sampleRate;
+        double value = 0.0;
+        for (int h = 1; h * 110.0 < 16000.0; ++h)
+        {
+            const double f = h * 110.0;
+            const double db = 18.0 * std::exp (-0.5 * std::pow ((f - 700.0) / 90.0, 2.0))
+                            + 12.0 * std::exp (-0.5 * std::pow ((f - 1800.0) / 170.0, 2.0));
+            value += std::pow (10.0, db / 20.0) / h * std::sin (2.0 * pi * f * t);
+        }
+        resonant[0][static_cast<size_t> (i)] = static_cast<float> (0.02 * value);
+        const double phase = 2.0 * pi * 110.0 * t;
+        fm[0][static_cast<size_t> (i)] = static_cast<float> (0.25 * std::tanh (1.3 * std::sin (phase + 2.4 * std::sin (phase))
+                                                                      + 0.35 * std::sin (3.0 * phase + 1.6 * std::sin (2.0 * phase))));
+    }
+    auto render = [&] (const Audio& input, float from, float to)
+    {
+        shifty::EngineParams params;
+        params.shiftSemitones = from;
+        params.focus = 0.7f;
+        params.bite = 0.5f;
+        shifty::FormantEngine engine;
+        engine.setParameters (params);
+        engine.prepare (sampleRate, 64, 1);
+        const int latency = engine.getLatencySamples();
+        auto audio = input;
+        audio[0].resize (audio[0].size() + static_cast<size_t> (latency), 0.0f);
+        for (int position = 0; position < sampleCount (audio); position += 64)
+        {
+            params.shiftSemitones = position < static_cast<int> (sampleRate) ? from : to;
+            engine.setParameters (params);
+            const int count = std::min (64, sampleCount (audio) - position);
+            float* channels[1] = { audio[0].data() + position };
+            juce::AudioBuffer<float> buffer (channels, 1, count);
+            engine.processBlock (buffer);
+        }
+        audio[0].erase (audio[0].begin(), audio[0].begin() + latency);
+        return audio[0];
+    };
+    auto levelDb = [] (const std::vector<float>& x, int start, int length)
+    {
+        return 20.0 * std::log10 (rms (x, start, start + length) + 1.0e-12);
+    };
+    bool passed = true;
+    for (const auto& jump : { std::pair<float, float> { 0.0f, 8.0f }, { 0.0f, 12.0f }, { 2.0f, -12.0f }, { 0.0f, -8.0f } })
+    {
+        const auto output = render (resonant, jump.first, jump.second);
+        const double steady = levelDb (output, static_cast<int> (2.0 * sampleRate), static_cast<int> (0.5 * sampleRate));
+        double highest = -1.0e9, lowest = 1.0e9;
+        const int window = static_cast<int> (0.01 * sampleRate);
+        for (int s = static_cast<int> (sampleRate); s < static_cast<int> (1.4 * sampleRate); s += 64)
+        {
+            const double value = levelDb (output, s, window) - steady;
+            highest = std::max (highest, value);
+            lowest = std::min (lowest, value);
+        }
+        const bool ok = highest < 2.0 && lowest > -1.5;
+        std::cout << "compensation " << sampleRate << " Hz: shift " << jump.first << " -> " << jump.second
+                  << ", 10 ms level excursion " << highest << " / " << lowest << " dB\n";
+        passed = passed && ok;
+    }
+    const auto fmDown = render (fm, -12.0f, -12.0f);
+    const double fmChange = levelDb (fmDown, static_cast<int> (1.0 * sampleRate), static_cast<int> (1.5 * sampleRate))
+                          - levelDb (fm[0], static_cast<int> (1.0 * sampleRate), static_cast<int> (1.5 * sampleRate));
+    std::cout << "compensation " << sampleRate << " Hz: FM growl at -12 st keeps level within " << fmChange << " dB\n";
+    // 0.4.2 lost about 2.8-3.1 dB here because compensation stopped at +6 dB.
+    return passed && std::abs (fmChange) < 1.5;
+}
+
 bool writeWav (const juce::File& directory, const juce::String& name,
                const Audio& audio, double sampleRate)
 {
@@ -499,6 +610,8 @@ int main (int argc, char* argv[])
         passed = checkStereoIsolation (sampleRate) && passed;
         passed = checkLinkedStereoAndMixedSub (sampleRate) && passed;
         passed = checkDryAtExtremeSettings (sampleRate) && passed;
+        passed = checkZeroMotionIsStatic (sampleRate) && passed;
+        passed = checkCompensationTransients (sampleRate) && passed;
     }
 
     if (!renderPath.isEmpty())

@@ -238,11 +238,15 @@ ShiftyEditor::ShiftyEditor(ShiftyProcessor& p)
 
     for (auto& c : controls) {
         c.slider->onValueChange = [this] { updateValueLabels(); repaint(); };
-        c.label->onTextChange = [id = c.id, slider = c.slider.get(), label = c.label.get()] {
+        c.label->onTextChange = [this, id = c.id, slider = c.slider.get(), label = c.label.get()] {
             float value = static_cast<float>(label->getText().getDoubleValue());
             if (id == "focus" || id == "bite" || id == "drive" || id == "mix")
                 value *= 0.01f;
+            // A typed value is one complete edit, so it becomes one Undo step.
+            auto* parameter = plugin.parameters().getParameter(id);
+            if (parameter != nullptr) parameter->beginChangeGesture();
             slider->setValue(value, juce::sendNotificationSync);
+            if (parameter != nullptr) parameter->endChangeGesture();
         };
     }
     for (auto& s : switches)
