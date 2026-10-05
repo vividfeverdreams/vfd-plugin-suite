@@ -165,11 +165,12 @@ int main(int argc, char* argv[]) {
 
     const int lastX = image.getWidth() - 1;
     const int lastY = image.getHeight() - 1;
-    const bool transparentCorners =
-        image.getPixelAt(0, 0).getAlpha() == 0 &&
-        image.getPixelAt(lastX, 0).getAlpha() == 0 &&
-        image.getPixelAt(0, lastY).getAlpha() == 0 &&
-        image.getPixelAt(lastX, lastY).getAlpha() == 0;
+    // The device fills the window edge to edge: every edge pixel is painted, corners included.
+    bool filledEdges = true;
+    for (int x = 0; x <= lastX; ++x)
+        filledEdges = filledEdges && image.getPixelAt(x, 0).getAlpha() == 255 && image.getPixelAt(x, lastY).getAlpha() == 255;
+    for (int y = 0; y <= lastY; ++y)
+        filledEdges = filledEdges && image.getPixelAt(0, y).getAlpha() == 255 && image.getPixelAt(lastX, y).getAlpha() == 255;
     const bool visibleDevice =
         image.getPixelAt(image.getWidth() / 2, image.getHeight() / 2).getAlpha() > 0;
 
@@ -192,12 +193,12 @@ int main(int argc, char* argv[]) {
 
     std::cout << output.getFullPathName().toStdString() << " ("
               << image.getWidth() << " x " << image.getHeight() << ")\n";
-    if ((!infoSnapshot && !transparentCorners) || !visibleDevice) {
-        std::cerr << "Transparency check failed: corners="
-                  << (transparentCorners ? "clear" : "filled")
+    if ((!infoSnapshot && !filledEdges) || !visibleDevice) {
+        std::cerr << "Edge check failed: edges="
+                  << (filledEdges ? "filled" : "partly clear")
                   << ", center=" << (visibleDevice ? "visible" : "clear") << "\n";
         return 1;
     }
-    std::cout << (infoSnapshot ? "Info page snapshot check passed.\n" : "Transparency check passed.\n");
+    std::cout << (infoSnapshot ? "Info page snapshot check passed.\n" : "Edge-to-edge shell check passed.\n");
     return 0;
 }

@@ -42,7 +42,7 @@ endif()
 
 juce_add_binary_data(ShiftyAssets SOURCES
     ../shared/VfdLogo.svg
-    Assets/DeviceShell.png
+    Assets/DeviceShell-fullbleed.png
     Assets/ChakraPetch-SemiBold.ttf
     Assets/ChakraPetch-BoldItalic.ttf)
 

@@ -17,6 +17,7 @@ public:
 
     void paint(juce::Graphics&) override;
     void resized() override;
+    void paintShell(juce::Graphics&);
     void mouseDown(const juce::MouseEvent&) override;
     void mouseDoubleClick(const juce::MouseEvent&) override;
     void mouseWheelMove(const juce::MouseEvent&, const juce::MouseWheelDetails&) override;
@@ -64,7 +65,7 @@ private:
 
     ShiftyProcessor& plugin;
     juce::Image shell;
-    juce::Image scaledShell;
+    juce::Image scaledShell; // shell at physical resolution for the current size (see paintShell)
     juce::Typeface::Ptr normalTypeface, displayTypeface;
     std::unique_ptr<vfd::InfoButton> infoButton;
     std::unique_ptr<vfd::InfoOverlay> infoOverlay;

@@ -6,7 +6,9 @@
 
 namespace shifty {
 namespace {
-constexpr int shellX = 50, shellY = 66, shellWidth = 1024, shellHeight = 1260;
+// The editor shows exactly the device: this crop sits on the shell's own straight edges in
+// Assets/DeviceShell-fullbleed.png (corners tightened to match), so it meets the window on every side.
+constexpr int shellX = 57, shellY = 73, shellWidth = 1008, shellHeight = 1247;
 constexpr int infoBandTop = 1244, infoBandHeight = 70;
 constexpr int editorHeight = shellHeight + infoBandHeight;
 constexpr float startAngle = juce::MathConstants<float>::pi * 1.25f;
@@ -190,13 +192,13 @@ struct ShiftyEditor::PresetItem {
 
 ShiftyEditor::ShiftyEditor(ShiftyProcessor& p)
     : juce::AudioProcessorEditor(p), plugin(p),
-      shell(juce::ImageCache::getFromMemory(BinaryData::DeviceShell_png,
-                                            BinaryData::DeviceShell_pngSize)),
+      shell(juce::ImageCache::getFromMemory(BinaryData::DeviceShellfullbleed_png,
+                                            BinaryData::DeviceShellfullbleed_pngSize)),
       normalTypeface(juce::Typeface::createSystemTypefaceFor(
           BinaryData::ChakraPetchSemiBold_ttf, BinaryData::ChakraPetchSemiBold_ttfSize)),
       displayTypeface(juce::Typeface::createSystemTypefaceFor(
           BinaryData::ChakraPetchBoldItalic_ttf, BinaryData::ChakraPetchBoldItalic_ttfSize)) {
-    setOpaque(false);
+    setOpaque(true);
     setWantsKeyboardFocus(true);
 
     addControl("shift", {196, 606, 310, 285}, {245, 896, 220, 70}, true, true);
@@ -294,9 +296,9 @@ ShiftyEditor::ShiftyEditor(ShiftyProcessor& p)
     updateValueLabels();
     updatePage();
     setResizable(true, false);
-    setResizeLimits(500, 649, 850, 1104);
+    setResizeLimits(500, 500 * editorHeight / shellWidth, 850, 850 * editorHeight / shellWidth);
     getConstrainer()->setFixedAspectRatio(static_cast<double>(shellWidth) / editorHeight);
-    setSize(650, 844);
+    setSize(650, 650 * editorHeight / shellWidth);
     startTimerHz(30);
 }
 
@@ -448,28 +450,39 @@ juce::Point<float> ShiftyEditor::designPoint(juce::Point<float> p) const {
              p.y * editorHeight / static_cast<float>(getHeight()) + shellY };
 }
 
-void ShiftyEditor::resized() {
-    if (shell.isValid() && getWidth() > 0 && getHeight() > 0 &&
-        (scaledShell.getWidth() != getWidth() || scaledShell.getHeight() != getHeight())) {
-        scaledShell = juce::Image(juce::Image::ARGB, getWidth(), getHeight(), true);
+void ShiftyEditor::paintShell(juce::Graphics& g) {
+    // Composite the shell (with its inserted INFO band) once per size and screen density, then blit it 1:1.
+    // A logical-size cache was upsampled, and soft, on Retina.
+    const float scale = g.getInternalContext().getPhysicalPixelScaleFactor();
+    const int width = juce::jmax(1, juce::roundToInt(getWidth() * scale));
+    const int height = juce::jmax(1, juce::roundToInt(getHeight() * scale));
+    if (shell.isValid() && (scaledShell.getWidth() != width || scaledShell.getHeight() != height)) {
+        scaledShell = juce::Image(juce::Image::RGB, width, height, false);
         juce::Graphics shellGraphics(scaledShell);
-        const float sx = static_cast<float>(getWidth()) / shellWidth;
-        const float sy = static_cast<float>(getHeight()) / editorHeight;
-        shellGraphics.addTransform(juce::AffineTransform(sx, 0, -shellX * sx, 0, sy, -shellY * sy));
+        shellGraphics.setImageResamplingQuality(juce::Graphics::highResamplingQuality);
+        const float sx = static_cast<float>(width) / shellWidth;
+        const float sy = static_cast<float>(height) / editorHeight;
+        // Each slice lands on whole physical pixels, so neighbouring slices share an exact boundary. Fractional
+        // slice edges left a half-covered, see-through row at each seam of the inserted band.
+        const auto slice = [&](int dx, int dy, int dw, int dh, int srcX, int srcY, int srcW, int srcH) {
+            const int x0 = juce::roundToInt((dx - shellX) * sx), x1 = juce::roundToInt((dx + dw - shellX) * sx);
+            const int y0 = juce::roundToInt((dy - shellY) * sy), y1 = juce::roundToInt((dy + dh - shellY) * sy);
+            shellGraphics.drawImage(shell, x0, y0, x1 - x0, y1 - y0, srcX, srcY, srcW, srcH);
+        };
         // Keep all original control geometry and the lower molded rim intact.
         // Only the exposed board strip gains room for the physical INFO key.
-        shellGraphics.drawImage(shell, shellX, shellY, shellWidth, infoBandTop - shellY,
-                                shellX, shellY, shellWidth, infoBandTop - shellY);
-        shellGraphics.drawImage(shell, shellX, infoBandTop, shellWidth, infoBandHeight,
-                                shellX, infoBandTop, shellWidth, 1);
+        slice(shellX, shellY, shellWidth, infoBandTop - shellY, shellX, shellY, shellWidth, infoBandTop - shellY);
+        slice(shellX, infoBandTop, shellWidth, infoBandHeight, shellX, infoBandTop, shellWidth, 1);
         // Reuse the photographed board surface, including its components and
         // resin illumination, rather than introducing a separately drawn plate.
-        shellGraphics.drawImage(shell, 135, infoBandTop, 850, infoBandHeight,
-                                135, infoBandTop, 850, 40);
-        shellGraphics.drawImage(shell, shellX, infoBandTop + infoBandHeight,
-                                shellWidth, shellY + shellHeight - infoBandTop,
-                                shellX, infoBandTop, shellWidth, shellY + shellHeight - infoBandTop);
+        slice(135, infoBandTop, 850, infoBandHeight, 135, infoBandTop, 850, 40);
+        slice(shellX, infoBandTop + infoBandHeight, shellWidth, shellY + shellHeight - infoBandTop,
+              shellX, infoBandTop, shellWidth, shellY + shellHeight - infoBandTop);
     }
+    if (scaledShell.isValid()) g.drawImage(scaledShell, getLocalBounds().toFloat());
+}
+
+void ShiftyEditor::resized() {
     const float scale = static_cast<float>(getWidth()) / shellWidth;
     for (auto& c : controls) {
         c.slider->setBounds(scaled(c.hit));
@@ -503,7 +516,7 @@ void ShiftyEditor::drawText(juce::Graphics& g, const juce::String& str,
 }
 
 void ShiftyEditor::paint(juce::Graphics& g) {
-    if (scaledShell.isValid()) g.drawImageAt(scaledShell, 0, 0);
+    paintShell(g);
 
     juce::Graphics::ScopedSaveState state(g);
     const float sx = static_cast<float>(getWidth()) / shellWidth;
