@@ -371,7 +371,8 @@ inline void checkHostLoop(int blockSize, bool startBeforeLoop = false)
     // Loop mode must not hide a genuine edit-cursor jump elsewhere in the
     // region. This destination is deliberately different from the next beat.
     head.beat = 2.21;
-    reference.reset();
+    // A seek starts a new history but keeps the dry pipeline running.
+    reference.invalidateHistory();
     juce::AudioBuffer<float> seek(2, 1024);
     for (int sample = 0; sample < seek.getNumSamples(); ++sample)
         for (int channel = 0; channel < 2; ++channel)
@@ -383,7 +384,7 @@ inline void checkHostLoop(int blockSize, bool startBeforeLoop = false)
             evaluatePattern(active, beat), samplesPerBeat, false, false);
         for (int channel = 0; channel < 2; ++channel)
             require(std::abs(seek.getSample(channel, sample) - expected[static_cast<size_t>(channel)]) < 0.00003,
-                    "an actual seek while loop mode is enabled still clears stale audio");
+                    "an actual seek while loop mode is enabled still invalidates stale audio");
     }
     context.beat = head.beat + (seek.getNumSamples() - 1 - latency) / samplesPerBeat;
     compareDisplay(processor, context);

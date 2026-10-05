@@ -5,6 +5,7 @@
 #include "EditedPatternSerialization.h"
 #include <cmath>
 #include <cstdlib>
+#include <thread>
 
 namespace backScratch {
 namespace {
@@ -29,6 +30,13 @@ constexpr int oldStateMagic = 0x42534331;
 float displayFraction(const ScratchPattern& pattern, double beat) noexcept {
     return std::clamp(static_cast<float>(patternDisplayPhase(pattern, beat)), 0.0f, std::nextafter(1.0f, 0.0f));
 }
+// Controls whose host automation is delivered sample-accurately. The tag lets
+// the stateless bridge router find this instance's queue without allocation.
+template <typename Base>
+class Queued final : public Base, public backScratchBridge::QueueTag {
+public:
+    using Base::Base;
+};
 bool readInteger(const juce::String& text, int low, int high, int& result) {
     const auto trimmed = text.trim();
     if (trimmed.isEmpty() || !trimmed.containsOnly("0123456789")) return false;
@@ -46,6 +54,10 @@ juce::AudioProcessorValueTreeState::ParameterLayout BackScratchProcessor::makeLa
         layout.add(std::make_unique<juce::AudioParameterFloat>(
             juce::ParameterID{id, 1}, name, juce::NormalisableRange<float>(low, high, step), initial));
     };
+    auto addQueuedFloat = [&layout](const char* id, const char* name, float low, float high, float step, float initial) {
+        layout.add(std::make_unique<Queued<juce::AudioParameterFloat>>(
+            juce::ParameterID{id, 1}, name, juce::NormalisableRange<float>(low, high, step), initial));
+    };
     // Preserve the old parameter identities/order for host project compatibility.
     // The retired wheel controls do not drive the live-pattern engine.
     addFloat("position", "Legacy Scratch Position", 0, 1, 0.000001f, 0);
@@ -53,29 +65,29 @@ juce::AudioProcessorValueTreeState::ParameterLayout BackScratchProcessor::makeLa
     addFloat("smooth", "Legacy Smooth", 0, 20, 0.1f, 3);
     addFloat("mix", "Legacy Mix", 0, 1, 0.001f, 1);
     addFloat("output", "Legacy Output", -24, 6, 0.1f, 0);
-    layout.add(std::make_unique<juce::AudioParameterBool>(juce::ParameterID{"bypass", 1}, "Bypass", false));
+    layout.add(std::make_unique<Queued<juce::AudioParameterBool>>(juce::ParameterID{"bypass", 1}, "Bypass", false));
     layout.add(std::make_unique<juce::AudioParameterChoice>(juce::ParameterID{"sens", 1}, "Legacy Sensitivity",
         juce::StringArray{"1/16 Bar", "1/8 Bar", "1/4 Bar", "1/2 Bar", "1 Bar"}, 2));
     addFloat("time", "Legacy Scratch Time", -64, 64, 0.000001f, 0);
     juce::StringArray names;
     for (const auto& preset : factoryPresets()) names.add(preset.name);
-    layout.add(std::make_unique<juce::AudioParameterChoice>(juce::ParameterID{"factory", 1}, "Scratch Pattern", names, 0));
-    layout.add(std::make_unique<juce::AudioParameterInt>(juce::ParameterID{"variation", 1}, "Variation", 0, 65535, 0));
-    layout.add(std::make_unique<juce::AudioParameterBool>(juce::ParameterID{"keepSub", 1}, "Keep Sub", true));
-    layout.add(std::make_unique<juce::AudioParameterBool>(juce::ParameterID{"generated", 1}, "Generated Pattern", false));
-    layout.add(std::make_unique<juce::AudioParameterInt>(juce::ParameterID{"generationSeed", 1}, "Pattern Seed", 0, maximumSeed, 1));
+    layout.add(std::make_unique<Queued<juce::AudioParameterChoice>>(juce::ParameterID{"factory", 1}, "Scratch Pattern", names, 0));
+    layout.add(std::make_unique<Queued<juce::AudioParameterInt>>(juce::ParameterID{"variation", 1}, "Variation", 0, 65535, 0));
+    layout.add(std::make_unique<Queued<juce::AudioParameterBool>>(juce::ParameterID{"keepSub", 1}, "Keep Sub", true));
+    layout.add(std::make_unique<Queued<juce::AudioParameterBool>>(juce::ParameterID{"generated", 1}, "Generated Pattern", false));
+    layout.add(std::make_unique<Queued<juce::AudioParameterInt>>(juce::ParameterID{"generationSeed", 1}, "Pattern Seed", 0, maximumSeed, 1));
     layout.add(std::make_unique<juce::AudioParameterChoice>(juce::ParameterID{"phraseLength", 1}, "Legacy Phrase Length",
         juce::StringArray{"1 Bar", "2 Bars", "4 Bars", "8 Bars", "16 Bars"}, 0));
-    layout.add(std::make_unique<juce::AudioParameterBool>(juce::ParameterID{"phraseLock", 1}, "Phrase Length Lock", true));
-    layout.add(std::make_unique<juce::AudioParameterChoice>(juce::ParameterID{"phraseDuration", 1}, "Phrase Length",
+    layout.add(std::make_unique<Queued<juce::AudioParameterBool>>(juce::ParameterID{"phraseLock", 1}, "Phrase Length Lock", true));
+    layout.add(std::make_unique<Queued<juce::AudioParameterChoice>>(juce::ParameterID{"phraseDuration", 1}, "Phrase Length",
         juce::StringArray{"1/2 Beat", "1 Beat", "2 Beats", "1 Bar", "2 Bars", "4 Bars", "8 Bars", "16 Bars"}, 3));
-    addFloat("sourceBeats", "Pattern Original Length", 0.25f, 256.0f, 0.0001f, 4.0f);
-    addFloat("sourceBarBeats", "Pattern Original Meter", 0.0f, 16.0f, 0.0001f, 4.0f);
-    layout.add(std::make_unique<juce::AudioParameterChoice>(juce::ParameterID{"phraseTiming", 1}, "Phrase Timing",
+    addQueuedFloat("sourceBeats", "Pattern Original Length", 0.25f, 256.0f, 0.0001f, 4.0f);
+    addQueuedFloat("sourceBarBeats", "Pattern Original Meter", 0.0f, 16.0f, 0.0001f, 4.0f);
+    layout.add(std::make_unique<Queued<juce::AudioParameterChoice>>(juce::ParameterID{"phraseTiming", 1}, "Phrase Timing",
         juce::StringArray{"Straight", "Dotted", "Triplet"}, 0));
-    layout.add(std::make_unique<juce::AudioParameterInt>(juce::ParameterID{"patternShift", 1}, "Pattern Grid Shift", 0, patternGridDivisions - 1, 0));
-    layout.add(std::make_unique<juce::AudioParameterBool>(juce::ParameterID{"edited", 1}, "Edited Pattern", false));
-    layout.add(std::make_unique<juce::AudioParameterInt>(juce::ParameterID{"motionVersion", 1}, "Pattern Motion Version", 1, 2, 2));
+    layout.add(std::make_unique<Queued<juce::AudioParameterInt>>(juce::ParameterID{"patternShift", 1}, "Pattern Grid Shift", 0, patternGridDivisions - 1, 0));
+    layout.add(std::make_unique<Queued<juce::AudioParameterBool>>(juce::ParameterID{"edited", 1}, "Edited Pattern", false));
+    layout.add(std::make_unique<Queued<juce::AudioParameterInt>>(juce::ParameterID{"motionVersion", 1}, "Pattern Motion Version", 1, 2, 2));
     return layout;
 }
 
@@ -90,7 +102,20 @@ BackScratchProcessor::BackScratchProcessor()
         controlParameters[i] = state.getParameter(controlIds[i]);
         rawControls[i] = state.getRawParameterValue(controlIds[i]);
         controls[i] = lastRaw[i] = rawControls[i]->load();
+        if (auto* tag = dynamic_cast<backScratchBridge::QueueTag*>(controlParameters[i])) tag->queue = &automationEvents;
     }
+}
+
+BackScratchProcessor::ParameterGroup::ParameterGroup(BackScratchProcessor& processor)
+    : owner(processor), lock(processor.editLock)
+{
+    // An odd sequence tells the audio thread that a group is incomplete.
+    if (owner.parameterGroupDepth++ == 0) owner.parameterGroupSequence.fetch_add(1);
+}
+
+BackScratchProcessor::ParameterGroup::~ParameterGroup()
+{
+    if (--owner.parameterGroupDepth == 0) owner.parameterGroupSequence.fetch_add(1);
 }
 
 double BackScratchProcessor::getTailLengthSeconds() const
@@ -122,12 +147,19 @@ void BackScratchProcessor::prepareToPlay(double sampleRate, int)
     for (size_t i = 0; i < controlCount; ++i) controls[i] = lastRaw[i] = rawControls[i]->load();
     queueActive.fill(false);
     pattern = currentPattern();
-    controlHistory.resize(static_cast<size_t>(engine.latencySamples() + 1));
+    try {
+        controlHistory.resize(static_cast<size_t>(engine.latencySamples() + 1));
+    } catch (...) {
+        // Without the delayed control frames, controls apply undelayed; never
+        // let an allocation failure escape into the host.
+        controlHistory.clear();
+    }
     controlWrite = 0; controlFrames = 0;
     renderedControls = controls;
     renderedBarBeats = currentBarBeats();
     wasPlaying = hadSongPosition = false;
     freeBeat = expectedBeat = 0.0;
+    previousStep = 0.0; previousCount = 0;
     resetPending.store(false);
     displayReady.store(false);
     playingDisplay.store(false);
@@ -211,11 +243,15 @@ BackScratchProcessor::DisplayState BackScratchProcessor::displayState() const no
     std::array<float, controlCount> values {};
     double beat = 0.0;
     int slot = EditedPatternStore::None;
+    bool coherent = false;
     if (displayReady.load() && playingDisplay.load()) {
-        for (;;) {
+        // Bounded: if the audio thread is mid-publication or has no snapshot,
+        // fall back to the current controls instead of spinning the UI thread.
+        for (int attempt = 0; attempt < 64 && !coherent; ++attempt) {
             const unsigned before = displaySequence.load();
-            if ((before & 1u) != 0) continue;
+            if ((before & 1u) != 0) { std::this_thread::yield(); continue; }
             slot = editedPatterns.acquirePublished(audibleEditSlot);
+            if (slot < 0) break;
             for (size_t i = 0; i < controlCount; ++i) values[i] = audibleControls[i].load();
             beat = audibleBeat.load();
             result.barBeats = audibleBarBeats.load();
@@ -223,10 +259,15 @@ BackScratchProcessor::DisplayState BackScratchProcessor::displayState() const no
             result.playing = audiblePlaying.load();
             result.historyReady = audibleHistoryReady.load();
             result.scratchActive = audibleScratchActive.load();
-            if (before == displaySequence.load() && slot >= 0) break;
-            editedPatterns.release(slot);
+            coherent = before == displaySequence.load();
+            if (!coherent) { editedPatterns.release(slot); slot = EditedPatternStore::None; }
         }
-    } else {
+    }
+    if (!coherent) {
+        beat = 0.0;
+        result.playing = false;
+        result.historyReady = true;
+        result.scratchActive = false;
         for (size_t i = 0; i < controlCount; ++i) values[i] = rawControls[i]->load();
         result.barBeats = currentBarBeats();
         result.tempoBpm = currentTempoBpm();
@@ -285,8 +326,12 @@ void BackScratchProcessor::setHostParameter(const char* id, float actual)
 void BackScratchProcessor::writeParameterGesture(const char* id, float actual)
 {
     if (auto* parameter = state.getParameter(id)) {
+        const float normalized = parameter->convertTo0to1(actual);
+        // Re-sending an unchanged value would still "touch" the parameter, and
+        // hosts such as Live then switch off its automation.
+        if (std::abs(parameter->getValue() - normalized) < 1.0e-7f) return;
         parameter->beginChangeGesture();
-        parameter->setValueNotifyingHost(parameter->convertTo0to1(actual));
+        parameter->setValueNotifyingHost(normalized);
         parameter->endChangeGesture();
     }
 }
@@ -294,7 +339,7 @@ void BackScratchProcessor::writeParameterGesture(const char* id, float actual)
 void BackScratchProcessor::setKeepSub(bool keep) { writeParameterGesture("keepSub", keep ? 1.0f : 0.0f); }
 void BackScratchProcessor::selectFactoryPreset(int index)
 {
-    const juce::ScopedLock editGuard(editLock);
+    const ParameterGroup group(*this);
     clearEditHistory();
     writeParameterGesture("edited", 0.0f);
     writeParameterGesture("motionVersion", 2.0f);
@@ -318,7 +363,7 @@ void BackScratchProcessor::selectFactoryPreset(int index)
 
 void BackScratchProcessor::randomizePattern()
 {
-    const juce::ScopedLock editGuard(editLock);
+    const ParameterGroup group(*this);
     clearEditHistory();
     writeParameterGesture("edited", 0.0f);
     writeParameterGesture("motionVersion", 2.0f);
@@ -336,11 +381,21 @@ void BackScratchProcessor::randomizePattern()
     writeParameterGesture("bypass", 0.0f);
 }
 
+void BackScratchProcessor::processBlockBypassed(juce::AudioBuffer<float>& audio, juce::MidiBuffer& midi)
+{
+    // Render the delayed dry path, so the host's latency compensation still
+    // lines the bypassed track up, and keep transport/history tracking alive
+    // so leaving bypass does not look like a seek.
+    hostBypassBlock = true;
+    processBlock(audio, midi);
+    hostBypassBlock = false;
+}
+
 void BackScratchProcessor::processBlock(juce::AudioBuffer<float>& audio, juce::MidiBuffer&)
 {
     juce::ScopedNoDenormals noDenormals;
     const int count = audio.getNumSamples(), channels = audio.getNumChannels();
-    if (count <= 0 || channels <= 0) { backScratchBridge::current.clear(); return; }
+    if (count <= 0 || channels <= 0) { automationEvents.clear(); return; }
     double bpm = 120.0, songBeat = freeBeat, barBeats = 4.0;
     bool playing = true, hasSongPosition = false;
     bool looping = false;
@@ -366,7 +421,10 @@ void BackScratchProcessor::processBlock(juce::AudioBuffer<float>& audio, juce::M
     };
     const double samplesPerBeat = 60.0 * rate / bpm;
     const double step = 1.0 / samplesPerBeat;
-    const double positionTolerance = std::max(2.0 * step, 1.0e-7);
+    // A host can integrate a tempo ramp across the previous callback while
+    // reporting only the tempo at its start. Allow for that much drift.
+    const double tempoAllowance = previousCount > 0 ? previousCount * std::abs(step - previousStep) : 0.0;
+    const double positionTolerance = std::max(2.0 * step, 1.0e-7) + tempoAllowance;
     double positionError = std::abs(songBeat - expectedBeat);
     if (looping && songBeat >= loopStart - positionTolerance
         && expectedBeat >= loopStart - positionTolerance && expectedBeat <= loopEnd + positionTolerance)
@@ -374,7 +432,9 @@ void BackScratchProcessor::processBlock(juce::AudioBuffer<float>& audio, juce::M
     const bool seek = hasSongPosition && hadSongPosition && positionError > positionTolerance;
     const bool restored = resetPending.exchange(false);
     if (restored || seek || playing != wasPlaying) {
-        engine.reset();
+        // Start a new musical history, but let the dry latency pipeline and
+        // crossover keep running: no gap, and nothing stale is scratched.
+        engine.invalidateHistory();
         clearControlHistory();
     }
     if (restored) {
@@ -382,10 +442,26 @@ void BackScratchProcessor::processBlock(juce::AudioBuffer<float>& audio, juce::M
         queueActive.fill(false);
     }
 
+    // Read the controls and edit snapshot like a sequence lock. A grouped GUI
+    // change (preset, randomize, load) is applied completely or not at all.
+    const unsigned groupBefore = parameterGroupSequence.load();
+    std::array<float, controlCount> raw {};
+    for (size_t i = 0; i < controlCount; ++i) raw[i] = rawControls[i]->load();
+    const int latestSlot = editedPatterns.acquireLatest();
+    const bool stable = (groupBefore & 1u) == 0 && parameterGroupSequence.load() == groupBefore;
+    if ((stable || restored) && latestSlot >= 0) {
+        editedPatterns.release(inputEditSlot);
+        inputEditSlot = latestSlot;
+    } else {
+        editedPatterns.release(latestSlot);
+    }
+
     int eventCount = 0;
     std::array<bool, controlCount> hasQueue {};
-    for (int i = 0; i < backScratchBridge::current.size; ++i) {
-        const auto& event = backScratchBridge::current.events[static_cast<size_t>(i)];
+    // During an incomplete group, host points for this callback are dropped;
+    // the parameter values they set are picked up in the next callback.
+    for (int i = 0; stable && i < automationEvents.size; ++i) {
+        const auto& event = automationEvents.events[static_cast<size_t>(i)];
         for (int control = 0; control < controlCount; ++control) {
             if (event.parameter != controlParameters[static_cast<size_t>(control)]) continue;
             if (eventCount < static_cast<int>(timedControls.size())) {
@@ -398,29 +474,24 @@ void BackScratchProcessor::processBlock(juce::AudioBuffer<float>& audio, juce::M
     }
     std::sort(timedControls.begin(), timedControls.begin() + eventCount,
               [](const TimedControl& a, const TimedControl& b) { return a.offset == b.offset ? a.order < b.order : a.offset < b.offset; });
-    for (size_t i = 0; i < controlCount; ++i) {
-        const float raw = rawControls[i]->load();
+    for (size_t i = 0; stable && i < controlCount; ++i) {
         if (hasQueue[i]) queueActive[i] = true;
-        else if (!queueActive[i] || raw != lastRaw[i]) controls[i] = raw;
-        lastRaw[i] = raw;
+        else if (!queueActive[i] || raw[i] != lastRaw[i]) controls[i] = raw[i];
+        lastRaw[i] = raw[i];
     }
     int nextEvent = 0;
     float peakL = 0.0f, peakR = 0.0f;
     auto* left = audio.getWritePointer(0);
     auto* right = audio.getWritePointer(channels > 1 ? 1 : 0);
     ControlFrame renderedContext;
-    int blockEditSlot = editedPatterns.acquireLatest();
-    if (blockEditSlot < 0) {
-        blockEditSlot = renderedEditSlot;
-        editedPatterns.retain(blockEditSlot);
-    }
+    const int blockEditSlot = inputEditSlot;
     for (int sample = 0; sample < count; ++sample) {
         while (nextEvent < eventCount && timedControls[static_cast<size_t>(nextEvent)].offset <= sample) {
             const auto& event = timedControls[static_cast<size_t>(nextEvent++)];
             controls[static_cast<size_t>(event.control)] = event.value;
         }
         const double beat = transportBeat(songBeat + (playing ? sample * step : 0.0));
-        ControlFrame context {controls, beat, samplesPerBeat, barBeats, playing, blockEditSlot};
+        ControlFrame context {controls, beat, samplesPerBeat, barBeats, playing, blockEditSlot, hostBypassBlock};
         // Delay the musical clock and automation by the same amount as audio.
         // Live's latency compensation then aligns the complete effect, including
         // pattern/sub changes, with its original song position.
@@ -449,8 +520,9 @@ void BackScratchProcessor::processBlock(juce::AudioBuffer<float>& audio, juce::M
         renderedControls = context.values;
         renderedBarBeats = context.barBeats;
         renderedContext = context;
+        const bool dryPath = context.values[bypass] > 0.5f || !context.playing || context.hostBypass;
         const auto out = engine.process(left[sample], right[sample], evaluatePattern(pattern, context.beat), context.samplesPerBeat,
-                                        context.values[sub] > 0.5f, context.values[bypass] > 0.5f || !context.playing);
+                                        context.values[sub] > 0.5f, dryPath);
         left[sample] = out[0];
         if (channels > 1) right[sample] = out[1];
         peakL = std::max(peakL, std::abs(out[0]));
@@ -471,14 +543,15 @@ void BackScratchProcessor::processBlock(juce::AudioBuffer<float>& audio, juce::M
     audibleScratchActive.store(engine.isScratchActive());
     displaySequence.fetch_add(1);
     displayReady.store(renderedContext.editSlot >= 0);
-    editedPatterns.release(blockEditSlot);
     displayedPhase.store(displayFraction(pattern, renderedContext.beat));
     barBeatsDisplay.store(barBeats);
     tempoDisplay.store(bpm);
     playingDisplay.store(playing);
     peaks[0].store(peakL); peaks[1].store(peakR);
-    backScratchBridge::current.clear();
+    automationEvents.clear();
     freeBeat = expectedBeat = endBeat;
+    previousStep = step;
+    previousCount = count;
     hadSongPosition = hasSongPosition;
     wasPlaying = playing;
 }
@@ -517,7 +590,7 @@ void BackScratchProcessor::getStateInformation(juce::MemoryBlock& result)
 
 void BackScratchProcessor::setStateInformation(const void* data, int size)
 {
-    const juce::ScopedLock editGuard(editLock);
+    const ParameterGroup group(*this);
     if (data == nullptr || size < 8) return;
     juce::MemoryInputStream input(data, static_cast<size_t>(size), false);
     if (input.readInt() == oldStateMagic) {
@@ -684,7 +757,7 @@ juce::Result BackScratchProcessor::savePreset(const juce::File& file)
 
 juce::Result BackScratchProcessor::loadPreset(const juce::File& file)
 {
-    const juce::ScopedLock editGuard(editLock);
+    const ParameterGroup group(*this);
     if (!file.existsAsFile() || file.getSize() > 1024 * 1024) return juce::Result::fail("Choose a BACK-SCRATCH preset file.");
     const auto xml = juce::XmlDocument::parse(file);
     if (xml == nullptr || !xml->hasTagName("BACK_SCRATCH_PRESET"))
@@ -752,4 +825,14 @@ juce::Result BackScratchProcessor::loadPreset(const juce::File& file)
 
 juce::AudioProcessorEditor* BackScratchProcessor::createEditor() { return new BackScratchEditor(*this); }
 } // namespace backScratch
+void backScratchBridge::Router::push(const void* parameter, int offset, float normalizedValue) noexcept
+{
+    // The pinned VST3 wrapper (and the tests) pass juce::AudioProcessorParameter
+    // pointers. Only BACK-SCRATCH controls carry a tag with their owner's queue.
+    if (parameter == nullptr) return;
+    const auto* base = static_cast<const juce::AudioProcessorParameter*>(parameter);
+    if (const auto* tag = dynamic_cast<const backScratchBridge::QueueTag*>(base); tag != nullptr && tag->queue != nullptr)
+        tag->queue->push(parameter, offset, normalizedValue);
+}
+
 juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter() { return new backScratch::BackScratchProcessor(); }

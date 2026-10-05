@@ -141,7 +141,7 @@ inline void runVstEditedTests(juce::AudioPluginInstance& plugin, backScratch::Ba
             "actual VST3 state restoration restores custom mode after the contour was erased");
     editedProcessorTests::compare(drawn, direct.currentPattern());
     const auto afterRecall = vstTimingTests::render(plugin, direct, head, false, 80);
-    vstTimingTests::compare(beforeRecall, afterRecall,
+    vstTimingTests::compareAfterRestore(beforeRecall, afterRecall, plugin.getLatencySamples(),
         "packaged VST3 project recall reproduces the exact drawn audio, timing and shifted loop behavior");
     std::cout << "Packaged VST3 pencil/eraser contour audio and custom project-container recall passed\n";
 }

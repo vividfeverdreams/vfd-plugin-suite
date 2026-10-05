@@ -3,6 +3,7 @@
 #include "DrawToolsTests.h"
 #include "MotionProfileTests.h"
 #include "LiveEngineTests.h"
+#include "EngineContinuityTests.h"
 #include <iostream>
 int main()
 {
@@ -12,6 +13,7 @@ int main()
         backScratch::runDrawToolsTests();
         backScratch::runMotionProfileTests();
         runLiveEngineTests();
+        runEngineContinuityTests();
         std::cout << "BACK-SCRATCH live engine and pattern tests passed\n";
         return 0;
     } catch (const std::exception& e) {

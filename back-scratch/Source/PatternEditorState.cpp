@@ -152,6 +152,7 @@ BackScratchProcessor::~BackScratchProcessor()
 {
     editedPatterns.release(editStartSlot);
     clearControlHistory();
+    editedPatterns.release(inputEditSlot);
     editedPatterns.release(audibleEditSlot.exchange(EditedPatternStore::None));
 }
 } // namespace backScratch

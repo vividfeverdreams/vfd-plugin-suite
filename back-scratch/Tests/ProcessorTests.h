@@ -130,8 +130,10 @@ inline void runProcessorTests()
     restored.setStateInformation(namedState.getData(), static_cast<int>(namedState.getSize()));
     check(restored.currentPresetName() == p.currentPresetName(), "custom name survives project save");
 
-    // A jump resets history. Starting at the destination in a new processor
-    // must produce the same result, without the previous phrase leaking out.
+    // A jump starts a new history. Once the dry latency pipeline has drained,
+    // the result matches a new processor started at the destination, so the
+    // previous phrase never leaks into a scratch. Inside that window the
+    // pre-seek dry audio plays out: there is no 15 ms hole.
     Head headA, headB;
     BackScratchProcessor sought, fresh;
     sought.setPlayHead(&headA); fresh.setPlayHead(&headB);
@@ -142,21 +144,33 @@ inline void runProcessorTests()
         headA.beat = block * 512.0 * headA.bpm / (48000.0 * 60.0);
         sought.processBlock(a, midi);
     }
+    const int latency = sought.getLatencySamples();
+    check(latency > 0, "shared audio path latency is reported to the host");
+    double tailEnergy = 0.0;
     for (int block = 0; block < 10; ++block) {
         headA.beat = headB.beat = 24 + block * 512.0 * headA.bpm / (48000.0 * 60.0);
         for (int i = 0; i < 512; ++i) for (int ch = 0; ch < 2; ++ch) a.setSample(ch, i, testSound(block * 512 + i, ch));
         b.makeCopyOf(a); sought.processBlock(a, midi); fresh.processBlock(b, midi);
-        for (int i = 0; i < 512; ++i) check(std::abs(a.getSample(0, i) - b.getSample(0, i)) < 0.000001f, "seek does not replay stale audio");
+        for (int i = 0; i < 512; ++i) {
+            const int frame = block * 512 + i;
+            if (frame < latency) {
+                tailEnergy += static_cast<double>(a.getSample(0, i)) * a.getSample(0, i);
+                check(std::abs(a.getSample(0, i) - testSound(100 * 512 - latency + frame)) < 0.000001f,
+                      "a seek plays out the pre-seek dry pipeline instead of a gap");
+            } else {
+                check(std::abs(a.getSample(0, i) - b.getSample(0, i)) < 0.000001f, "seek does not replay stale audio");
+            }
+        }
     }
+    check(tailEnergy > 1.0, "the dry tail after a seek is audible, not silent");
     headA.playing = false;
-    const int latency = sought.getLatencySamples();
-    check(latency > 0, "shared audio path latency is reported to the host");
     for (int block = 0; block < 8; ++block) {
         for (int i = 0; i < 512; ++i) for (int ch = 0; ch < 2; ++ch) a.setSample(ch, i, testSound(block * 512 + i, ch));
         sought.processBlock(a, midi);
         for (int i = 0; i < 512; ++i) {
             const int sourceFrame = block * 512 + i - latency;
-            const float expected = sourceFrame >= 0 ? testSound(sourceFrame) : 0.0f;
+            // Before the new input arrives, the last played audio finishes.
+            const float expected = sourceFrame >= 0 ? testSound(sourceFrame) : testSound(10 * 512 + sourceFrame);
             check(std::abs(a.getSample(0, i) - expected) < 0.000001f, "stopped transport is transparent at the reported latency");
         }
     }

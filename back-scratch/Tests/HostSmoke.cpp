@@ -13,6 +13,7 @@
 #include "EditedSerializationTests.h"
 #include "MotionVersionTests.h"
 #include "PerformanceRender.h"
+#include "TransportContinuityTests.h"
 #include <juce_audio_utils/juce_audio_utils.h>
 #include <iostream>
 
@@ -80,6 +81,7 @@ int main(int argc, char* argv[])
         runEditedSerializationTests();
         runMotionVersionTests();
         runGridEditorInteractionTests();
+        runTransportContinuityTests();
         backScratch::BackScratchProcessor processor;
         processor.prepareToPlay(48000, 512);
         runInteractionTests(processor);
@@ -204,6 +206,7 @@ int main(int argc, char* argv[])
             std::cout << "Packaged VST3 real processing matches processor; worst difference " << worst << '\n';
             runVstTimingTests(*plugin, processor);
             runVstEditedTests(*plugin, processor);
+            backScratch::transportContinuityTests::checkPackagedHostBypass(*plugin);
             plugin->releaseResources();
         }
         if (argc >= 4) renderPerformanceDemos(juce::File(juce::String::fromUTF8(argv[3])),

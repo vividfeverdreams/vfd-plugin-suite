@@ -1,6 +1,8 @@
 #include "LiveScratchEngine.h"
 #include <algorithm>
 #include <cmath>
+#include <limits>
+#include <new>
 
 namespace backScratch {
 namespace {
@@ -130,40 +132,90 @@ double LiveScratchEngine::BassExtractor::process(double input, int level) noexce
     return stage.up.process(inner * 2.0);
 }
 
-void LiveScratchEngine::prepare(double sampleRate, int channels, double historySeconds)
+
+bool LiveScratchEngine::allocateHistory(double seconds) noexcept
 {
-    (void) kernels();
-    rate = std::clamp(finiteOr(sampleRate, 48000.0), 8000.0, 384000.0);
-    busChannels = std::clamp(channels, 1, 2);
-    for (auto& channel : bass) channel.prepare(rate);
-    crossoverDelay = bass[0].delay;
-    const double duration = std::clamp(finiteOr(historySeconds, defaultHistorySeconds),
-                                       1.0, static_cast<double>(maximumHistorySeconds));
-    // Include all filter/interpolator latency in addition to the usable
-    // lookback, rather than quietly shortening the requested musical span.
-    capacity = static_cast<int>(std::ceil(rate * duration)) + latencySamples() + taps * 2;
-    for (auto& channel : history) channel.assign(static_cast<std::size_t>(capacity), 0.0f);
+    try {
+        const auto frames = static_cast<std::size_t>(std::ceil(rate * seconds))
+            + static_cast<std::size_t>(latencySamples() + taps * 2);
+        if (frames > static_cast<std::size_t>(std::numeric_limits<int>::max())
+            || frames > memoryLimit / (history.size() * sizeof(float)))
+            throw std::bad_alloc();
+        for (auto& channel : history) channel.assign(frames, 0.0f);
+        capacity = static_cast<int>(frames);
+        retainedSeconds = seconds;
+        return true;
+    } catch (...) {
+        for (auto& channel : history) std::vector<float>().swap(channel);
+        capacity = 0;
+        retainedSeconds = 0.0;
+        return false;
+    }
+}
+
+void LiveScratchEngine::prepare(double sampleRate, int channels, double historySeconds) noexcept
+{
+    capacity = 0;
+    retainedSeconds = 0.0;
+    // Release the previous ring before asking for a new one, so changing rate
+    // never needs both allocations at once.
+    for (auto& channel : history) std::vector<float>().swap(channel);
+    try {
+        (void) kernels();
+        rate = std::clamp(finiteOr(sampleRate, 48000.0), 8000.0, 384000.0);
+        busChannels = std::clamp(channels, 1, 2);
+        for (auto& channel : bass) channel.prepare(rate);
+        crossoverDelay = bass[0].delay;
+    } catch (...) {
+        // Without the crossover there is no valid processing path; process()
+        // then passes audio through untouched rather than failing in the host.
+        reset();
+        return;
+    }
     fadeStep = 1.0 / std::max(1.0, rate * 0.003);
     controlCoefficient = 1.0 - std::exp(-1.0 / (rate * 0.001));
+    // Include all filter/interpolator latency in addition to the usable
+    // lookback, rather than quietly shortening the requested musical span.
+    // When memory is short, halve the lookback; the last resort keeps just the
+    // latency pipeline so the reported delay compensation stays correct.
+    double seconds = std::clamp(finiteOr(historySeconds, defaultHistorySeconds),
+                                1.0, static_cast<double>(maximumHistorySeconds));
+    while (!allocateHistory(seconds) && seconds > 0.0)
+        seconds = seconds > 1.0 ? std::max(1.0, std::floor(seconds * 0.5)) : 0.0;
     reset();
 }
 
 void LiveScratchEngine::reset() noexcept
 {
-    writeFrame = 0;
+    writeFrame = validFrom = 0;
     for (auto& channel : bass) channel.reset();
     wetAmount = 0;
     gateAmount = motionAmount = subAmount = 1;
     previousTarget = outgoingFrame = 0;
     previousRate = outgoingRate = 1;
+    previousDelayBeats = previousSamplesPerBeat = glideSamplesPerBeat = 0;
+    lastReadFrame = fallbackFrame = 0;
+    lastReadRate = fallbackRate = 1;
     jumpFade = 1;
     lastRead = frozenOutgoing = {};
-    haveTarget = freezeOutgoing = false;
+    jumps = 0;
+    haveTarget = freezeOutgoing = fallbackActive = false;
     firstSample = true;
     historyReady = scratchActive = false;
 }
 
-bool LiveScratchEngine::readable(double frame) const noexcept
+void LiveScratchEngine::invalidateHistory() noexcept
+{
+    // The ring, dry pipeline and crossover keep running, so the output carries
+    // on without a gap. Only reads requested from now on are restricted.
+    validFrom = writeFrame;
+    haveTarget = false;
+    jumpFade = 1;
+    freezeOutgoing = false;
+    historyReady = false;
+}
+
+bool LiveScratchEngine::available(double frame) const noexcept
 {
     if (!std::isfinite(frame)) return false;
     const auto centre = static_cast<std::int64_t>(std::floor(frame));
@@ -171,10 +223,27 @@ bool LiveScratchEngine::readable(double frame) const noexcept
     return centre - radius + 1 >= oldest && centre + radius <= writeFrame - crossoverDelay;
 }
 
+bool LiveScratchEngine::readable(double frame) const noexcept
+{
+    return available(frame) && static_cast<std::int64_t>(std::floor(frame)) - radius + 1 >= validFrom;
+}
+
+bool LiveScratchEngine::clampToReadable(double& frame, bool allowRetained) const noexcept
+{
+    if (!std::isfinite(frame) || capacity == 0) return false;
+    const auto retainedOldest = std::max<std::int64_t>(0, writeFrame - capacity + 1) + radius - 1;
+    const auto newest = writeFrame - crossoverDelay - radius;
+    auto oldest = std::max(retainedOldest, validFrom + radius - 1);
+    if (oldest > newest && allowRetained) oldest = retainedOldest;
+    if (oldest > newest) return false;
+    frame = std::clamp(frame, static_cast<double>(oldest), static_cast<double>(newest));
+    return true;
+}
+
 std::array<double, 4> LiveScratchEngine::read(double frame, double speed) const noexcept
 {
     std::array<double, 4> output {};
-    if (!readable(frame)) return output;
+    if (!available(frame)) return output;
     const double speedRow = (std::clamp(std::abs(speed), 1.0, 2.0) - 1.0) * (rateSteps - 1);
     const int lowRate = std::min(static_cast<int>(speedRow), rateSteps - 2);
     const double speedFraction = speedRow - lowRate;
@@ -227,12 +296,25 @@ std::array<float, 2> LiveScratchEngine::process(float left, float right, const P
     const double targetSub = keepSub ? 1.0 : 0.0;
     subAmount += std::clamp(targetSub - subAmount, -fadeStep, fadeStep);
     const double speed = std::clamp(finiteOr(sample.playbackRate, 1.0), -2.0, 2.0);
+    const double delayBeats = std::max(0.0, finiteOr(sample.delayBeats, 0.0));
+    const double beatSamples = std::clamp(finiteOr(samplesPerBeat, rate * 0.5), 1.0, rate * 60.0);
+    // A steady tempo leaves glideSamplesPerBeat equal to the host value, so the
+    // delay below is exactly delayBeats * samplesPerBeat as before.
+    if (!haveTarget || std::abs(beatSamples - glideSamplesPerBeat) > tempoSnapFraction * glideSamplesPerBeat)
+        glideSamplesPerBeat = beatSamples;
+    else if (beatSamples != glideSamplesPerBeat) {
+        const double limit = tempoGlideDrift / std::max(previousDelayBeats, 1.0e-9);
+        glideSamplesPerBeat += std::clamp(beatSamples - glideSamplesPerBeat, -limit, limit);
+    }
     // Keep the requested trajectory intact. Unavailable old audio follows the
     // same smooth live-input fallback as startup; clamping delay would flatten
     // an extended reverse stroke and change the sound/pitch of the pattern.
-    const double delay = std::max(0.0, finiteOr(sample.delayBeats, 0.0))
-        * std::clamp(finiteOr(samplesPerBeat, rate * 0.5), 1.0, rate * 60.0);
+    const double delay = delayBeats * glideSamplesPerBeat;
     const double target = static_cast<double>(writeFrame) - latencySamples() - delay;
+    // A gliding tempo moves a beat-locked readhead as well; that drift is part
+    // of its actual speed, not a discontinuity. It is zero at a steady tempo.
+    const double drift = haveTarget ? previousDelayBeats * (glideSamplesPerBeat - previousSamplesPerBeat) : 0.0;
+    const double motion = std::abs(drift) <= 8.0 ? speed - drift : speed;
     const bool hasHistory = readable(target);
     historyReady = hasHistory;
     scratchActive = !bypass && finiteOr(sample.wet, 0.0) > 0.0;
@@ -240,6 +322,7 @@ std::array<float, 2> LiveScratchEngine::process(float left, float right, const P
     if (jumped) {
         // A second jump during a fade starts from the currently audible sample,
         // rather than snapping back to either of the earlier readheads.
+        ++jumps;
         freezeOutgoing = jumpFade < 1.0;
         frozenOutgoing = lastRead;
         outgoingFrame = previousTarget + previousRate;
@@ -249,9 +332,31 @@ std::array<float, 2> LiveScratchEngine::process(float left, float right, const P
     const double requestedWet = bypass || !hasHistory ? 0.0 : std::clamp(finiteOr(sample.wet, 0.0), 0.0, 1.0);
     const bool needsScratch = requestedWet > 0.0 || wetAmount > 0.0;
     // Dry portions need no interpolation work. If lookback falls outside valid
-    // history, retain the last wet value while the blend returns to live input.
-    auto wet = hasHistory && needsScratch ? read(target, speed)
-        : wetAmount > 0.0 ? lastRead : dry;
+    // history, the last audible readhead keeps moving (clamped to the readable
+    // window) while the blend returns to live input, instead of holding one
+    // frozen sample.
+    auto wet = dry;
+    if (hasHistory && needsScratch) {
+        wet = read(target, motion);
+        lastReadFrame = target;
+        lastReadRate = motion;
+        fallbackActive = false;
+    } else if (wetAmount > 0.0) {
+        if (!fallbackActive) {
+            fallbackFrame = lastReadFrame;
+            fallbackRate = lastReadRate;
+            fallbackActive = true;
+        }
+        double frame = fallbackFrame + fallbackRate;
+        if (clampToReadable(frame, true)) {
+            fallbackFrame = frame;
+            wet = read(frame, fallbackRate);
+        } else {
+            wet = lastRead;
+        }
+    } else {
+        fallbackActive = false;
+    }
     if (jumpFade < 1.0 && needsScratch) {
         auto outgoing = freezeOutgoing || !readable(outgoingFrame) ? frozenOutgoing : read(outgoingFrame, outgoingRate);
         const double fade = smoothStep(jumpFade);
@@ -264,8 +369,12 @@ std::array<float, 2> LiveScratchEngine::process(float left, float right, const P
     if (!needsScratch) jumpFade = 1.0;
     lastRead = wet;
     previousTarget = target;
-    previousRate = speed;
+    previousRate = motion;
+    previousDelayBeats = delayBeats;
+    previousSamplesPerBeat = glideSamplesPerBeat;
     haveTarget = true;
+    // Bypass also arrives here as requestedWet == 0, so engaging it fades out
+    // over the same 3 ms as releasing it; the result is then exactly dry.
     wetAmount += std::clamp(requestedWet - wetAmount, -fadeStep, fadeStep);
     gateAmount += controlCoefficient * (std::clamp(finiteOr(sample.gate, 1.0), 0.0, 1.0) - gateAmount);
     const double targetMotion = std::clamp(std::abs(speed) / 0.025, 0.0, 1.0);
@@ -280,7 +389,7 @@ std::array<float, 2> LiveScratchEngine::process(float left, float right, const P
         // At zero delay/rate 1 the full and protected paths both equal dry.
         // Linear crossfades then stay neutral even for correlated material.
         const double result = dry[c] + wetAmount * (scratch - dry[c]);
-        output[c] = static_cast<float>(bypass ? dry[c] : finiteOr(result, 0.0));
+        output[c] = static_cast<float>(finiteOr(result, dry[c]));
     }
     ++writeFrame;
     return output;

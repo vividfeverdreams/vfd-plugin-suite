@@ -1,4 +1,6 @@
 #pragma once
+#include <functional>
+#include <memory>
 
 #include "InteractionTests.h"
 #include "PatternEditing.h"
@@ -44,6 +46,21 @@ inline void pumpMenuCallbacks()
    #endif
 }
 
+// Run the message loop until done() holds, for at most timeoutMs. A loaded
+// machine can need far more than a fixed number of passes.
+inline bool pumpMessagesUntil(const std::function<bool()>& done, double timeoutMs = 2000.0)
+{
+    const auto deadline = juce::Time::getMillisecondCounterHiRes() + timeoutMs;
+    while (!done() && juce::Time::getMillisecondCounterHiRes() < deadline) {
+       #if JUCE_MAC
+        CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.002, true);
+       #else
+        juce::Thread::sleep(1);
+       #endif
+    }
+    return done();
+}
+
 inline void chooseMenuItem(BackScratchEditor& editor, BackScratchEditor::Control control,
                           const juce::String& title)
 {
@@ -56,7 +73,11 @@ inline void chooseMenuItem(BackScratchEditor& editor, BackScratchEditor::Control
     // Exercise JUCE's real menu-selection and async completion path, including
     // destruction of the popup, rather than calling the editor's action directly.
     item->triggerMenuItem();
-    pumpMenuCallbacks();
+    // The menu's completion callback is already queued; a two-hop sentinel
+    // posted now runs after it, whatever the machine load.
+    auto finished = std::make_shared<bool>(false);
+    juce::MessageManager::callAsync([finished] { juce::MessageManager::callAsync([finished] { *finished = true; }); });
+    pumpMessagesUntil([finished] { return *finished && juce::Component::getCurrentlyModalComponent() == nullptr; });
     check(juce::Component::getCurrentlyModalComponent() == nullptr, "choosing an item dismisses the dropdown");
 }
 

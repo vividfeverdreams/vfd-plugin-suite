@@ -51,6 +51,18 @@ inline void compare(const std::vector<float>& a, const std::vector<float>& b, co
     require(largest < 0.00003, message);
 }
 
+// Since 0.11 a project restore starts a new history without emptying the dry
+// latency pipeline, so the first latency samples still carry the audio that
+// was playing. Everything after them must match a freshly prepared instance.
+inline void compareAfterRestore(const std::vector<float>& fresh, const std::vector<float>& restored,
+                                int latencySamples, const char* message)
+{
+    require(fresh.size() == restored.size(), message);
+    const auto skip = static_cast<std::ptrdiff_t>(latencySamples * 2);
+    compare(std::vector<float>(fresh.begin() + skip, fresh.end()),
+            std::vector<float>(restored.begin() + skip, restored.end()), message);
+}
+
 inline std::vector<float> render(juce::AudioPluginInstance& plugin, BackScratchProcessor& direct,
                                  playbackAlignmentTests::Head& head, bool automate, int blocks)
 {
@@ -165,6 +177,7 @@ inline void runVstTimingTests(juce::AudioPluginInstance& plugin, backScratch::Ba
             && std::abs(parameterNamed(plugin, "Phrase Length").getValue() - durationValue) < 1e-7f,
             "VST3 project recall restores timing, length and grid-shift host parameters");
     const auto afterRecall = render(plugin, direct, head, false, 80);
-    compare(beforeRecall, afterRecall, "VST3 state recall reproduces exact shifted triplet audio through loop wraps");
+    compareAfterRestore(beforeRecall, afterRecall, plugin.getLatencySamples(),
+                        "VST3 state recall reproduces exact shifted triplet audio through loop wraps");
     std::cout << "Packaged VST3 dotted/triplet, grid-shift, loop and project-recall tests passed\n";
 }
