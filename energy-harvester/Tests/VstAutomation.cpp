@@ -216,11 +216,62 @@ void test(Bundle& bundle,Host& host){
     pass(true,"all five FX and 48 host BPM/time-signature/division launches; tempo latch and same-offset automation");
     if(!quiet)std::cout<<"VST3 queue points "<<actual->queuePoints<<'\n';
 }
+// 0.3.2 regressions through the shipping wrapper. Measured values print before each verdict.
+void regressions(Bundle& bundle){
+    Host host;IComponent* component=nullptr;
+    for(int32 i=0;i<bundle.factory->countClasses();++i){PClassInfo info{};bundle.factory->getClassInfo(i,&info);if(std::strcmp(info.category,kVstAudioEffectClass)==0)bundle.factory->createInstance(info.cid,IComponent::iid,reinterpret_cast<void**>(&component));}
+    require(component!=nullptr,"regression component");TUID controllerId{};
+    require(component->initialize(static_cast<IHostApplication*>(&host))==kResultOk&&component->getControllerClassId(controllerId)==kResultOk,"regression component initialisation");
+    IEditController* controller=nullptr;require(bundle.factory->createInstance(controllerId,IEditController::iid,reinterpret_cast<void**>(&controller))==kResultOk,"regression controller");
+    controller->initialize(static_cast<IHostApplication*>(&host));controller->setComponentHandler(&host);
+    auto* a=query<IConnectionPoint>(component);auto* b=query<IConnectionPoint>(controller);a->connect(b);b->connect(a);
+    auto* concrete=query<juce::JuceVST3EditController>(controller);auto* actual=static_cast<EnergyHarvesterProcessor*>(concrete->getPluginInstance());auto* processor=query<IAudioProcessor>(component);
+    struct Cleanup{IComponent* c;IEditController* e;IConnectionPoint* a;IConnectionPoint* b;juce::JuceVST3EditController* concrete;IAudioProcessor* p;
+        ~Cleanup(){p->setProcessing(false);c->setActive(false);a->disconnect(b);b->disconnect(a);a->release();b->release();e->setComponentHandler(nullptr);e->terminate();c->terminate();concrete->release();p->release();e->release();c->release();}} cleanup{component,controller,a,b,concrete,processor};
+    const auto pid=[](const char* name){return ParamID(juce::String(name).hashCode()&0x7fffffff);};
+    const ParamID gate=pid("harvest"),time=pid("spinUpMs"),sync=pid("syncMode"),division=pid("syncDivision");
+    ProcessSetup setup{};setup.maxSamplesPerBlock=512;setup.sampleRate=48000;setup.symbolicSampleSize=kSample32;setup.processMode=kRealtime;
+    require(component->activateBus(kAudio,kInput,0,true)==kResultOk&&component->activateBus(kAudio,kOutput,0,true)==kResultOk&&processor->setupProcessing(setup)==kResultOk
+            &&component->setActive(true)==kResultOk&&processor->setProcessing(true)==kResultOk,"regression activation");
+    juce::AudioBuffer<float> audio(2,512);Steinberg::int64 position=0;float last=0;bool primed=false;const double tempo=150;
+    const auto render=[&](Changes* changes,int count)->double{
+        for(int s=0;s<count;++s){const float x=float(.5*std::sin(2*juce::MathConstants<double>::pi*60*double(position+s)/48000.+1.1));audio.setSample(0,s,x);audio.setSample(1,s,x);}
+        AudioBusBuffers in{},out{};in.numChannels=out.numChannels=2;float* channels[]{audio.getWritePointer(0),audio.getWritePointer(1)};in.channelBuffers32=out.channelBuffers32=channels;
+        ProcessContext context{};context.sampleRate=48000;context.state=ProcessContext::kPlaying|ProcessContext::kTempoValid|ProcessContext::kTimeSigValid;
+        context.tempo=tempo;context.timeSigNumerator=4;context.timeSigDenominator=4;context.projectTimeSamples=position;
+        ProcessData data{};data.processMode=kRealtime;data.symbolicSampleSize=kSample32;data.numSamples=count;data.numInputs=data.numOutputs=1;data.inputs=&in;data.outputs=&out;data.inputParameterChanges=changes;data.processContext=&context;
+        require(processor->process(data)==kResultOk,"regression processing");double step=0;
+        for(int s=0;s<count;++s){const float y=audio.getSample(0,s);if(primed)step=std::max(step,double(std::abs(y-last)));last=y;primed=true;}
+        position+=count;return step;
+    };
+    // The VST3 spec allows parameter flushes with no ProcessContext at all.
+    const auto flush=[&](Changes* changes){ProcessData empty{};empty.processMode=kRealtime;empty.symbolicSampleSize=kSample32;empty.inputParameterChanges=changes;empty.processContext=nullptr;require(processor->process(empty)==kResultOk,"null-context flush");};
+    int failed=0;const auto verdict=[&](bool ok,const std::string& text){std::cout<<(ok?"PASS ":"FAIL ")<<text<<'\n';if(!ok)++failed;};
+    for(int i=0;i<10;++i)render(nullptr,512);
+    // E1: a null-context zero-length flush in the middle of a spin must not look like a transport start.
+    {Changes start;start.add(sync,{{0,0}});start.add(time,{{0,std::log(1600./80.)/std::log(100.)}});start.add(gate,{{0,0},{1,1}});render(&start,512);
+        for(int i=0;i<20;++i)render(nullptr,512);const float before=actual->visualProgress;Changes none;flush(&none);const double edge=render(nullptr,512);
+        verdict(actual->visualState==1&&actual->visualProgress>before,"E1 null-context flush mid-spin keeps spinning (state "+std::to_string(actual->visualState.load())+", progress "+std::to_string(before)
+                +" -> "+std::to_string(actual->visualProgress.load())+", next-block max step "+std::to_string(edge)+")");}
+    // E1: controls delivered in such a flush keep the last host tempo for SYNC launches.
+    {Changes off;off.add(gate,{{0,0}});render(&off,512);for(int i=0;i<4;++i)render(nullptr,512);
+        Changes launch;launch.add(sync,{{0,1}});launch.add(division,{{0,3/5.}});launch.add(gate,{{0,1}});flush(&launch);
+        const float latched=actual->latchedTime;const double expected=energy::syncMilliseconds(3,tempo,4,4);
+        verdict(std::abs(latched-expected)<.01&&actual->hasHostTempo,"E1 SYNC launch inside a null-context flush uses the host's "+std::to_string(int(tempo))+" BPM (latched "+std::to_string(latched)
+                +" ms, expected "+std::to_string(expected)+", host tempo flag "+(actual->hasHostTempo?"kept":"lost")+")");
+        render(nullptr,512);}
+    // E15: a point at offset == numSamples is clamped into the block instead of being dropped.
+    {Changes off;off.add(sync,{{0,0}});off.add(gate,{{0,0}});render(&off,128);for(int i=0;i<4;++i)render(nullptr,128);const auto before=actual->launchCount.load();
+        Changes late;late.add(gate,{{128,1}});render(&late,128);
+        verdict(actual->launchCount==before+1&&actual->visualGate,"E15 gate point at offset 128 of a 128-sample block launches inside that block (launches +"+std::to_string(actual->launchCount.load()-before)+")");}
+    if(failed)throw std::runtime_error(std::to_string(failed)+" VST3 regression check(s) failed");
+    std::cout<<"PASS 0.3.2 VST3 regression suite\n";
+}
 }
 int main(int argc,char** argv){try{juce::ScopedJuceInitialiser_GUI gui;require(argc>=2,"Supply VST3 bundle path");Bundle bundle(juce::File(juce::String::fromUTF8(argv[1])));
     std::vector<std::unique_ptr<Bundle>> siblings;for(int i=2;i<argc;++i)siblings.push_back(std::make_unique<Bundle>(juce::File(juce::String::fromUTF8(argv[i]))));
     if(!siblings.empty())std::cout<<"PASS ENERGY loads while "<<siblings.size()<<" sibling VST3 modules remain loaded\n";
-    Host host;test(bundle,host);
+    Host host;test(bundle,host);regressions(bundle);
     // Fresh sequential instances and concurrently processed instances use the same loaded module.
     quiet=true;Host second;test(bundle,second);quiet=false;std::cout<<"PASS second instance on same thread has independent delivery\n";
     std::exception_ptr errors[2];std::thread threads[2];for(int i=0;i<2;++i)threads[i]=std::thread([&,i]{try{quiet=true;Host h;test(bundle,h);}catch(...){errors[i]=std::current_exception();}});for(auto& t:threads)t.join();for(auto error:errors)if(error)std::rethrow_exception(error);

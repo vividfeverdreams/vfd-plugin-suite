@@ -7,6 +7,8 @@ public:
     ~EnergyHarvesterEditor() override;
     void resized() override;
     void previewTime(double seconds);
+    // Test hook: advance the live light show by `seconds`, as the timer would, reading the processor's state.
+    void stepAnimationForTesting(double seconds);
     double measureAnimationPaint();
 private:
     std::unique_ptr<HarvestCanvas> canvas;

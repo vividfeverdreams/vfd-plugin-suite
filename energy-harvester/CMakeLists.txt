@@ -6,13 +6,13 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_OBJCXX_VISIBILITY_PRESET hidden)
 add_subdirectory(external/JUCE)
-juce_add_binary_data(EnergyAssets SOURCES Assets/DeviceShell.png Assets/AppIcon.png ../shared/VfdLogo.svg Assets/ChakraPetch-SemiBold.ttf Assets/ChakraPetch-BoldItalic.ttf)
+juce_add_binary_data(EnergyAssets SOURCES Assets/DeviceShell-fullbleed.png Assets/AppIcon.png ../shared/VfdLogo.svg Assets/ChakraPetch-SemiBold.ttf Assets/ChakraPetch-BoldItalic.ttf)
 juce_add_plugin(EnergyHarvester COMPANY_NAME "VIVID FEVER DREAMS" BUNDLE_ID com.yoiboi.energyharvester
     PLUGIN_MANUFACTURER_CODE Yoib PLUGIN_CODE Enh1 FORMATS VST3 PRODUCT_NAME "ENERGY HARVESTER"
     ICON_BIG "${CMAKE_CURRENT_SOURCE_DIR}/Assets/AppIcon.png" ICON_SMALL "${CMAKE_CURRENT_SOURCE_DIR}/Assets/AppIcon.png"
     DESCRIPTION "Magnetic tape-start effect" IS_SYNTH FALSE NEEDS_MIDI_INPUT FALSE NEEDS_MIDI_OUTPUT FALSE
     IS_MIDI_EFFECT FALSE EDITOR_WANTS_KEYBOARD_FOCUS TRUE COPY_PLUGIN_AFTER_BUILD FALSE)
-target_sources(EnergyHarvester PRIVATE Source/Dsp/HarvestEngine.cpp Source/Dsp/FxRack.cpp Source/EnergyHarvesterProcessor.cpp Source/EnergyHarvesterEditor.cpp)
+target_sources(EnergyHarvester PRIVATE Source/Dsp/HarvestEngine.cpp Source/Dsp/FxRack.cpp Source/EnergyHarvesterProcessor.cpp Source/EnergyHarvesterEditor.cpp Source/Ui/HarvestLights.cpp)
 target_include_directories(EnergyHarvester PUBLIC Source PRIVATE ../shared)
 target_compile_definitions(EnergyHarvester PUBLIC JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0 JUCE_VST3_CAN_REPLACE_VST2=0 ENERGY_HARVESTER_QUEUE_BRIDGE=1)
 target_link_libraries(EnergyHarvester PRIVATE EnergyAssets juce::juce_audio_utils juce::juce_dsp juce::juce_recommended_config_flags juce::juce_recommended_warning_flags)

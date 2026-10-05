@@ -43,25 +43,34 @@ void EnergyHarvesterProcessor::prepareToPlay(double rate,int) {
     configure();engine.prepare(rate,getTotalNumInputChannels());engine.reset(gate_);
     resetPending=true; hadTimeline_=false; wasPlaying_=false; publish(false);
 }
-void EnergyHarvesterProcessor::publish(bool bypass) noexcept {
+void EnergyHarvesterProcessor::publish(bool bypass,float peak) noexcept {
     visualGate.store(gate_,std::memory_order_relaxed); visualBypass.store(bypass,std::memory_order_relaxed);
     visualState.store(int(engine.state()),std::memory_order_relaxed); visualProgress.store(engine.progress(),std::memory_order_relaxed);
     latchedTime.store(engine.latchedMs(),std::memory_order_relaxed); launchCount.store(engine.launches(),std::memory_order_relaxed);
+    publishedSamples.store(engine.processedSamples(),std::memory_order_relaxed);
+    // Hold the largest output peak until the UI consumes it with exchange(0): lock-free CAS max.
+    if(std::isfinite(peak) && peak>0) {
+        float held=visualLevel.load(std::memory_order_relaxed);
+        while(peak>held && !visualLevel.compare_exchange_weak(held,peak,std::memory_order_relaxed)) {}
+    }
 }
 void EnergyHarvesterProcessor::processBlock(juce::AudioBuffer<float>& b,juce::MidiBuffer&) {process(b,false);}
 void EnergyHarvesterProcessor::processBlockBypassed(juce::AudioBuffer<float>& b,juce::MidiBuffer&) {process(b,true);}
 void EnergyHarvesterProcessor::process(juce::AudioBuffer<float>& b,bool forceBypass) {
     juce::ScopedNoDenormals guard;
-    for(int ch=getTotalNumInputChannels();ch<b.getNumChannels();++ch) b.clear(ch,0,b.getNumSamples());
+    const int count=b.getNumSamples(), channels=std::min(2,b.getNumChannels());
+    for(int ch=getTotalNumInputChannels();ch<b.getNumChannels();++ch) b.clear(ch,0,count);
     const auto source=energyBridge::current;
     struct Cursor { int q=-1,index=0,count=0,offset=0; float value=0; bool ready=false; };
     std::array<Cursor,12> cursors{};
+    // Out-of-range offsets are clamped into this block rather than dropped (clamping keeps queue order).
+    const int lastOffset=std::max(0,count-1);
     const auto advance=[&](Cursor& c) {
         c.ready=false;
         while(c.index<c.count) {
             int offset=0; float value=0;
-            if(source.point(source.changes,c.q,c.index++,offset,value) && std::isfinite(value) && offset>=0 && offset<std::max(1,b.getNumSamples())) {
-                c.offset=offset; c.value=juce::jlimit(0.f,1.f,value); c.ready=true; break;
+            if(source.point(source.changes,c.q,c.index++,offset,value) && std::isfinite(value)) {
+                c.offset=std::clamp(offset,0,lastOffset); c.value=juce::jlimit(0.f,1.f,value); c.ready=true; break;
             }
         }
     };
@@ -73,30 +82,47 @@ void EnergyHarvesterProcessor::process(juce::AudioBuffer<float>& b,bool forceByp
             if(slot>=0) { auto& c=cursors[size_t(slot)]; c.q=q;c.count=source.pointCount(source.changes,q); advance(c); }
         }
     }
-    bool lifecycle=resetPending.exchange(false);
-    bpm_=120;numerator_=4;denominator_=4;hasHostTempo.store(false,std::memory_order_relaxed);
-    if(auto* playhead=getPlayHead()) if(auto info=playhead->getPosition()) {
-        if(auto bpm=info->getBpm();bpm && std::isfinite(*bpm) && *bpm>=10 && *bpm<=999){bpm_=*bpm;hasHostTempo.store(true,std::memory_order_relaxed);}
-        if(auto sig=info->getTimeSignature()){numerator_=sig->numerator;denominator_=sig->denominator;}
-        const bool playing=info->getIsPlaying(); if(playing&&!wasPlaying_) lifecycle=true;
-        if(auto position=info->getTimeInSamples()) {
-            if(playing&&hadTimeline_&&wasPlaying_&&*position!=nextPosition_) lifecycle=true;
-            nextPosition_=*position+b.getNumSamples(); hadTimeline_=true;
-        } else hadTimeline_=false;
-        wasPlaying_=playing;
+    const bool hardReset=resetPending.exchange(false);
+    bool lifecycle=false;
+    // A zero-length flush advances no audio time and may arrive without a ProcessContext (JUCE then reports
+    // stopped at sample 0). It must not look like a transport start or erase the host tempo: keep the last view.
+    if(count>0) {
+        bpm_=120;numerator_=4;denominator_=4;bool tempo=false;
+        if(auto* playhead=getPlayHead()) if(auto info=playhead->getPosition()) {
+            if(auto bpm=info->getBpm();bpm && std::isfinite(*bpm) && *bpm>=10 && *bpm<=999){bpm_=*bpm;tempo=true;}
+            if(auto sig=info->getTimeSignature()){numerator_=sig->numerator;denominator_=sig->denominator;}
+            const bool playing=info->getIsPlaying(); if(playing&&!wasPlaying_) lifecycle=true;
+            if(auto position=info->getTimeInSamples()) {
+                if(playing&&hadTimeline_&&wasPlaying_&&*position!=nextPosition_) lifecycle=true;
+                nextPosition_=*position+count; hadTimeline_=true;
+            } else hadTimeline_=false;
+            wasPlaying_=playing;
+        }
+        hasHostTempo.store(tempo,std::memory_order_relaxed); hostBpm.store(float(bpm_),std::memory_order_relaxed);
     }
     // Queue-backed values use the previously accepted state, never the wrapper's final scalar.
-    hostBpm.store(float(bpm_),std::memory_order_relaxed);
+    // Seqlock against setStateInformation: if a recall overlapped these raw reads (odd or changed epoch), the
+    // restored values become a new baseline without a gate edge instead of being treated as automation.
+    const uint32_t epochBefore=stateEpoch.load();
     for(size_t i=1;i<raw_.size();++i)if(cursors[i].q<0)values_[i]=raw_[i]->load();
-    if(cursors[0].q<0 && lifecycle) gate_=raw_[0]->load()>=.5f;
+    const bool rawGate=raw_[0]->load()>=.5f;
+    const uint32_t epochAfter=stateEpoch.load();
+    // A consistent read saw the same even epoch on both sides. After an inconsistent one the raw values may
+    // predate the recall's last writes, so keep resyncing (never edge-detecting) until a consistent read.
+    const bool consistent=(epochBefore&1u)==0 && epochBefore==epochAfter;
+    if(!consistent || epochBefore!=seenEpoch_ || recallUnsettled_) lifecycle=true;
+    recallUnsettled_=!consistent; seenEpoch_=epochAfter;
+    const bool resync=hardReset||lifecycle;
+    if(cursors[0].q<0 && resync) gate_=rawGate;
     bool bypass=source.active()?source.initialBypass:forceBypass;
-    if(lifecycle) {
+    if(resync) {
         if(cursors[0].ready && cursors[0].offset==0) { gate_=cursors[0].value>=.5f; advance(cursors[0]); }
-        engine.reset(gate_);
+        // After a processing gap the history is stale; while audio keeps running, fade the voice and keep it.
+        if(hardReset) engine.reset(gate_); else engine.restart(gate_);
     }
     engine.setBypass(bypass);configure();
-    if(cursors[0].q<0 && !lifecycle) {gate_=raw_[0]->load()>=.5f; engine.setGate(gate_);}
-    const int count=b.getNumSamples(), channels=std::min(2,b.getNumChannels());
+    if(cursors[0].q<0 && !resync) {gate_=rawGate; engine.setGate(gate_);}
+    float peak=0;
     // A zero-sample parameter flush updates state without manufacturing audible time.
     for(int sample=0;sample<std::max(1,count);++sample) {
         for(int slot: {1,8,9,3,4,5,6,7,2,10,11,0}) {
@@ -113,9 +139,10 @@ void EnergyHarvesterProcessor::process(juce::AudioBuffer<float>& b,bool forceByp
             energy::Frame input{b.getSample(0,sample),channels==2?b.getSample(1,sample):b.getSample(0,sample)};
             auto output=engine.process(input,bypass); b.setSample(0,sample,output.left);
             if(channels==2) b.setSample(1,sample,output.right);
+            peak=std::max(peak,std::max(std::abs(output.left),channels==2?std::abs(output.right):0.f));
         }
     }
-    publish(bypass);
+    publish(bypass,peak);
 }
 void EnergyHarvesterProcessor::getStateInformation(juce::MemoryBlock& block) {
     auto state=apvts.copyState(); state.setProperty("schemaVersion",3,nullptr);state.setProperty("dspVersion",3,nullptr);
@@ -143,9 +170,12 @@ void EnergyHarvesterProcessor::setStateInformation(const void* data,int size) {
     for(size_t i=0;i<required;++i)if(!found[i])return;
     for(size_t i=required;i<ids.size();++i){juce::ValueTree child("PARAM");child.setProperty("id",ids[i],nullptr);child.setProperty("value",defaults[i],nullptr);state.addChild(child,-1,nullptr);}
     state.setProperty("schemaVersion",3,nullptr);state.setProperty("dspVersion",3,nullptr);
+    // Bracket the recall (odd epoch while parameters change) so a restored HARVEST ON can never read as a
+    // gate edge; the next callbacks adopt it as clean AT SPEED and fade any running voice.
+    stateEpoch.fetch_add(1);
     apvts.replaceState(state); reducedMotion=bool(state.getProperty("reducedMotion",false));
     const int scale=int(state.getProperty("uiScale",100));uiScale=(scale==90||scale==125)?scale:100;
-    resetPending=true;
+    stateEpoch.fetch_add(1);
 }
 juce::AudioProcessorEditor* EnergyHarvesterProcessor::createEditor(){return new EnergyHarvesterEditor(*this);}
 juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter(){return new EnergyHarvesterProcessor();}

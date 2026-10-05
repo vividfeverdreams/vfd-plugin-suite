@@ -5,6 +5,9 @@
 #include <chrono>
 #include <atomic>
 #include <cstdlib>
+#include <cstdio>
+#include <limits>
+#include <string>
 #include <new>
 static std::atomic<bool> track{false}; static std::atomic<int> allocations{0};
 void* operator new(std::size_t n){if(track)++allocations;if(auto p=std::malloc(n?n:1))return p;throw std::bad_alloc();}
@@ -93,5 +96,73 @@ void outputLevel(){int cases=0;double maximumError=0;
     std::cout<<"PASS "<<cases<<" output-level rate/channel/dB cases; maximum gain error "<<maximumError<<"; 0 dB exact compatibility, OFF/landing/bypass unity, zero allocations\n";
 }
 
+// 0.3.2 regression suite. Each check prints its measured value before the verdict so a
+// failing build still reports every number; the suite throws once at the end.
+struct Verdicts {
+    int failed=0;
+    void check(bool ok,const std::string& text){std::cout<<(ok?"PASS ":"FAIL ")<<text<<'\n';if(!ok)++failed;}
+};
+std::string db(double v){char b[32];std::snprintf(b,sizeof b,"%+.2f",v);return b;}
+double tone(const std::vector<float>& x,size_t begin,size_t length,double hz,double fs){
+    const double w=6.283185307179586*hz/fs,c=2*std::cos(w);double s1=0,s2=0;
+    for(size_t i=0;i<length;++i){const double s=x[begin+i]+c*s1-s2;s2=s1;s1=s;}
+    return std::sqrt(std::max(0.,s1*s1+s2*s2-c*s1*s2))/(double(length)/2);
 }
-int main(){try{matrix();lifecycle();maximum();fixtures();rack();outputLevel();return 0;}catch(const std::exception& e){track=false;std::cerr<<"FAIL "<<e.what()<<'\n';return 1;}}
+double rmsOf(const std::vector<double>& x,size_t begin,size_t length){double e=0;for(size_t i=0;i<length;++i)e+=x[begin+i]*x[begin+i];return std::sqrt(e/double(length));}
+int spinSamples(float ms,double fs){return std::max(1,int(std::llround(ms*.001*fs)));}
+int handoffSamples(int n,double fs){return std::max(1,std::min(int(std::llround(.040*fs)),int(std::llround(.1*n))));}
+float noiseAt(int n){uint32_t h=uint32_t(n)*747796405u+2891336453u;h=((h>>((h>>28u)+4u))^h)*277803737u;h=(h>>22u)^h;return float(.3*(double(h)/2147483648.-1.));}
+
+void regressions(){
+    Verdicts v;const double fs=48000,tau=6.283185307179586;
+    // E4: every effect leaves a 50 Hz sub within +-0.5 dB at FX 100% (per channel).
+    const std::pair<unsigned,const char*> effects[]{{energy::pan,"panning"},{energy::chorus,"chorus"},{energy::phaser,"phaser"},{energy::flanger,"flanger"},{energy::washout,"washout"}};
+    for(auto [mask,name]:effects){
+        energy::FxRack r;r.setEffects(mask);r.prepare(fs,2);std::vector<float> left,right;const int length=int(fs*4);
+        for(int i=0;i<length;++i){const float x=float(.5*std::sin(tau*50*i/fs));auto y=r.process({x,x},1.0);left.push_back(y.left);right.push_back(y.right);}
+        double lo=1e9,hi=-1e9;
+        for(int w=0;w<30;++w)for(auto* channel:{&left,&right}){const double level=20*std::log10(tone(*channel,size_t(fs*1+w*fs*.1),size_t(fs*.1),50,fs)/.5);lo=std::min(lo,level);hi=std::max(hi,level);}
+        v.check(lo>=-.5&&hi<=.5,std::string("E4 50 Hz sub within +-0.5 dB at FX 100% for ")+name+" ("+db(lo)+" .. "+db(hi)+" dB)");
+    }
+    // E13: panning only attenuates; neither side ever exceeds the input level.
+    {double worst=0;
+        for(double hz:{50.,120.,300.,1000.,5000.}){energy::FxRack r;r.setEffects(energy::pan);r.prepare(fs,2);
+            for(int i=0;i<int(fs*2);++i){const float x=float(.5*std::sin(tau*hz*i/fs));auto y=r.process({x,x},1.0);if(i>int(fs*.1))worst=std::max(worst,double(std::max(std::abs(y.left),std::abs(y.right)))/.5);}}
+        v.check(worst<=1.002,"E13 attenuation-only panning never exceeds unity on either side (worst "+db(20*std::log10(worst))+" dB)");}
+    // E3: Washout recedes with the spin and its residual decays smoothly to exactly zero by the deadline.
+    {energy::HarvestEngine wash,basic;for(auto* e:{&wash,&basic}){e->setTime(4000);e->setFx(100);}
+        wash.setEffects(energy::washout);basic.setEffects(0);wash.prepare(fs,2);basic.prepare(fs,2);
+        for(int i=0;i<4800;++i){const float x=noiseAt(i);wash.process({x,x});basic.process({x,x});}
+        wash.setGate(true);basic.setGate(true);const int n=spinSamples(4000,fs),handoff=handoffSamples(n,fs),span=n-handoff;
+        std::vector<double> contribution(size_t(n+2400)),dry(size_t(n+2400));double after=0;
+        for(int i=0;i<n+2400;++i){const float x=noiseAt(4800+i);const double a=wash.process({x,x}).left,b=basic.process({x,x}).left;contribution[size_t(i)]=a-b;dry[size_t(i)]=x;if(i>=n)after=std::max(after,std::abs(a-b));}
+        const auto rel=[&](int from,int length){return 20*std::log10(rmsOf(contribution,size_t(from),size_t(length))/rmsOf(dry,size_t(from),size_t(length))+1e-15);};
+        const double middle=rel(int(.45*span),int(.05*span)),beforeHandoff=rel(span-2400,2400),last=rel(n-480,480);
+        double steepest=0;for(int from=int(.75*n);from+960<=n;from+=480){const double a=rel(from,480),b=rel(from+480,480);if(a>-40)steepest=std::max(steepest,a-b);}
+        v.check(beforeHandoff<=middle-20&&last<-50&&after==0&&steepest<=6,"E3 Washout residual recedes and decays smoothly to zero (mid "+db(middle)+", 50 ms before handoff "+db(beforeHandoff)+", final 10 ms "+db(last)+" dB re programme; steepest 10 ms drop above -40 dB "+db(steepest)+" dB; after deadline "+std::to_string(after)+")");}
+    // E5: host bypass during a spin declicks instead of jumping straight to dry.
+    {energy::HarvestEngine e;e.setTime(1600);e.setFx(45);e.prepare(fs,2);const auto in=[&](int i){return float(.5*std::sin(tau*60*i/fs+1.1));};
+        int i=0;for(;i<4800;++i)e.process({in(i),in(i)});e.setGate(true);float previous=0;double natural=0,edge=0;
+        for(;i<4800+int(fs*.4);++i){const float y=e.process({in(i),in(i)}).left;if(i>4900)natural=std::max(natural,double(std::abs(y-previous)));previous=y;}
+        bool exact=true;for(int k=0;k<int(fs*.02);++k,++i){const float y=e.process({in(i),in(i)},true).left;edge=std::max(edge,double(std::abs(y-previous)));previous=y;if(k>=int(fs*.006))exact=exact&&y==in(i);}
+        v.check(edge<=.02&&exact,"E5 host bypass mid-spin declicks (max step "+std::to_string(edge)+" vs in-spin "+std::to_string(natural)+"; exact dry after 6 ms: "+(exact?"yes":"no")+")");}
+    // E6: near the landing the wet voice is a single, short tap (no two-head comb or flam).
+    for(float ms:{800.f,1600.f,3200.f,8000.f,20000.f}){
+        energy::HarvestEngine e;e.setTime(ms);e.setFx(0);e.setEffects(0);e.prepare(fs,1);for(int i=0;i<4000;++i)e.process({0,0});e.setGate(true);
+        const int n=spinSamples(ms,fs),handoff=handoffSamples(n,fs),at=n-handoff-int(std::llround(.012*fs));std::vector<float> y(size_t(n+8));
+        for(int i=0;i<n+4;++i){const float x=i==at?1.f:0.f;y[size_t(i)]=e.process({x,x}).left;}
+        int peak=at;for(int i=at;i<at+int(fs*.05);++i)if(std::abs(y[size_t(i)])>std::abs(y[size_t(peak)]))peak=i;
+        double stray=0;for(int i=at;i<at+int(fs*.05);++i)if(std::abs(i-peak)>int(fs*.0005))stray=std::max(stray,double(std::abs(y[size_t(i)])));
+        const double delayMs=(peak-at)*1000/fs,ratio=stray/std::max(1e-9,double(std::abs(y[size_t(peak)])));
+        v.check(delayMs<=4&&ratio<=.05,"E6 "+std::to_string(int(ms))+" ms landing impulse is one tap at +"+std::to_string(delayMs)+" ms (largest other tap "+db(20*std::log10(ratio+1e-12))+" dB re main)");
+    }
+    // E15: a non-finite input sample never poisons the running voice.
+    {energy::HarvestEngine e;e.setFx(100);e.setEffects(31);e.prepare(fs,2);for(int i=0;i<4800;++i)e.process(signal(i,fs));e.setGate(true);int bad=0;
+        for(int i=0;i<spinSamples(800,fs)+64;++i){auto x=signal(4800+i,fs);if(i==5000)x={std::numeric_limits<float>::quiet_NaN(),std::numeric_limits<float>::infinity()};auto y=e.process(x);if(i>5000&&(!std::isfinite(y.left)||!std::isfinite(y.right)))++bad;}
+        v.check(bad==0&&e.state()==energy::State::atSpeed,"E15 NaN/Inf input sample does not poison the spin ("+std::to_string(bad)+" non-finite outputs afterwards)");}
+    if(v.failed)throw std::runtime_error(std::to_string(v.failed)+" regression check(s) failed");
+    std::cout<<"PASS 0.3.2 DSP regression suite\n";
+}
+
+}
+int main(){try{matrix();lifecycle();maximum();fixtures();rack();outputLevel();regressions();return 0;}catch(const std::exception& e){track=false;std::cerr<<"FAIL "<<e.what()<<'\n';return 1;}}

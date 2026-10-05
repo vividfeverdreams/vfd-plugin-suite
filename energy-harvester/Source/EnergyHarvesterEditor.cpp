@@ -2,12 +2,16 @@
 #include "BinaryData.h"
 #include "VfdInfo.h"
 #include "Timing.h"
+#include "Ui/HarvestLights.h"
 
 namespace {
 juce::Colour pink(0xffff52be), pearl(0xffffedf8), ink(0xff39102e);
 vfd::Theme theme() {return {juce::Colour(0xff280a22),pearl,pink,juce::Colour(0xff764061),juce::Colour(0xffd7abc5),pearl,
     juce::Colour(0xffc7a4b8),ink,juce::Colour(0xff4b163c)};}
-float periodic(float u,float center,float sharp=15) {return std::exp(sharp*(std::cos(juce::MathConstants<float>::twoPi*(u-center))-1));}
+// The device fills the window: this is the visible part of the 560 x 720 design canvas, inside the shell's
+// straight edges (Assets/DeviceShell-fullbleed.png has tightened corners to match).
+const juce::Rectangle<float> viewport{21,7,518,691};
+constexpr int viewWidth=518,viewHeight=691;
 class HarvestButton final:public juce::Button {
 public:
     explicit HarvestButton(juce::Typeface::Ptr f):Button("HARVEST"),face(f) {
@@ -145,7 +149,7 @@ public:
       normal(juce::Typeface::createSystemTypefaceFor(BinaryData::ChakraPetchSemiBold_ttf,BinaryData::ChakraPetchSemiBold_ttfSize)),
       italic(juce::Typeface::createSystemTypefaceFor(BinaryData::ChakraPetchBoldItalic_ttf,BinaryData::ChakraPetchBoldItalic_ttfSize)),
       harvest(italic),mode("Time / Sync",normal,true),info(theme(),normal),overlay("ENERGY HARVESTER",theme(),BinaryData::VfdLogo_svg,BinaryData::VfdLogo_svgSize,normal) {
-        setOpaque(false);shell=juce::ImageCache::getFromMemory(BinaryData::DeviceShell_png,BinaryData::DeviceShell_pngSize).rescaled(560,720,juce::Graphics::highResamplingQuality);
+        setOpaque(true);shellSource=juce::ImageCache::getFromMemory(BinaryData::DeviceShellfullbleed_png,BinaryData::DeviceShellfullbleed_pngSize);
         look.face=normal;addAndMakeVisible(harvest);harvest.setBounds(160,210,240,240);harvest.setExplicitFocusOrder(6);
         buttonAttachment=std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(p.apvts,"harvest",harvest);
         configureSlider(time,"SPIN-UP TIME",8);configureSlider(division,"SPIN-UP DIVISION",8);configureSlider(fx,"FX AMOUNT",9);
@@ -161,7 +165,7 @@ public:
         time.valueFromTextFunction=[](const juce::String& t){auto v=t.getDoubleValue();return t.trim().endsWithIgnoreCase("ms")?v:t.trim().endsWithIgnoreCase("s")?v*1000:v;};
         fx.textFromValueFunction=[](double v){return juce::String(v, std::abs(v-std::round(v))<.001?0:1)+"%";};
         division.textFromValueFunction=[](double v){return juce::String(energy::divisions[juce::jlimit(0,5,int(std::round(v)))]);};
-        division.valueFromTextFunction=[](const juce::String& text){for(int i=0;i<6;++i)if(text.trim().equalsIgnoreCase(energy::divisions[i]))return double(i);return 1.;};
+        division.valueFromTextFunction=[this](const juce::String& text){for(int i=0;i<6;++i)if(text.trim().equalsIgnoreCase(energy::divisions[i]))return double(i);return division.getValue();};
         division.setDoubleClickReturnValue(true,1);division.setTooltip("Tempo-synced duration: 1/8, 1/4, 1/2, 1 bar, 2 bars, or 4 bars. Uses the host tempo and time signature at the start.");
         time.updateText();division.updateText();fx.updateText();updateMode();
         time.setDoubleClickReturnValue(true,800);fx.setDoubleClickReturnValue(true,45);
@@ -177,8 +181,10 @@ public:
         output.valueFromTextFunction=[](const juce::String& text){return text.getDoubleValue();};output.updateText();output.setDoubleClickReturnValue(true,0);
         output.setTooltip("Level of the harvested spin-up. Clean audio keeps its original level. Shift-drag for fine adjustment; click the value to type dB. Double-click restores 0 dB.");
         addAndMakeVisible(info);info.setBounds(228,615,104,40);info.setExplicitFocusOrder(11);
-        info.onClick=[this]{overlay.open(&info);};addChildComponent(overlay);overlay.setBounds(0,0,560,720);
-        buildPaths();lastTime=juce::Time::getMillisecondCounterHiRes()*.001;startTimerHz(30);
+        info.onClick=[this]{overlay.open(&info);};addChildComponent(overlay);overlay.setBounds(viewport.toNearestInt());
+        tooltips.setColour(juce::TooltipWindow::backgroundColourId,ink);tooltips.setColour(juce::TooltipWindow::textColourId,pearl);
+        tooltips.setColour(juce::TooltipWindow::outlineColourId,pink.withAlpha(.6f));
+        lastTime=juce::Time::getMillisecondCounterHiRes()*.001;lastPublished=processor.publishedSamples.load();lastPublishTime=lastTime;startTimerHz(30);
         setSize(560,720);
     }
     ~HarvestCanvas() override {time.setLookAndFeel(nullptr);division.setLookAndFeel(nullptr);fx.setLookAndFeel(nullptr);output.setLookAndFeel(nullptr);}
@@ -188,37 +194,45 @@ public:
         s.setWantsKeyboardFocus(true);s.setExplicitFocusOrder(order);s.setVelocityBasedMode(false);
         addAndMakeVisible(s);
     }
-    void preview(double seconds) {preview_=seconds;envelope=processor.visualGate?1.f:0.f;repaint();}
-    double measureAnimationPaint(){juce::Image probe(juce::Image::ARGB,560,720,true);juce::Graphics g(probe);const double start=juce::Time::getMillisecondCounterHiRes();drawLights(g);return juce::Time::getMillisecondCounterHiRes()-start;}
+    // Deterministic frame for tests and screenshots: settle the lights for the current processor state, then
+    // run `seconds` of motion at 60 fps with a steady programme level.
+    void preview(double seconds) {
+        lights.reset();auto in=inputs(false);in.level=.35f;
+        for(int i=0,n=36+int(std::round(seconds*60));i<n;++i)lights.advance(1./60,in);
+        repaint();
+    }
+    void step(double seconds){lights.advance(seconds,inputs(true));repaint();}
+    double measureAnimationPaint(){juce::Image probe(juce::Image::ARGB,560,720,true);juce::Graphics g(probe);const double start=juce::Time::getMillisecondCounterHiRes();
+        drawLights(g);lights.paintRing(g,processor.visualProgress);return juce::Time::getMillisecondCounterHiRes()-start;}
     void mouseDown(const juce::MouseEvent& event) override {
         if(!event.mods.isPopupMenu())return;
         juce::PopupMenu m;m.addItem(1,"Reduced Motion",true,processor.reducedMotion.load());m.addSeparator();
         for(int v:{90,100,125})m.addItem(v,juce::String(v)+"% size",true,processor.uiScale==v);
         m.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(this),[safe=juce::Component::SafePointer<HarvestCanvas>(this)](int choice){
             if(!safe)return;if(choice==1)safe->processor.reducedMotion=!safe->processor.reducedMotion.load();
-            if(choice==90||choice==100||choice==125){safe->processor.uiScale=choice;safe->editor.setSize(560*choice/100,720*choice/100);}
+            if(choice==90||choice==100||choice==125){safe->processor.uiScale=choice;safe->editor.setSize(viewWidth*choice/100,viewHeight*choice/100);}
+            // Size and Reduced Motion are saved with the project; let the host know the session changed.
+            if(choice!=0)safe->processor.updateHostDisplay(juce::AudioProcessor::ChangeDetails().withNonParameterStateChanged(true));
         });
     }
     void paint(juce::Graphics& g) override {
-        g.drawImage(shell,getLocalBounds().toFloat());
-        g.setColour(juce::Colour(0xff16021a).withAlpha(.22f*(1-envelope)));g.fillRoundedRectangle(23,10,514,690,42);
+        paintShell(g);
+        g.setColour(juce::Colour(0xff16021a).withAlpha(.22f*(1-lights.charge())));g.fillRect(viewport);
         drawLights(g);
         g.setColour(pearl);g.setFont(vfd::font(italic,25));g.drawText("ENERGY HARVESTER",161,28,290,27,juce::Justification::centredLeft);
         for(int i=0;i<3;++i){const float x=126.f+i*9;juce::Path p;p.startNewSubPath(x,30);p.lineTo(x+6,30);p.lineTo(x-4,51);p.lineTo(x-10,51);p.closeSubPath();g.fillPath(p);}
         g.setFont(vfd::font(normal,10.5f));g.drawText("M A G N E T I C   T A P E   S T A R T",156,57,303,17,juce::Justification::centred);
-        const int state=processor.visualState;const bool bypass=processor.visualBypass;
+        const auto shown=inputs(false);const int state=shown.state;const bool bypass=shown.bypassed;
         const juce::String status=bypass?"BYPASSED":state==0?"READY":state==1?"SPINNING":state==2?"AT SPEED":"RESETTING";
         g.setColour(pearl);g.setFont(vfd::font(italic,23));g.drawText(status,120,103,238,30,juce::Justification::centredLeft);
-        g.drawText(processor.visualGate?"ON":"OFF",379,103,62,30,juce::Justification::centredRight);
+        g.drawText(shown.gate?"ON":"OFF",379,103,62,30,juce::Justification::centredRight);
         g.setFont(vfd::font(normal,10));
         const bool sync=mode.getToggleState();
         const juce::String sub=state==2||bypass?"CLEAN AUDIO":sync?juce::String(processor.hostBpm.load(),1)+" BPM"+(processor.hasHostTempo.load()?"  /  SYNC":"  /  FALLBACK"):"SELECT YOUR FX";
         g.drawText(sub,121,128,316,16,juce::Justification::centredLeft);
-        const float progress=processor.visualProgress;
+        const float progress=shown.progress;
         g.setColour(pink.withAlpha(.23f));g.fillRect(121.f,143.f,314.f,1.5f);g.setColour(pearl);g.fillRect(121.f,143.f,314.f*progress,1.5f);
-        for(int i=0;i<40;++i){const float a=-juce::MathConstants<float>::halfPi+i*juce::MathConstants<float>::twoPi/40;
-            juce::Path seg;seg.addCentredArc(280,330,102,102,0,a+.025f,a+.125f,true);
-            g.setColour(i<progress*40?pink.brighter(.4f):juce::Colour(0xff6d244c));g.strokePath(seg,juce::PathStrokeType(3));}
+        lights.paintRing(g,progress);
         g.setFont(vfd::font(normal,11.f));
         g.setColour(juce::Colour(0xff260a1b));g.drawText("OUTPUT",115,586,88,16,juce::Justification::centred);
         g.setColour(pearl);g.drawText("OUTPUT",115,585,88,16,juce::Justification::centred);
@@ -228,84 +242,74 @@ public:
     }
 private:
     void updateMode(){const bool sync=mode.getToggleState();time.setVisible(!sync);division.setVisible(sync);repaint();}
-    struct Trace {juce::Path path;float offset,length;juce::Image glow;juce::Rectangle<int> bounds;};std::vector<Trace> traces;
-    void buildPaths() {
-        const std::array<std::array<juce::Point<float>,5>,12> points{{
-            {{{42,74},{43,173},{52,248},{108,280},{166,299}}},{{{55,188},{61,249},{112,284},{124,308},{163,323}}},
-            {{{519,87},{510,160},{500,226},{449,258},{394,291}}},{{{506,248},{485,262},{461,266},{423,287},{395,306}}},
-            {{{43,405},{62,360},{111,356},{124,375},{166,375}}},{{{45,461},{98,438},{128,419},{155,409},{173,387}}},
-            {{{519,423},{478,413},{452,385},{434,359},{400,350}}},{{{514,335},{501,351},{471,342},{444,321},{401,323}}},
-            {{{62,666},{88,626},{111,609},{110,594},{170,590}}},{{{490,665},{467,637},{451,610},{428,594},{392,590}}},
-            {{{184,449},{154,435},{137,405},{153,385},{174,368}}},{{{392,447},{420,428},{439,401},{427,378},{393,363}}}
-        }};
-        int i=0;for(auto route:points){juce::Path path;path.startNewSubPath(route[0]);for(size_t j=1;j<route.size();++j)path.lineTo(route[j]);const float length=path.getLength();
-            const auto bounds=path.getBounds().expanded(6).getSmallestIntegerContainer();juce::Image glow(juce::Image::ARGB,bounds.getWidth(),bounds.getHeight(),true);juce::Graphics g(glow);g.addTransform(juce::AffineTransform::translation(-float(bounds.getX()),-float(bounds.getY())));
-            g.setColour(pink.withAlpha(.10f));g.strokePath(path,juce::PathStrokeType(8,juce::PathStrokeType::curved,juce::PathStrokeType::rounded));
-            g.setColour(pink.withAlpha(.55f));g.strokePath(path,juce::PathStrokeType(2.5f,juce::PathStrokeType::curved,juce::PathStrokeType::rounded));
-            g.setColour(pearl.withAlpha(.72f));g.strokePath(path,juce::PathStrokeType(.65f));
-            traces.push_back({path,float(i++)*.137f,length,glow,bounds});}
-        chargeGlow=juce::Image(juce::Image::ARGB,32,32,true);juce::Graphics glowGraphics(chargeGlow);
-        juce::ColourGradient glow(pearl,16,16,pink.withAlpha(0.f),16,0,true);glow.addColour(.16,pearl.withAlpha(.9f));glow.addColour(.30,pink.withAlpha(.75f));glow.addColour(.62,pink.withAlpha(.18f));glowGraphics.setGradientFill(glow);glowGraphics.fillEllipse(0,0,32,32);
+    void paintShell(juce::Graphics& g) {
+        // Resample the full-resolution shell once per screen density and zoom, then blit it: sharp on Retina
+        // and at 125%, and cheap at 60 fps.
+        const float scale=g.getInternalContext().getPhysicalPixelScaleFactor();
+        const int w=juce::jmax(1,juce::roundToInt(560*scale)),h=juce::jmax(1,juce::roundToInt(720*scale));
+        if(shellCache.getWidth()!=w||shellCache.getHeight()!=h){
+            shellCache=juce::Image(juce::Image::RGB,w,h,false);juce::Graphics cache(shellCache);
+            cache.setImageResamplingQuality(juce::Graphics::highResamplingQuality);cache.drawImage(shellSource,juce::Rectangle<float>(0,0,float(w),float(h)));
+        }
+        g.drawImage(shellCache,juce::Rectangle<float>(0,0,560,720));
     }
     void drawLights(juce::Graphics& g) {
-        if(envelope<.002f)return;g.saveState();
-        juce::Path allowed;allowed.addRoundedRectangle(23,10,514,690,42);g.reduceClipRegion(allowed);
-        for(auto r:{juce::Rectangle<int>(108,25,359,51),{94,93,372,104},{177,229,206,202},{63,459,433,124},{218,606,125,57},{111,583,96,106}})g.excludeClipRegion(r);
-        const bool still=processor.reducedMotion||processor.visualBypass||overlay.isVisible();
-        const double t=preview_>=0?preview_:phase;const float u=still?.766667f:float(std::fmod(t,6.0)/6.0);
-        const float level=envelope*(processor.visualBypass?.18f:overlay.isVisible()?.12f:1.f);
-        const std::array<juce::Point<int>,6> nodes{{{94,283},{477,282},{61,429},{500,447},{124,628},{433,627}}};
-        for(size_t i=0;i<nodes.size();++i){const float intensity=level*periodic(u,float(i)*.173f,20);if(intensity>.01f){g.setOpacity(intensity);g.drawImageAt(chargeGlow,nodes[i].x-16,nodes[i].y-16);}}g.setOpacity(1);
-        for(size_t i=0;i<traces.size();++i){auto& trace=traces[i];const float q=std::fmod(u*(i%3==0?2:1)+trace.offset,1.f);
-            const float pulse=.35f+.65f*periodic(u,trace.offset);const float intensity=level*pulse;
-            g.setOpacity(intensity);g.drawImageAt(trace.glow,trace.bounds.getX(),trace.bounds.getY());g.setOpacity(1);
-            const float headAlpha=level*std::pow(std::sin(juce::MathConstants<float>::pi*q),2);
-            for(int j=7;j>=0;--j){float at=juce::jmax(0.f,q-j*.018f);auto dot=trace.path.getPointAlongPath(at*trace.length);
-                float a=headAlpha*float(8-j)/8;g.setColour(pink.withAlpha(a*.17f));g.fillEllipse(dot.x-5,dot.y-5,10,10);
-                g.setColour(pearl.withAlpha(a));g.fillEllipse(dot.x-1.3f,dot.y-1.3f,2.6f,2.6f);}
-        }
-        juce::Path halo;for(int j=0;j<=120;++j){float a=j*juce::MathConstants<float>::twoPi/120;
-            float r=114.5f+.8f*std::sin(5*a)*std::sin(u*juce::MathConstants<float>::twoPi)+.5f*std::sin(9*a+.7f)*std::sin(u*juce::MathConstants<float>::twoPi*2);
-            juce::Point<float> v(280+std::cos(a)*r,330+std::sin(a)*r);if(j==0)halo.startNewSubPath(v);else halo.lineTo(v);}
-        g.setColour(pink.withAlpha(.12f*level));g.strokePath(halo,juce::PathStrokeType(7));
-        g.setColour(pink.withAlpha(.72f*level));g.strokePath(halo,juce::PathStrokeType(2.2f));
-        g.setColour(pearl.withAlpha(.75f*level));g.strokePath(halo,juce::PathStrokeType(.65f));g.restoreState();
+        // Board light lives in the PCB under the resin: clip away the socket and the glass and resin panels.
+        juce::Graphics::ScopedSaveState state(g);
+        juce::Path board;board.setUsingNonZeroWinding(false);board.addRectangle(viewport);
+        const float r=energy::ui::HarvestLights::lipRadius+2;
+        board.addEllipse(energy::ui::HarvestLights::centreX-r,energy::ui::HarvestLights::centreY-r,r*2,r*2);
+        g.reduceClipRegion(board);
+        for(auto rect:{juce::Rectangle<int>(108,25,359,51),{94,88,372,110},{63,459,433,124},{218,606,125,57},{111,583,96,106}})g.excludeClipRegion(rect);
+        lights.paintBoard(g);
+    }
+    energy::ui::LightInputs inputs(bool consumeLevel) {
+        energy::ui::LightInputs in;
+        in.gate=processor.visualGate;in.state=processor.visualState;in.progress=processor.visualProgress;
+        in.bypassed=processor.visualBypass;in.reducedMotion=processor.reducedMotion;in.dimmed=overlay.isVisible();
+        if(consumeLevel)in.level=processor.visualLevel.exchange(0.f,std::memory_order_relaxed);
+        // When the host isn't running audio, nothing is published: follow the HARVEST switch itself so the
+        // screen and lights still answer the click.
+        if(audioStalled){in.gate=processor.apvts.getRawParameterValue("harvest")->load()>=.5f;in.state=in.gate?2:0;in.progress=in.gate?1.f:0.f;in.bypassed=false;}
+        return in;
     }
     void timerCallback() override {
         if(division.isVisible()!=mode.getToggleState())updateMode();
         const auto now=juce::Time::getMillisecondCounterHiRes()*.001;const double dt=std::min(.1,now-lastTime);lastTime=now;
+        const auto published=processor.publishedSamples.load(std::memory_order_relaxed);
+        if(published!=lastPublished){lastPublished=published;lastPublishTime=now;}
+        audioStalled=now-lastPublishTime>.25;
         if(!isShowing()&&getPeer()!=nullptr){if(getTimerInterval()!=250)startTimer(250);return;}
-        const bool animated=(processor.visualGate||envelope>.001f)&&!processor.reducedMotion&&!processor.visualBypass&&!overlay.isVisible();
-        const int interval=animated?33:100;if(getTimerInterval()!=interval)startTimer(interval);
-        const float previous=envelope;
-        const float target=processor.visualGate?1.f:0.f;
-        if(target!=fadeTarget){fadeFrom=envelope;fadeTarget=target;fadeElapsed=0;}
-        const double duration=target>fadeFrom?.120:.240;fadeElapsed=std::min(duration,fadeElapsed+dt);
-        const float a=float(fadeElapsed/duration);envelope=fadeFrom+(target-fadeFrom)*a*a*(3-2*a);
-        if(envelope>.001f&&!processor.reducedMotion&&!processor.visualBypass&&!overlay.isVisible())phase+=dt;
-        if(envelope==0)phase=0;
-        const int state=processor.visualState;const float progress=processor.visualProgress;
-        const bool reduced=processor.reducedMotion,bypassed=processor.visualBypass;
-        if(animated||std::abs(envelope-previous)>.00001f||state!=lastState||std::abs(progress-lastProgress)>.00001f||reduced!=lastReduced||bypassed!=lastBypassed)repaint();
-        lastState=state;lastProgress=progress;lastReduced=reduced;lastBypassed=bypassed;
+        const auto in=inputs(true);
+        const float previousCharge=lights.charge();
+        lights.advance(dt,in);
+        const bool animated=lights.needsFrames();
+        const int interval=animated?16:100;if(getTimerInterval()!=interval)startTimer(interval);
+        const bool changed=in.state!=lastState||std::abs(in.progress-lastProgress)>.00001f||in.reducedMotion!=lastReduced
+            ||in.bypassed!=lastBypassed||in.gate!=lastGate||std::abs(lights.charge()-previousCharge)>.00001f;
+        if(animated||changed)repaint();
+        lastState=in.state;lastProgress=in.progress;lastReduced=in.reducedMotion;lastBypassed=in.bypassed;lastGate=in.gate;
     }
     EnergyHarvesterProcessor& processor;EnergyHarvesterEditor& editor;
-    juce::Typeface::Ptr normal,italic;juce::Image shell,chargeGlow;FaderLook look;OutputLook outputLook;
+    juce::Typeface::Ptr normal,italic;juce::Image shellSource,shellCache;FaderLook look;OutputLook outputLook;
     HarvestButton harvest;ScreenToggle mode;juce::Slider time,division,fx;OutputSlider output;
     std::array<std::unique_ptr<ScreenToggle>,5> effectButtons;
     std::array<std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment>,5> effectAttachments;vfd::InfoButton info;vfd::InfoOverlay overlay;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> buttonAttachment,modeAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> timeAttachment,divisionAttachment,fxAttachment,outputAttachment;
-    double phase=0,lastTime=0,fadeElapsed=0,preview_=-1;
-    float envelope=0,fadeFrom=0,fadeTarget=0;
-    int lastState=-1;float lastProgress=-1;bool lastReduced=false,lastBypassed=false;
+    energy::ui::HarvestLights lights;juce::TooltipWindow tooltips{this,600};
+    double lastTime=0,lastPublishTime=0;std::uint64_t lastPublished=0;
+    int lastState=-1;float lastProgress=-1;bool lastReduced=false,lastBypassed=false,lastGate=false,audioStalled=false;
 };
 EnergyHarvesterEditor::EnergyHarvesterEditor(EnergyHarvesterProcessor& p):AudioProcessorEditor(p),canvas(std::make_unique<HarvestCanvas>(p,*this)) {
-    setOpaque(false);addAndMakeVisible(*canvas);setResizable(true,false);setResizeLimits(504,648,700,900);
-    if(auto* c=getConstrainer())c->setFixedAspectRatio(560.0/720.0);
-    setSize(560*p.uiScale/100,720*p.uiScale/100);
+    setOpaque(true);addAndMakeVisible(*canvas);setResizable(true,false);
+    setResizeLimits(viewWidth*90/100,viewHeight*90/100,viewWidth*125/100,viewHeight*125/100);
+    if(auto* c=getConstrainer())c->setFixedAspectRatio(double(viewWidth)/viewHeight);
+    setSize(viewWidth*p.uiScale/100,viewHeight*p.uiScale/100);
 }
 EnergyHarvesterEditor::~EnergyHarvesterEditor()=default;
-void EnergyHarvesterEditor::resized(){if(canvas){canvas->setBounds(0,0,560,720);canvas->setTransform(juce::AffineTransform::scale(float(getWidth())/560));}}
+void EnergyHarvesterEditor::resized(){if(canvas){canvas->setBounds(0,0,560,720);
+    canvas->setTransform(juce::AffineTransform::translation(-viewport.getX(),-viewport.getY()).scaled(float(getWidth())/viewWidth));}}
 void EnergyHarvesterEditor::previewTime(double t){canvas->preview(t);}
+void EnergyHarvesterEditor::stepAnimationForTesting(double seconds){canvas->step(seconds);}
 double EnergyHarvesterEditor::measureAnimationPaint(){return canvas->measureAnimationPaint();}
