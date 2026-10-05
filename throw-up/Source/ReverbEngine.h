@@ -65,6 +65,8 @@ private:
     static float safeSample (float sample);
     static void hadamard (std::array<float, 8>& values);
     void updateCoefficients();
+    void updateDelayTargets();
+    float predelayTap (std::size_t channel, float delaySamples, float original) const;
 
     Settings target;
     Settings current;
@@ -72,16 +74,37 @@ private:
     bool prepared = false;
     float parameterSlew = 0.0f;
     float fastSlew = 0.0f;
-    float sizeSlew = 0.0f;
     float envelopeAttack = 0.0f;
     float envelopeRelease = 0.0f;
     float envelope = 0.0f;
     float lowCutCoefficient = 0.0f;
     float highCutCoefficient = 0.0f;
     float mixWet = 0.0f;
+    // THROW moves linearly across each processed block toward the host value,
+    // never faster than the 4 ms full-range ramp.
+    float mixRampFrom = 0.0f;
+    float mixRampLength = 1.0f;
+    float mixRampPosition = 0.0f;
     float outputGain = 1.0f;
     float excitationGain = 1.0f;
     float excitationTarget = 1.0f;
+    // Bypass crossfade: 0 = processing, 1 = fully bypassed (exact dry output).
+    float bypassFade = 0.0f;
+    float bypassStep = 0.0f;
+    // Delay-length changes never slew a read position quickly. Moves short
+    // enough to finish within a glide budget glide at a pitch-safe rate;
+    // larger moves crossfade between the old and new read taps.
+    float predelayGlideRate = 0.0f;
+    float predelayJumpLimit = 0.0f;
+    float tailGlideRate = 0.0f;
+    float tailJumpLimit = 0.0f;
+    float delayFadeStep = 0.0f;
+    float predelayCorrelatedLimit = 0.0f;
+    float predelayActive = 0.0f;
+    float predelayNext = 0.0f;
+    float predelayFade = 1.0f; // 1 = no crossfade running
+    bool predelayEqualPower = true;
+    float tailFade = 1.0f; // 1 = no crossfade running
     std::array<float, 8> modulationPhases {};
     int coefficientCountdown = 0;
     std::array<Delay, 2> predelayLines;
@@ -92,6 +115,7 @@ private:
     std::array<std::array<OnePole, 2>, 2> outputHighpass;
     std::array<OnePole, 2> outputLowpass;
     std::array<float, 8> tailLengths {};
+    std::array<float, 8> tailNext {};
     std::array<float, 8> feedbackGains {};
 };
 } // namespace throwup

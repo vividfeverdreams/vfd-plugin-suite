@@ -8,6 +8,8 @@
 #include <cmath>
 #include <vector>
 #include <array>
+#include <functional>
+#include <cstring>
 
 namespace {
 void check(bool value, const char* message)
@@ -49,6 +51,151 @@ juce::Component* findNamed(juce::Component& parent, const juce::String& name)
     }
     return nullptr;
 }
+juce::MouseEvent mouseEvent(juce::Component& target, int clicks)
+{
+    const auto now = juce::Time::getCurrentTime();
+    const auto point = target.getLocalBounds().getCentre().toFloat();
+    return juce::MouseEvent(juce::Desktop::getInstance().getMainMouseSource(), point,
+        juce::ModifierKeys::leftButtonModifier, 1.0f, 0, 0, 0, 0, &target, &target,
+        now, point, now, clicks, false);
+}
+
+// No message loop runs in this console host: drive JUCE timers by hand.
+bool pumpTimersUntil(const std::function<bool()>& done, int milliseconds)
+{
+    const auto end = juce::Time::getMillisecondCounter() + static_cast<juce::uint32>(milliseconds);
+    while (juce::Time::getMillisecondCounter() < end) {
+        juce::Thread::sleep(20);
+        juce::Timer::callPendingTimersSynchronously();
+        if (done()) return true;
+    }
+    return done();
+}
+
+void runFixRegressionTests(const juce::File* folder)
+{
+    {
+        // Meters keep the highest block peak until the editor collects it.
+        ThrowUpProcessor p;
+        set(p, "mix", 0); set(p, "output", 0);
+        p.prepareToPlay(48000, 256);
+        juce::MidiBuffer midi;
+        juce::AudioBuffer<float> audio(2, 256);
+        for (const float peak : { .9f, .1f, .2f }) {
+            audio.clear(); audio.setSample(0, 17, peak); audio.setSample(1, 99, -peak * .5f);
+            p.processBlock(audio, midi);
+        }
+        check(juce::exactlyEqual(p.inputLevel.exchange(0.0f), .9f) && juce::exactlyEqual(p.outputLevel.exchange(0.0f), .9f),
+              "meters hold the highest peak across blocks until collected");
+        check(juce::exactlyEqual(p.inputLevel.load(), 0.0f) && juce::exactlyEqual(p.outputLevel.load(), 0.0f),
+              "collecting a meter peak resets it");
+    }
+    {
+        ThrowUpProcessor p;
+        ThrowUpEditor editor(p);
+        auto* presetMenu = dynamic_cast<juce::ComboBox*>(findNamed(editor, "Factory presets"));
+        auto* outputValue = dynamic_cast<juce::Label*>(findNamed(editor, "OUTPUT value"));
+        check(presetMenu != nullptr && outputValue != nullptr, "preset menu and Output value box exist");
+
+        // Choosing the ticked room again from the menu reloads it, reverting edits.
+        p.loadFactoryPreset(23);
+        set(p, "size", 12); set(p, "grit", 77); set(p, "mix", 55);
+        std::function<void()> action;
+        for (juce::PopupMenu::MenuItemIterator item(*presetMenu->getRootMenu(), true); item.next();)
+            if (item.getItem().itemID == 24) action = item.getItem().action;
+        check(action != nullptr, "preset menu items carry a load action");
+        action();
+        const auto& room = throwup::factoryPresets()[23].settings;
+        check(p.getCurrentProgram() == 23 && std::abs(get(p, "size") - room.size) < .05f
+              && std::abs(get(p, "grit") - room.grit) < .05f && std::abs(get(p, "mix") - 55) < .02f,
+              "re-selecting the current preset reverts its edits and keeps THROW");
+
+        // Output: double-click resets to 0 dB, a single click opens text entry.
+        juce::Component& outputBox = *outputValue; // mouse handlers are public on Component
+        set(p, "output", -6.5f);
+        outputBox.mouseDown(mouseEvent(outputBox, 1));
+        outputBox.mouseUp(mouseEvent(outputBox, 1));
+        outputBox.mouseDown(mouseEvent(outputBox, 2));
+        outputBox.mouseUp(mouseEvent(outputBox, 2));
+        outputBox.mouseDoubleClick(mouseEvent(outputBox, 2));
+        check(!outputValue->isBeingEdited(), "double-clicking Output does not open text entry");
+        check(std::abs(get(p, "output")) < .001f, "double-clicking Output resets it to 0 dB");
+        {
+            // The reset value must give exact unity: THROW 0 passes the input bit-exact.
+            set(p, "mix", 0);
+            p.prepareToPlay(48000, 257);
+            juce::MidiBuffer midi;
+            juce::AudioBuffer<float> audio(2, 257), original(2, 257);
+            bool exact = true;
+            for (int b = 0; b < 8; ++b) {
+                for (int c = 0; c < 2; ++c) for (int i = 0; i < 257; ++i) audio.setSample(c, i, signal(b * 257 + i, c));
+                original.makeCopyOf(audio);
+                p.processBlock(audio, midi);
+                for (int c = 0; c < 2; ++c)
+                    exact = exact && std::memcmp(audio.getReadPointer(c), original.getReadPointer(c), 257 * sizeof(float)) == 0;
+            }
+            check(exact, "after an Output reset, THROW 0 is bit-exact dry");
+        }
+        check(!pumpTimersUntil([outputValue] { return outputValue->isBeingEdited(); },
+                               juce::MouseEvent::getDoubleClickTimeout() + 600),
+              "a double-click on Output does not also open text entry");
+        set(p, "output", -3.0f);
+        outputBox.mouseDown(mouseEvent(outputBox, 1));
+        outputBox.mouseUp(mouseEvent(outputBox, 1));
+        check(pumpTimersUntil([outputValue] { return outputValue->isBeingEdited(); }, 3000),
+              "a single click on Output opens text entry");
+        outputValue->hideEditor(true);
+        check(std::abs(get(p, "output") + 3.0f) < .02f, "cancelled Output text entry leaves the value unchanged");
+
+        // The editor collects meter peaks (exchange) on its timer; +2.9 dBFS lights CLIP.
+        set(p, "mix", 0); set(p, "output", 6);
+        p.prepareToPlay(48000, 256);
+        juce::MidiBuffer midi;
+        juce::AudioBuffer<float> audio(2, 256);
+        for (int block = 0; block < 4; ++block) {
+            for (int i = 0; i < 256; ++i)
+                for (int c = 0; c < 2; ++c)
+                    audio.setSample(c, i, .7f * static_cast<float>(std::sin(.07 * (block * 256 + i))));
+            p.processBlock(audio, midi);
+        }
+        check(p.outputLevel.load() > 1.0f, "hot output is held above 0 dBFS for the meter");
+        check(pumpTimersUntil([&p] { return juce::exactlyEqual(p.outputLevel.load(), 0.0f) && juce::exactlyEqual(p.inputLevel.load(), 0.0f); }, 3000),
+              "editor timer collects held meter peaks");
+        if (folder != nullptr)
+            saveImage(editor, folder->getChildFile("THROW-UP-meters.png"));
+    }
+    {
+        // Session state from a newer version: unknown children are skipped and a
+        // bad value falls back to its default instead of discarding the session.
+        ThrowUpProcessor source;
+        source.loadFactoryPreset(37);
+        set(source, "mix", 41.5f); set(source, "decay", 9.25f); set(source, "output", -2.5f);
+        juce::MemoryBlock saved;
+        source.getStateInformation(saved);
+        auto xml = juce::AudioProcessor::getXmlFromBinary(saved.getData(), static_cast<int>(saved.getSize()));
+        check(xml != nullptr, "saved state parses");
+        xml->createNewChildElement("USER_PRESET")->setAttribute("name", "From the future");
+        auto* future = xml->createNewChildElement("PARAM");
+        future->setAttribute("id", "futureKnob"); future->setAttribute("value", 3.0);
+        for (auto* child : xml->getChildIterator())
+            if (child->getStringAttribute("id") == "decay") child->setAttribute("value", "nan");
+        juce::MemoryBlock edited;
+        juce::AudioProcessor::copyXmlToBinary(*xml, edited);
+        ThrowUpProcessor restored;
+        restored.setStateInformation(edited.getData(), static_cast<int>(edited.getSize()));
+        check(restored.getCurrentProgram() == 37 && std::abs(get(restored, "mix") - 41.5f) < .02f
+              && std::abs(get(restored, "output") + 2.5f) < .02f && std::abs(get(restored, "decay") - 2.4f) < .01f
+              && std::abs(get(restored, "size") - throwup::factoryPresets()[37].settings.size) < .05f,
+              "state with unknown children and a bad value restores every other parameter");
+        set(restored, "mix", 12.0f);
+        xml->setTagName("NOT_THROW_UP");
+        juce::MemoryBlock wrongRoot;
+        juce::AudioProcessor::copyXmlToBinary(*xml, wrongRoot);
+        restored.setStateInformation(wrongRoot.getData(), static_cast<int>(wrongRoot.getSize()));
+        check(std::abs(get(restored, "mix") - 12.0f) < .02f, "state with a foreign root is still rejected");
+    }
+}
+
 void checkInfoPage(ThrowUpEditor& editor, ThrowUpProcessor& processor, const juce::File& snapshot)
 {
     auto* button = dynamic_cast<juce::Button*>(findNamed(editor, "INFO"));
@@ -134,6 +281,11 @@ int main(int argc, char** argv)
     try {
         juce::ScopedJuceInitialiser_GUI gui;
         throwup::tests::runPresetAutomationRegressionTests();
+        {
+            const juce::File folder(argc >= 2 ? juce::String::fromUTF8(argv[1]) : juce::String());
+            if (argc >= 2) folder.createDirectory();
+            runFixRegressionTests(argc >= 2 ? &folder : nullptr);
+        }
         ThrowUpProcessor p;
         check(p.getNumPrograms() == 50, "50 factory programs exposed to host");
         check(p.getParameters().size() == 13, "all 13 controls exposed as host parameters");

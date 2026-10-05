@@ -50,13 +50,14 @@ struct Audio
     std::vector<float> left, right;
 };
 
+constexpr std::array<int, 7> blockSizes { 1, 7, 64, 511, 1024, 13, 257 };
+
 void process (ReverbEngine& engine, Audio& audio, bool mono = false, bool variable = true)
 {
-    constexpr std::array<int, 7> sizes { 1, 7, 64, 511, 1024, 13, 257 };
     std::size_t position = 0, block = 0;
     while (position < audio.left.size())
     {
-        const int samples = std::min<int> (variable ? sizes[block++ % sizes.size()] : 256,
+        const int samples = std::min<int> (variable ? blockSizes[block++ % blockSizes.size()] : 256,
                                           static_cast<int> (audio.left.size() - position));
         float* channels[] { audio.left.data() + position, audio.right.data() + position };
         countAllocations = true;
@@ -284,9 +285,30 @@ void automatedReturn (double sr)
             automated.setSettings (settings);
             process (fullEngine, full, mono);
             process (automated, rendered, mono);
+            // Model: within each processed block THROW moves linearly to the new
+            // host value, never faster than the 4 ms full-range rate.
+            std::size_t blockEnd = 0, blockIndex = 0;
+            float rampFrom = 0, rampLength = 1, rampPosition = 0;
             for (std::size_t i = 0; i < length; ++i)
             {
-                smoothedAmount += std::clamp (settings.mix - smoothedAmount, -step, step);
+                if (i == blockEnd)
+                {
+                    const auto count = std::min<std::size_t> (static_cast<std::size_t> (blockSizes[blockIndex++ % blockSizes.size()]),
+                                                              length - i);
+                    blockEnd = i + count;
+                    rampFrom = smoothedAmount;
+                    rampLength = std::max (static_cast<float> (count), std::ceil (std::abs (settings.mix - rampFrom) / step));
+                    rampPosition = 0;
+                }
+                const float previousAmount = smoothedAmount;
+                if (std::abs (settings.mix - smoothedAmount) > 0.0f)
+                {
+                    rampPosition += 1.0f;
+                    smoothedAmount = rampPosition >= rampLength
+                        ? settings.mix : rampFrom + (settings.mix - rampFrom) * (rampPosition / rampLength);
+                }
+                require (std::abs (smoothedAmount - previousAmount) <= step * 1.0001f,
+                         "THROW must never move faster than its 4 ms full-range ramp");
                 const float wetL = full.left[i] - original.left[i];
                 const float expectedL = original.left[i] + wetL * (smoothedAmount * 0.01f);
                 require (std::abs (rendered.left[i] - expectedL) < 1.0e-6f,
@@ -314,7 +336,7 @@ void automatedReturn (double sr)
                              "THROW must reach full wet-return level after its short ramp");
             }
             if (length > static_cast<std::size_t> (sr * 0.005))
-                require (smoothedAmount == settings.mix, "THROW ramp must settle within 5 ms");
+                require (smoothedAmount == settings.mix, "THROW ramp must settle by the end of its block");
             offset += length;
         }
         require (movingWetEnergy > 0.01 && exactDrySamples > 0,
@@ -415,6 +437,234 @@ void longDecayHeadroom()
     std::cout << "Long-decay wet peak " << peak << "; output-trimmed parallel peak " << trimmedPeak << '\n';
 }
 
+Settings presetSettings (std::size_t index, float mix)
+{
+    auto settings = throwup::factoryPresets()[index].settings;
+    settings.mix = mix;
+    return settings;
+}
+
+std::vector<float> wetOnly (const Audio& rendered, const Audio& dry)
+{
+    std::vector<float> wet (rendered.left.size());
+    for (std::size_t i = 0; i < wet.size(); ++i) wet[i] = rendered.left[i] - dry.left[i];
+    return wet;
+}
+
+// Share of energy above roughly 6 kHz (fourth difference), in dB re the total.
+double highFrequencyShare (const std::vector<float>& x, std::size_t begin, std::size_t end)
+{
+    double high = 0, total = 0;
+    for (std::size_t i = std::max<std::size_t> (begin, 4); i < end; ++i)
+    {
+        const double d = x[i] - 4.0 * x[i - 1] + 6.0 * x[i - 2] - 4.0 * x[i - 3] + x[i - 4];
+        high += d * d;
+        total += static_cast<double> (x[i]) * x[i];
+    }
+    return 10.0 * std::log10 (high / total);
+}
+
+// Fraction of Hann-windowed energy within +/- band Hz of a frequency.
+double toneShare (const std::vector<float>& x, std::size_t begin, std::size_t count,
+                  double frequency, double sr, double band)
+{
+    std::vector<double> windowed (count);
+    double total = 0;
+    for (std::size_t i = 0; i < count; ++i)
+    {
+        windowed[i] = x[begin + i] * (0.5 - 0.5 * std::cos (2 * pi * static_cast<double> (i) / static_cast<double> (count - 1)));
+        total += windowed[i] * windowed[i];
+    }
+    const double binHz = sr / static_cast<double> (count);
+    double inBand = 0;
+    for (auto bin = static_cast<long> (std::floor ((frequency - band) / binHz));
+         bin <= static_cast<long> (std::ceil ((frequency + band) / binHz)); ++bin)
+    {
+        double re = 0, im = 0;
+        const double omega = 2 * pi * static_cast<double> (bin) / static_cast<double> (count);
+        for (std::size_t i = 0; i < count; ++i)
+        {
+            re += windowed[i] * std::cos (omega * static_cast<double> (i));
+            im -= windowed[i] * std::sin (omega * static_cast<double> (i));
+        }
+        inBand += 2 * (re * re + im * im);
+    }
+    return inBand / (static_cast<double> (count) * total);
+}
+
+void processFixedBlocks (ReverbEngine& engine, Audio& audio, std::size_t begin, std::size_t end, int block)
+{
+    for (std::size_t position = begin; position < end; position += static_cast<std::size_t> (block))
+    {
+        const int samples = static_cast<int> (std::min<std::size_t> (static_cast<std::size_t> (block), end - position));
+        float* channels[] { audio.left.data() + position, audio.right.data() + position };
+        countAllocations = true;
+        engine.process (channels, 2, samples);
+        countAllocations = false;
+    }
+}
+
+float growl (std::size_t i, double sr)
+{
+    const double t = static_cast<double> (i) / sr;
+    return static_cast<float> (0.5 * std::clamp (2.5 * std::sin (2 * pi * 110 * t + 4.0 * std::sin (2 * pi * 220 * t)), -1.0, 1.0));
+}
+
+void sizeChangeWithoutZipper()
+{
+    // Back Room -> Event Horizon mid-tail. When delay lengths moved in 16-sample
+    // steps, the >6 kHz share rose from -58.8 dB to -5.8 dB (zipper).
+    constexpr double sr = 48000;
+    ReverbEngine engine;
+    engine.setSettings (presetSettings (10, 100));
+    engine.prepare (sr, 64);
+    const auto length = static_cast<std::size_t> (sr * 2), change = static_cast<std::size_t> (sr);
+    const auto window = static_cast<std::size_t> (sr * 0.25);
+    Audio audio (length);
+    for (std::size_t i = 0; i < static_cast<std::size_t> (sr * 0.5); ++i)
+        audio.left[i] = audio.right[i] = static_cast<float> (0.5 * std::sin (2 * pi * 98 * static_cast<double> (i) / sr));
+    const auto dry = audio;
+    processFixedBlocks (engine, audio, 0, change, 64);
+    engine.setSettings (presetSettings (30, 100));
+    processFixedBlocks (engine, audio, change, length, 64);
+    const auto wet = wetOnly (audio, dry);
+    const double before = highFrequencyShare (wet, change - window, change);
+    const double after = highFrequencyShare (wet, change, change + window);
+    require (after < before + 6.0 && after < -45.0, "A Size/preset change mid-tail must not zipper");
+    std::cout << "PASS Size change mid-tail (Back Room -> Event Horizon): >6 kHz share " << before
+              << " dB before, " << after << " dB after\n";
+}
+
+void predelayChangeWithoutPitchGlide()
+{
+    // A slewed pre-delay read position bent the wet input's pitch (24->105 ms
+    // stalled it; 0->250 ms played it backwards). A crossfade keeps a 1 kHz input at 1 kHz.
+    constexpr double sr = 48000;
+    for (const auto& change : std::array<std::array<float, 2>, 3> {{ { 24, 105 }, { 0, 250 }, { 7, 34 } }})
+    {
+        Settings settings;
+        settings.mix = 100; settings.size = 36; settings.decay = 1.15f; settings.predelay = change[0];
+        settings.lowCut = 180; settings.highCut = 18000; settings.diffusion = 76; settings.motion = 0;
+        settings.width = 100; settings.grit = 0; settings.duck = 0;
+        ReverbEngine engine;
+        engine.setSettings (settings);
+        engine.prepare (sr, 64);
+        const auto length = static_cast<std::size_t> (sr * 1.6), at = static_cast<std::size_t> (sr);
+        const auto window = static_cast<std::size_t> (sr * 0.2);
+        Audio audio (length);
+        for (std::size_t i = 0; i < length; ++i)
+            audio.left[i] = audio.right[i] = static_cast<float> (0.5 * std::sin (2 * pi * 1000 * static_cast<double> (i) / sr));
+        const auto dry = audio;
+        processFixedBlocks (engine, audio, 0, at, 64);
+        settings.predelay = change[1];
+        engine.setSettings (settings);
+        processFixedBlocks (engine, audio, at, length, 64);
+        const auto wet = wetOnly (audio, dry);
+        const double first = toneShare (wet, at, window, 1000, sr, 60);
+        const double second = toneShare (wet, at + window, window, 1000, sr, 60);
+        require (first > 0.99 && second > 0.99, "A pre-delay change must not glide, stall or reverse the wet pitch");
+        std::cout << "PASS pre-delay " << change[0] << " -> " << change[1] << " ms: 1 kHz energy share "
+                  << first << " / " << second << '\n';
+    }
+}
+
+void bypassFadesWithoutClicks()
+{
+    constexpr double sr = 48000;
+    {
+        // Event Horizon tail at about +7 dBFS: bypass used to cut it to zero in one sample.
+        ReverbEngine engine;
+        auto settings = presetSettings (30, 100);
+        engine.setSettings (settings);
+        engine.prepare (sr, 64);
+        const auto length = static_cast<std::size_t> (sr * 2), toggle = static_cast<std::size_t> (64 * 1100);
+        Audio audio (length);
+        for (std::size_t i = 0; i < static_cast<std::size_t> (sr); ++i) audio.left[i] = audio.right[i] = growl (i, sr);
+        processFixedBlocks (engine, audio, 0, toggle, 64);
+        settings.bypass = true;
+        engine.setSettings (settings);
+        processFixedBlocks (engine, audio, toggle, length, 64);
+        float natural = 0, worst = 0;
+        for (std::size_t i = toggle - 4800; i < toggle; ++i) natural = std::max (natural, std::abs (audio.left[i] - audio.left[i - 1]));
+        for (std::size_t i = toggle; i < toggle + 2400; ++i) worst = std::max (worst, std::abs (audio.left[i] - audio.left[i - 1]));
+        require (worst <= natural * 1.25f, "Bypass must fade the reverb out instead of cutting it");
+        const auto settled = toggle + static_cast<std::size_t> (sr * 0.016);
+        require (std::all_of (audio.left.begin() + static_cast<long> (settled), audio.left.end(), [] (float s) { return s == 0.0f; }),
+                 "A completed bypass fade must be exact dry");
+        std::cout << "PASS bypass during tail: largest step " << worst << " vs natural " << natural << '\n';
+    }
+    {
+        // THROW 0 with Output -12 dB: bypass used to jump +12 dB in one sample.
+        ReverbEngine engine;
+        Settings settings;
+        settings.mix = 0; settings.output = -12;
+        engine.setSettings (settings);
+        engine.prepare (sr, 64);
+        Audio audio (19200);
+        for (std::size_t i = 0; i < audio.left.size(); ++i)
+            audio.left[i] = audio.right[i] = static_cast<float> (0.8 * std::sin (2 * pi * 60 * static_cast<double> (i) / sr + 1.0));
+        const auto dry = audio;
+        processFixedBlocks (engine, audio, 0, 4992, 64);
+        settings.bypass = true;
+        engine.setSettings (settings);
+        processFixedBlocks (engine, audio, 4992, 9984, 64);
+        settings.bypass = false;
+        engine.setSettings (settings);
+        processFixedBlocks (engine, audio, 9984, audio.left.size(), 64);
+        const float natural = static_cast<float> (0.8 * 2 * pi * 60 / sr);
+        float worst = 0;
+        for (std::size_t i = 1; i < audio.left.size(); ++i) worst = std::max (worst, std::abs (audio.left[i] - audio.left[i - 1]));
+        require (worst <= natural * 1.25f, "Bypass and un-bypass must ramp the output gain change");
+        require (std::equal (audio.left.begin() + 4992 + 800, audio.left.begin() + 9984, dry.left.begin() + 4992 + 800),
+                 "Bypassed output must be exact dry after the fade");
+        std::cout << "PASS bypass/un-bypass with -12 dB output: largest step " << worst << " vs natural " << natural << '\n';
+    }
+}
+
+void blockRampedThrow()
+{
+    // A 1/16-note throw at 140 BPM written as linear automation, delivered once
+    // per 1024-sample block. Stepping to each block value used to leave a 22%
+    // staircase; ramping across the block follows the host curve.
+    constexpr double sr = 44100;
+    constexpr int block = 1024;
+    constexpr double rampSamples = 4725;
+    auto settings = presetSettings (10, 100);
+    settings.duck = 0;
+    ReverbEngine full, automated;
+    full.setSettings (settings);
+    full.prepare (sr, block);
+    settings.mix = 0;
+    automated.setSettings (settings);
+    automated.prepare (sr, block);
+    const std::size_t warm = static_cast<std::size_t> (block) * 40;
+    const std::size_t length = warm + static_cast<std::size_t> (block) * 6;
+    Audio input (length);
+    for (std::size_t i = 0; i < length; ++i) input.left[i] = input.right[i] = growl (i, sr);
+    auto fullOut = input, automatedOut = input;
+    processFixedBlocks (full, fullOut, 0, warm, block);
+    processFixedBlocks (automated, automatedOut, 0, warm, block);
+    double worst = 0;
+    for (std::size_t b = 0; b < 6; ++b)
+    {
+        const auto begin = warm + b * static_cast<std::size_t> (block);
+        settings.mix = static_cast<float> (100.0 * std::min (1.0, static_cast<double> ((b + 1) * block) / rampSamples));
+        automated.setSettings (settings);
+        processFixedBlocks (full, fullOut, begin, begin + block, block);
+        processFixedBlocks (automated, automatedOut, begin, begin + block, block);
+        for (std::size_t i = begin; i < begin + block && i - warm < 4096; ++i)
+        {
+            const float wet = fullOut.left[i] - input.left[i];
+            if (std::abs (wet) < 0.01f) continue;
+            const double implied = 100.0 * (automatedOut.left[i] - input.left[i]) / wet;
+            const double ideal = 100.0 * std::min (1.0, static_cast<double> (i - warm + 1) / rampSamples);
+            worst = std::max (worst, std::abs (implied - ideal));
+        }
+    }
+    require (worst < 0.5, "Block-rate THROW automation must follow the host curve, not a staircase");
+    std::cout << "PASS block-rate THROW automation: largest deviation from host curve " << worst << "% THROW\n";
+}
+
 void presetsAndStress()
 {
     const auto& presets = throwup::factoryPresets();
@@ -504,6 +754,10 @@ int main()
                          "4 ms automation, mono/stereo, output trim, timing, blocks, filtering, decay\n";
         }
         longDecayHeadroom();
+        sizeChangeWithoutZipper();
+        predelayChangeWithoutPitchGlide();
+        bypassFadesWithoutClicks();
+        blockRampedThrow();
         presetsAndStress();
         std::cout << "All THROW-UP DSP tests passed.\n";
         return 0;

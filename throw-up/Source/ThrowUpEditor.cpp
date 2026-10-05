@@ -142,24 +142,43 @@ struct ThrowUpEditor::Control
             if (auto* parent = getParentComponent()) parent->repaint();
         }
     } slider;
-    struct ValueLabel final : juce::Label {
+    struct ValueLabel final : juce::Label, private juce::Timer {
         explicit ValueLabel (juce::Slider& s) : slider (s) {}
         void mouseDown (const juce::MouseEvent& event) override {
+            stopTimer();
             forwarding = event.getNumberOfClicks() == 1 && ! event.mods.isPopupMenu();
             if (forwarding) slider.mouseDown (event.getEventRelativeTo (&slider));
-            else juce::Label::mouseDown (event);
+            else if (! resetOnDoubleClick) juce::Label::mouseDown (event);
         }
         void mouseDrag (const juce::MouseEvent& event) override {
             if (forwarding) slider.mouseDrag (event.getEventRelativeTo (&slider));
-            else juce::Label::mouseDrag (event);
+            else if (! resetOnDoubleClick) juce::Label::mouseDrag (event);
         }
         void mouseUp (const juce::MouseEvent& event) override {
-            if (forwarding) slider.mouseUp (event.getEventRelativeTo (&slider));
-            else juce::Label::mouseUp (event);
+            if (forwarding) {
+                slider.mouseUp (event.getEventRelativeTo (&slider));
+                // A box-style value (Output) opens text entry on a plain click,
+                // once it is clear the click is not the start of a double-click.
+                if (resetOnDoubleClick && ! event.mouseWasDraggedSinceMouseDown())
+                    startTimer (juce::MouseEvent::getDoubleClickTimeout());
+            }
+            else if (! resetOnDoubleClick) juce::Label::mouseUp (event);
             forwarding = false;
+        }
+        void mouseDoubleClick (const juce::MouseEvent& event) override {
+            if (! resetOnDoubleClick) { juce::Label::mouseDoubleClick (event); return; }
+            stopTimer();
+            slider.mouseDoubleClick (event.getEventRelativeTo (&slider));
+        }
+        void timerCallback() override {
+            stopTimer();
+            showEditor();
         }
         juce::Slider& slider;
         bool forwarding = false;
+        // When the value label covers the whole control, double-click resets
+        // like a knob and a single click types a value.
+        bool resetOnDoubleClick = false;
     } value { slider };
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> attachment;
 };
@@ -202,7 +221,17 @@ ThrowUpEditor::ThrowUpEditor (ThrowUpProcessor& p)
         juce::PopupMenu submenu;
         for (int item = 0; item < 10; ++item) {
             const int index = group * 10 + item;
-            submenu.addItem (index + 1, bank[(size_t) index].name);
+            juce::PopupMenu::Item entry (bank[(size_t) index].name);
+            entry.setID (index + 1);
+            // ComboBox only reports a changed ID. The item action also runs
+            // when the current room is chosen again, which reverts its edits.
+            entry.setAction ([safe = juce::Component::SafePointer<ThrowUpEditor> (this), index] {
+                if (safe == nullptr) return;
+                safe->pluginProcessor.loadFactoryPreset (index);
+                safe->updatePresetDisplay();
+                safe->repaint();
+            });
+            submenu.addItem (std::move (entry));
         }
         presets.getRootMenu()->addSubMenu (bank[(size_t) group * 10].group, submenu);
     }
@@ -282,7 +311,11 @@ void ThrowUpEditor::addControl (const char* id, const char* title, const char* t
     c->value.setColour (juce::Label::outlineWhenEditingColourId, amber);
     c->value.setEditable (false, true, false);
     c->value.setMouseCursor (juce::MouseCursor::UpDownResizeCursor);
-    c->value.setTooltip ("Drag to adjust. Hold Shift for fine adjustment. Double-click to enter a value.");
+    // Output's value box is the whole control, so it resets like the knobs.
+    c->value.resetOnDoubleClick = c->id == "output";
+    c->value.setTooltip (c->value.resetOnDoubleClick
+        ? "Drag to adjust. Hold Shift for fine adjustment. Double-click to reset to 0 dB; click to enter a value."
+        : "Drag to adjust. Hold Shift for fine adjustment. Double-click to enter a value.");
     c->value.setText (valueText (id, c->slider.getValue()), juce::dontSendNotification);
     auto* control = c.get();
     c->slider.onValueChange = [this, control] {
@@ -390,19 +423,35 @@ void ThrowUpEditor::drawKnob (juce::Graphics& g, Control& c)
 
 void ThrowUpEditor::drawMeters (juce::Graphics& g, juce::Rectangle<float> bounds)
 {
-    const auto level = [] (float value) {
-        return juce::jlimit (0.0f, 1.0f, (juce::Decibels::gainToDecibels (value, -60.0f) + 60.0f) / 60.0f);
+    // 14 segments: ten 6 dB steps from -60 to 0 dBFS, then four 4.5 dB steps up
+    // to +18 dBFS, because the parallel wet return can run well above 0 dBFS.
+    constexpr int segments = 14, belowZero = 10;
+    const auto threshold = [] (int segment) {
+        return segment < belowZero ? -60.0f + 6.0f * (float) segment : 4.5f * (float) (segment - belowZero);
     };
+    const float segmentX = bounds.getX() + 48.0f;
+    const float zeroX = segmentX + (float) belowZero * 13.8f - 1.9f;
     for (int row = 0; row < 2; ++row) {
         const float y = bounds.getY() + (float) row * 30.0f;
         text (g, row == 0 ? "IN" : "OUT", { bounds.getX(), y - 3.0f, 43, 25 }, 18, cream);
-        const float magnitude = row == 0 ? inputMeter : outputMeter;
-        const int lit = juce::roundToInt (level (magnitude) * 14.0f);
-        for (int i = 0; i < 14; ++i) {
-            g.setColour (i < lit ? (i >= 12 ? juce::Colour (0xffff7850) : amber) : cream.withAlpha (.10f));
-            g.fillRect (bounds.getX() + 48.0f + (float) i * 13.8f, y, 10.0f, 18.0f);
+        const float decibels = juce::Decibels::gainToDecibels (row == 0 ? inputMeter : outputMeter, -60.0f);
+        for (int i = 0; i < segments; ++i) {
+            const bool lit = decibels > threshold (i);
+            g.setColour (lit ? (i >= belowZero ? juce::Colour (0xffff7850) : amber) : cream.withAlpha (.10f));
+            g.fillRect (segmentX + (float) i * 13.8f, y, 10.0f, 18.0f);
         }
+        // Clip indicator: lit (and held for 1.5 s) after any peak above 0 dBFS.
+        const bool clipped = (row == 0 ? inputClipHold : outputClipHold) > 0;
+        const juce::Rectangle<float> led { segmentX + (float) segments * 13.8f + 6.0f, y, 30.0f, 18.0f };
+        g.setColour (clipped ? juce::Colour (0xffff4a3a) : cream.withAlpha (.10f));
+        g.fillRoundedRectangle (led, 3.0f);
     }
+    // 0 dBFS mark between the last amber and first over-zero segment.
+    g.setColour (cream.withAlpha (.7f));
+    g.fillRect (zeroX - 0.75f, bounds.getY() - 4.0f, 1.5f, 52.0f);
+    text (g, "0", { zeroX - 10.0f, bounds.getY() - 19.0f, 20.0f, 14.0f }, 13, muted, juce::Justification::centred);
+    text (g, "CLIP", { segmentX + (float) segments * 13.8f + 1.0f, bounds.getY() - 19.0f, 40.0f, 14.0f },
+          13, muted, juce::Justification::centred);
 }
 
 void ThrowUpEditor::drawFooter (juce::Graphics& g)
@@ -484,8 +533,14 @@ void ThrowUpEditor::updatePresetDisplay()
 
 void ThrowUpEditor::timerCallback()
 {
-    inputMeter = juce::jmax (pluginProcessor.inputLevel.load (std::memory_order_relaxed), inputMeter * .78f);
-    outputMeter = juce::jmax (pluginProcessor.outputLevel.load (std::memory_order_relaxed), outputMeter * .78f);
+    // Collect the highest peak of every block since the previous frame.
+    const float inputPeak = pluginProcessor.inputLevel.exchange (0.0f, std::memory_order_relaxed);
+    const float outputPeak = pluginProcessor.outputLevel.exchange (0.0f, std::memory_order_relaxed);
+    inputMeter = juce::jmax (inputPeak, inputMeter * .78f);
+    outputMeter = juce::jmax (outputPeak, outputMeter * .78f);
+    constexpr int clipHoldFrames = 36; // 1.5 s at 24 Hz
+    inputClipHold = inputPeak > 1.0f ? clipHoldFrames : juce::jmax (0, inputClipHold - 1);
+    outputClipHold = outputPeak > 1.0f ? clipHoldFrames : juce::jmax (0, outputClipHold - 1);
     updatePresetDisplay();
     bypass.setButtonText (bypass.getToggleState() ? "ON" : "OFF");
     repaint();

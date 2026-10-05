@@ -31,6 +31,14 @@ target_include_directories(ThrowUp PUBLIC Source PRIVATE ../shared)
 target_link_libraries(ThrowUp PRIVATE ThrowUpAssets juce::juce_audio_utils juce::juce_dsp
   juce::juce_recommended_config_flags juce::juce_recommended_warning_flags)
 target_compile_definitions(ThrowUp PUBLIC JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0 JUCE_VST3_CAN_REPLACE_VST2=0)
+# juce_add_plugin publishes JUCE_STANDALONE_APPLICATION=JucePlugin_Build_Standalone
+# on the shared-code target's interface. Keep it for the plugin targets, but stop
+# it leaking into the console test hosts that link ThrowUp; those define
+# JUCE_STANDALONE_APPLICATION=1 themselves (juce_add_console_app).
+get_target_property(_throwup_interface_definitions ThrowUp INTERFACE_COMPILE_DEFINITIONS)
+list(FILTER _throwup_interface_definitions EXCLUDE REGEX "^JUCE_STANDALONE_APPLICATION=")
+set_target_properties(ThrowUp PROPERTIES INTERFACE_COMPILE_DEFINITIONS "${_throwup_interface_definitions}")
+target_compile_definitions(ThrowUp_VST3 PRIVATE JUCE_STANDALONE_APPLICATION=JucePlugin_Build_Standalone)
 if(APPLE)
   add_custom_command(TARGET ThrowUp_VST3 POST_BUILD
     COMMAND /usr/bin/codesign --force --deep --sign - "$<TARGET_BUNDLE_DIR:ThrowUp_VST3>"

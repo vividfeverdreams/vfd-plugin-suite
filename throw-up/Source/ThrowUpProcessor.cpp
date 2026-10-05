@@ -6,6 +6,14 @@
 namespace {
 constexpr std::array<const char*, 13> ids { "mix", "size", "decay", "predelay", "lowCut", "highCut",
     "diffusion", "motion", "width", "grit", "duck", "output", "bypass" };
+
+// Meters hold the highest block peak until the editor collects it with exchange(0),
+// so no block between two UI frames is missed.
+void raisePeak(std::atomic<float>& meter, float peak)
+{
+    float previous = meter.load(std::memory_order_relaxed);
+    while (peak > previous && !meter.compare_exchange_weak(previous, peak, std::memory_order_relaxed)) {}
+}
 }
 
 juce::AudioProcessorValueTreeState::ParameterLayout ThrowUpProcessor::parameterLayout()
@@ -76,11 +84,11 @@ void ThrowUpProcessor::process(juce::AudioBuffer<float>& audio, bool forceBypass
     juce::ScopedNoDenormals noDenormals;
     for (int ch = getTotalNumInputChannels(); ch < getTotalNumOutputChannels(); ++ch) audio.clear(ch, 0, audio.getNumSamples());
     if (audio.getNumSamples() == 0 || audio.getNumChannels() == 0) return;
-    inputLevel.store(audio.getMagnitude(0, audio.getNumSamples()), std::memory_order_relaxed);
+    raisePeak(inputLevel, audio.getMagnitude(0, audio.getNumSamples()));
     auto settings = readSettings(); settings.bypass = forceBypass || settings.bypass;
     engine.setSettings(settings);
     engine.process(audio.getArrayOfWritePointers(), juce::jmin(2, audio.getNumChannels()), audio.getNumSamples());
-    outputLevel.store(audio.getMagnitude(0, audio.getNumSamples()), std::memory_order_relaxed);
+    raisePeak(outputLevel, audio.getMagnitude(0, audio.getNumSamples()));
 }
 
 juce::AudioProcessorParameter* ThrowUpProcessor::getBypassParameter() const { return apvts.getParameter("bypass"); }
@@ -131,13 +139,22 @@ void ThrowUpProcessor::setStateInformation(const void* data, int size)
     if (data == nullptr || size <= 0) return;
     auto xml = getXmlFromBinary(data, size);
     if (xml == nullptr || !xml->hasTagName("THROW_UP_STATE")) return;
-    auto state = juce::ValueTree::fromXml(*xml);
-    if (!state.isValid()) return;
-    // Reject malformed parameter state; a bad file must not poison the audio thread.
-    for (const auto& child : state) {
-        if (!child.hasProperty("id") || !child.hasProperty("value")) return;
-        const auto value = static_cast<float>(child.getProperty("value"));
-        if (!std::isfinite(value)) return;
+    const auto loaded = juce::ValueTree::fromXml(*xml);
+    if (!loaded.isValid()) return;
+    // Rebuild the state from known parameters only. Unknown children (for
+    // example, data added by a newer version) are skipped instead of rejecting
+    // the whole session, and a non-finite value falls back to that parameter's
+    // default so a bad entry cannot poison the audio thread.
+    juce::ValueTree state(loaded.getType());
+    state.copyPropertiesFrom(loaded, nullptr);
+    for (const auto& child : loaded) {
+        if (!child.hasType("PARAM") || !child.hasProperty("id") || !child.hasProperty("value")) continue;
+        auto* parameter = apvts.getParameter(child.getProperty("id").toString());
+        if (parameter == nullptr || state.getChildWithProperty("id", parameter->getParameterID()).isValid()) continue;
+        auto restored = child.createCopy();
+        if (!std::isfinite(static_cast<float>(child.getProperty("value"))))
+            restored.setProperty("value", parameter->convertFrom0to1(parameter->getDefaultValue()), nullptr);
+        state.appendChild(restored, nullptr);
     }
     currentProgram.store(juce::jlimit(0, 49, static_cast<int>(state.getProperty("factoryProgram", 0))));
     apvts.replaceState(state);

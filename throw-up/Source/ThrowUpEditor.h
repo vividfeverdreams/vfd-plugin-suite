@@ -43,6 +43,7 @@ private:
     std::unique_ptr<vfd::InfoOverlay> infoOverlay;
     juce::TooltipWindow tooltips { this, 600 };
     float uiScale = 1.0f, inputMeter = 0.0f, outputMeter = 0.0f;
+    int inputClipHold = 0, outputClipHold = 0;
     int visiblePreset = -1;
     bool modified = false;
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (ThrowUpEditor)
