@@ -1,0 +1,71 @@
+PASS: all four initial installations succeed together
+PASS: YOI-BOI installed bytes match payload
+PASS: THROW-UP installed bytes match payload
+PASS: BACK-SCRATCH installed bytes match payload
+PASS: SHIFTY installed bytes match payload
+PASS: user presets remain unchanged
+PASS: same-version suite reinstall succeeds
+PASS: successful suite transaction removes its staging folder
+PASS: mixed new/update suite commits all four
+PASS: fault after commit 1, 0 existing bundles, rejects installation
+PASS: fault 1, 0 existing bundles, restores complete prior suite
+PASS: fault 1, 0 existing bundles, cleans transaction files
+PASS: fault after commit 2, 0 existing bundles, rejects installation
+PASS: fault 2, 0 existing bundles, restores complete prior suite
+PASS: fault 2, 0 existing bundles, cleans transaction files
+PASS: fault after commit 3, 0 existing bundles, rejects installation
+PASS: fault 3, 0 existing bundles, restores complete prior suite
+PASS: fault 3, 0 existing bundles, cleans transaction files
+PASS: fault after commit 4, 0 existing bundles, rejects installation
+PASS: fault 4, 0 existing bundles, restores complete prior suite
+PASS: fault 4, 0 existing bundles, cleans transaction files
+PASS: fault after commit 1, 4 existing bundles, rejects installation
+PASS: fault 1, 4 existing bundles, restores complete prior suite
+PASS: fault 1, 4 existing bundles, cleans transaction files
+PASS: fault after commit 2, 4 existing bundles, rejects installation
+PASS: fault 2, 4 existing bundles, restores complete prior suite
+PASS: fault 2, 4 existing bundles, cleans transaction files
+PASS: fault after commit 3, 4 existing bundles, rejects installation
+PASS: fault 3, 4 existing bundles, restores complete prior suite
+PASS: fault 3, 4 existing bundles, cleans transaction files
+PASS: fault after commit 4, 4 existing bundles, rejects installation
+PASS: fault 4, 4 existing bundles, restores complete prior suite
+PASS: fault 4, 4 existing bundles, cleans transaction files
+PASS: fault after commit 1, 2 existing bundles, rejects installation
+PASS: fault 1, 2 existing bundles, restores complete prior suite
+PASS: fault 1, 2 existing bundles, cleans transaction files
+PASS: fault after commit 2, 2 existing bundles, rejects installation
+PASS: fault 2, 2 existing bundles, restores complete prior suite
+PASS: fault 2, 2 existing bundles, cleans transaction files
+PASS: fault after commit 3, 2 existing bundles, rejects installation
+PASS: fault 3, 2 existing bundles, restores complete prior suite
+PASS: fault 3, 2 existing bundles, cleans transaction files
+PASS: fault after commit 4, 2 existing bundles, rejects installation
+PASS: fault 4, 2 existing bundles, restores complete prior suite
+PASS: fault 4, 2 existing bundles, cleans transaction files
+PASS: last payload's newer installed version blocks entire suite
+PASS: downgrade refusal leaves all four bundles intact
+PASS: last embedded payload corruption blocks all commits
+PASS: payload corruption preserves every installed bundle
+PASS: renamed system copy is detected by bundle identifier
+PASS: system duplicate refusal changes no installed bundles
+PASS: renamed per-user copy is blocked
+PASS: unrelated item at target name is blocked
+PASS: unrelated target remains unchanged
+PASS: changed VST3 component identity blocks updates
+PASS: incompatible installed VST3 identity remains untouched
+PASS: symlink destination is refused
+PASS: symlink destination ancestor is refused
+PASS: host starting after preparation blocks commit
+PASS: late host refusal restores original suite state
+PASS: installed bundle mutation during staging blocks commit
+PASS: independent destination edit is preserved
+PASS: unfinished transaction blocks another installation
+PASS: unfinished recovery data is retained
+PASS: staged payload corruption rejects transaction
+PASS: late staged corruption rolls back all previously committed bundles
+PASS: suite installer is excluded from audio-host detection
+PASS: known host detected by identifier
+PASS: plug-in validation host detected by name
+PASS: open-file detection catches unknown hosts and excludes installers
+Suite installer self-test passed: 70 checks. All fixture writes stayed inside /private/var/folders/06/hclfgxfn5z70kylhp444d_dw0000gn/T/vfd-suite-tests-B805DDF3-E987-4347-BA61-0B1D62639141.

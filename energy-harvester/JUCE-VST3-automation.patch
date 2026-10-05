@@ -1,0 +1,64 @@
+--- a/modules/juce_audio_plugin_client/juce_audio_plugin_client_VST3.cpp
++++ b/modules/juce_audio_plugin_client/juce_audio_plugin_client_VST3.cpp
+@@ -68,6 +68,9 @@
+ #include <juce_audio_processors_headless/format_types/juce_VST3Utilities.h>
+ #include <juce_audio_processors_headless/format_types/juce_VST3Common.h>
+ #include <juce_audio_plugin_client/VST3/juce_VST3ModuleInfo.h>
++#if ENERGY_HARVESTER_QUEUE_BRIDGE
++ #include "AutomationBridge.h"
++#endif
+ 
+ #if JUCE_VST3_CAN_REPLACE_VST2 && ! JUCE_FORCE_USE_LEGACY_PARAM_IDS && ! JUCE_IGNORE_VST3_MISMATCHED_PARAMETER_ID_WARNING
+ 
+@@ -3587,6 +3590,31 @@
+ 
+         midiBuffer.clear();
+ 
++       #if ENERGY_HARVESTER_QUEUE_BRIDGE
++        energyBridge::current = {};
++        struct ClearEnergyBridge { ~ClearEnergyBridge() { energyBridge::current = {}; } } clearEnergyBridge;
++        auto& stream = energyBridge::current;
++        stream.owner = this;
++        stream.changes = data.inputParameterChanges;
++        stream.bypassParameter = comPluginInstance->getBypassParameter();
++        stream.initialBypass = isBypassed();
++        stream.queueCount = [](void* queues) { return static_cast<Vst::IParameterChanges*>(queues)->getParameterCount(); };
++        stream.parameter = [](void* owner, void* queues, int q) -> const void* {
++            auto* queue = static_cast<Vst::IParameterChanges*>(queues)->getParameterData(q);
++            return queue != nullptr ? static_cast<JuceVST3Component*>(owner)->comPluginInstance->getParamForVSTParamID(queue->getParameterId()) : nullptr;
++        };
++        stream.pointCount = [](void* queues, int q) {
++            auto* queue = static_cast<Vst::IParameterChanges*>(queues)->getParameterData(q);
++            return queue != nullptr ? queue->getPointCount() : 0;
++        };
++        stream.point = [](void* queues, int q, int index, int& offset, float& value) {
++            auto* queue = static_cast<Vst::IParameterChanges*>(queues)->getParameterData(q);
++            Steinberg::int32 at=0; Vst::ParamValue v=0;
++            if(queue == nullptr || queue->getPoint(index,at,v) != kResultTrue) return false;
++            offset=at;value=static_cast<float>(v);return true;
++        };
++       #endif
++
+         if (data.inputParameterChanges != nullptr)
+             processParameterChanges (*data.inputParameterChanges);
+ 
+@@ -3612,6 +3640,19 @@
+             else if (processSetup.symbolicSampleSize == Vst::kSample64) processAudio<double> (data);
+             else jassertfalse;
+         }
++       #if ENERGY_HARVESTER_QUEUE_BRIDGE
++        else
++        {
++            // Deliver zero-length control flushes through the same ordered path.
++            // The default buffer owns no sample storage and advances no audio time.
++            const ScopedLock callbackLock (pluginInstance->getCallbackLock());
++            if (! pluginInstance->isSuspended())
++            {
++                AudioBuffer<float> empty;
++                pluginInstance->processBlock (empty, midiBuffer);
++            }
++        }
++       #endif
+ 
+         if (auto* changes = data.outputParameterChanges)
+         {

@@ -1,0 +1,4 @@
+/build/
+/tools/
+/external/
+*.DS_Store

@@ -1,0 +1,18 @@
+# Build products and vendored dependencies (not part of the audited source)
+build/
+build-*/
+*/build/
+*/build-*/
+external/
+*/external/
+release*/
+*/release*/
+installer-download/
+*/installer-download/
+candidate-package/
+*/candidate-package/
+*/tools/cmake-py/
+*/tools/pluginval*
+*.zip
+.DS_Store
+*.log

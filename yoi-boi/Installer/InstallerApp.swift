@@ -1,0 +1,155 @@
+import AppKit
+
+final class InstallerDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
+    private var window: NSWindow!
+    private let action = NSButton(title: "Install / Update", target: nil, action: nil)
+    private let status = NSTextField(wrappingLabelWithString: "Quit Ableton Live and any other audio app before installing.")
+    private let progress = NSProgressIndicator()
+    private var busy = false
+
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 590, height: 490),
+                          styleMask: [.titled, .closable, .miniaturizable], backing: .buffered, defer: false)
+        window.title = "YOI-BOI Installer"
+        window.isReleasedWhenClosed = false
+        window.delegate = self
+        window.center()
+        let content = NSView(frame: window.contentView!.bounds)
+        content.wantsLayer = true
+        content.layer?.backgroundColor = NSColor(calibratedRed: 0.08, green: 0.06, blue: 0.20, alpha: 1).cgColor
+        window.contentView = content
+        let logo = label("YOI-BOI", size: 45, weight: .black, color: .white)
+        logo.font = NSFont(descriptor: logo.font!.fontDescriptor.withSymbolicTraits(.italic), size: 45)
+        logo.frame = NSRect(x: 34, y: 403, width: 520, height: 59)
+        content.addSubview(logo)
+        let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? ""
+        let subtitle = label("TALKING BASS SYNTH  •  VERSION \(version)", size: 12, weight: .semibold,
+                             color: NSColor(calibratedRed: 0.63, green: 0.88, blue: 1, alpha: 1))
+        subtitle.frame = NSRect(x: 36, y: 377, width: 520, height: 22)
+        content.addSubview(subtitle)
+        let explanation = NSTextField(wrappingLabelWithString:
+            "One installed plug-in. Your sounds come with you.\n\nInstall YOI-BOI in your user VST3 folder, or update the copy already there. Your saved presets stay in place.")
+        explanation.font = .systemFont(ofSize: 16)
+        explanation.textColor = NSColor(white: 0.94, alpha: 1)
+        explanation.frame = NSRect(x: 36, y: 262, width: 518, height: 103)
+        content.addSubview(explanation)
+        let location = label("~/Library/Audio/Plug-Ins/VST3/YOI-BOI.vst3", size: 12, weight: .medium,
+                             color: NSColor(calibratedRed: 0.72, green: 0.70, blue: 0.9, alpha: 1))
+        location.frame = NSRect(x: 36, y: 232, width: 518, height: 22)
+        content.addSubview(location)
+        status.font = .systemFont(ofSize: 14)
+        status.textColor = NSColor(calibratedRed: 0.84, green: 0.96, blue: 0.49, alpha: 1)
+        status.frame = NSRect(x: 36, y: 112, width: 518, height: 102)
+        content.addSubview(status)
+        action.target = self
+        action.action = #selector(install)
+        action.bezelStyle = .rounded
+        action.controlSize = .large
+        action.font = .systemFont(ofSize: 16, weight: .bold)
+        action.keyEquivalent = "\r"
+        action.frame = NSRect(x: 350, y: 42, width: 206, height: 45)
+        content.addSubview(action)
+        let close = NSButton(title: "Close", target: self, action: #selector(closeWindow))
+        close.bezelStyle = .rounded
+        close.frame = NSRect(x: 30, y: 44, width: 88, height: 36)
+        content.addSubview(close)
+        progress.style = .spinning
+        progress.isDisplayedWhenStopped = false
+        progress.frame = NSRect(x: 317, y: 54, width: 20, height: 20)
+        content.addSubview(progress)
+        window.makeKeyAndOrderFront(nil)
+        NSApplication.shared.activate(ignoringOtherApps: true)
+    }
+
+    private func label(_ text: String, size: CGFloat, weight: NSFont.Weight, color: NSColor) -> NSTextField {
+        let result = NSTextField(labelWithString: text)
+        result.font = .systemFont(ofSize: size, weight: weight)
+        result.textColor = color
+        return result
+    }
+
+    private static func runningHosts(destination: URL) -> [String] {
+        let prefixes = ["com.ableton.", "com.apple.logic", "com.apple.garageband", "com.cockos.reaper",
+                        "com.steinberg.", "com.bitwig.", "com.presonus.", "com.image-line.",
+                        "com.motu.", "com.avid.protools", "com.tracktion.", "com.yoiboi.synth"]
+        let names = ["ableton live", "reaper", "cubase", "nuendo", "bitwig studio", "studio one",
+                     "fl studio", "logic pro", "garageband", "pluginval", "digital performer", "pro tools"]
+        var found = NSWorkspace.shared.runningApplications.filter { app in
+            guard app.processIdentifier != ProcessInfo.processInfo.processIdentifier else { return false }
+            let id = (app.bundleIdentifier ?? "").lowercased()
+            let name = (app.localizedName ?? "").lowercased()
+            return prefixes.contains(where: id.hasPrefix) || names.contains(where: name.hasPrefix)
+        }.compactMap { $0.localizedName }
+        let executable = destination.appendingPathComponent("Contents/MacOS/YOI-BOI")
+        if InstallerEngine.exists(executable) {
+            // Covers hosts we do not recognize by application name, without changing or terminating them.
+            if let output = try? InstallerEngine.run("/usr/sbin/lsof", ["-Fpc", "--", executable.path]) {
+                let processes = output.split(separator: "\n").filter { $0.first == "c" }.map { String($0.dropFirst()) }
+                found.append(contentsOf: processes)
+            }
+        }
+        return Array(Set(found))
+    }
+
+    @objc private func install() {
+        guard !busy else { return }
+        busy = true
+        action.isEnabled = false
+        status.stringValue = "Checking the plug-in and preparing your update…"
+        progress.startAnimation(nil)
+        let resources = Bundle.main.resourceURL!
+        let destination = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Audio/Plug-Ins/VST3/YOI-BOI.vst3", isDirectory: true)
+        DispatchQueue.global(qos: .userInitiated).async {
+            do {
+                let manifest = try InstallerEngine.readManifest(resources.appendingPathComponent("payload-manifest.json"))
+                let engine = InstallerEngine(payload: resources.appendingPathComponent("Payload/YOI-BOI.vst3"),
+                    manifest: manifest, destination: destination,
+                    systemCopy: URL(fileURLWithPath: "/Library/Audio/Plug-Ins/VST3/YOI-BOI.vst3"),
+                    runningHosts: { Self.runningHosts(destination: destination) })
+                let result = try engine.install()
+                Self.writeLog(result.log)
+                DispatchQueue.main.async {
+                    self.progress.stopAnimation(nil)
+                    self.busy = false
+                    self.status.stringValue = "YOI-BOI \(result.version) is \(result.updated ? "updated" : "installed").\n\nOpen Live → Settings → Plug-Ins → Rescan. Load YOI-BOI on a MIDI track, or reopen your existing project."
+                    self.action.title = "Done"
+                    self.action.action = #selector(self.closeWindow)
+                    self.action.isEnabled = true
+                }
+            } catch {
+                Self.writeLog(["Installation did not complete.", error.localizedDescription])
+                DispatchQueue.main.async {
+                    self.progress.stopAnimation(nil)
+                    self.busy = false
+                    self.action.isEnabled = true
+                    self.status.stringValue = "Installation did not complete. Review the message below, then try again."
+                    let alert = NSAlert()
+                    alert.messageText = "YOI-BOI could not be installed"
+                    alert.informativeText = error.localizedDescription
+                    alert.alertStyle = .warning
+                    alert.addButton(withTitle: "OK")
+                    alert.beginSheetModal(for: self.window)
+                }
+            }
+        }
+    }
+
+    private static func writeLog(_ lines: [String]) {
+        let folder = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Logs/YOI-BOI")
+        // Logging is best-effort and cannot turn a completed installation into a failure.
+        do {
+            try InstallerEngine.refuseSymlinkAncestors(folder.appendingPathComponent("installer.log"))
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            let text = ISO8601DateFormatter().string(from: Date()) + "\n" + lines.joined(separator: "\n") + "\n"
+            try text.write(to: folder.appendingPathComponent("installer.log"), atomically: true, encoding: .utf8)
+        } catch { }
+    }
+
+    @objc private func closeWindow() { if !busy { NSApplication.shared.terminate(nil) } }
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        busy ? .terminateCancel : .terminateNow
+    }
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { !busy }
+    func windowShouldClose(_ sender: NSWindow) -> Bool { !busy }
+}

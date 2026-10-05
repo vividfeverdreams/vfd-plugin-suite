@@ -1,0 +1,227 @@
+// macOS regression host for the actual packaged VST3. The matching JUCE wrapper
+// supplies the concrete controller type solely to reach its public
+// getPluginInstance() test hook; all tested objects come from the loaded bundle.
+// Build as Objective-C++ with the same plugin definitions and JUCE version.
+#include <juce_audio_utils/juce_audio_utils.h>
+#include <juce_audio_plugin_client/juce_audio_plugin_client_VST3.cpp>
+#undef Component
+#include "EnergyHarvesterProcessor.h"
+#include "Timing.h"
+#include <iostream>
+#include <vector>
+#include <set>
+#include <cmath>
+#include <thread>
+
+namespace {
+using namespace Steinberg;
+using namespace Steinberg::Vst;
+
+void require(bool ok, const char* message)
+{
+    if (!ok) throw std::runtime_error(message);
+}
+
+template <typename Interface>
+Interface* query(FUnknown* from)
+{
+    Interface* result = nullptr;
+    require(from != nullptr && from->queryInterface(Interface::iid, reinterpret_cast<void**>(&result)) == kResultOk
+            && result != nullptr, "VST3 interface available");
+    return result;
+}
+
+class Host final : public IHostApplication, public IComponentHandler, public IComponentHandler2 {
+public:
+    tresult PLUGIN_API queryInterface(const TUID id, void** object) override
+    {
+        *object = nullptr;
+        if (juce::doUIDsMatch(FUnknown::iid, id) || juce::doUIDsMatch(IHostApplication::iid, id)) *object = static_cast<IHostApplication*>(this);
+        else if (juce::doUIDsMatch(IComponentHandler::iid, id)) *object = static_cast<IComponentHandler*>(this);
+        else if (juce::doUIDsMatch(IComponentHandler2::iid, id)) *object = static_cast<IComponentHandler2*>(this);
+        if (*object == nullptr) return kNoInterface;
+        addRef(); return kResultOk;
+    }
+    uint32 PLUGIN_API addRef() override { return ++references; }
+    uint32 PLUGIN_API release() override { return --references; }
+    tresult PLUGIN_API getName(String128 name) override
+    {
+        juce::String("ENERGY HARVESTER regression host").copyToUTF16(reinterpret_cast<juce::CharPointer_UTF16::CharType*>(name), sizeof(String128));
+        return kResultOk;
+    }
+    tresult PLUGIN_API createInstance(TUID, TUID, void** object) override { *object = nullptr; return kNotImplemented; }
+    tresult PLUGIN_API beginEdit(ParamID id) override { begin.push_back(id); return kResultOk; }
+    tresult PLUGIN_API performEdit(ParamID id, ParamValue) override { edits.push_back(id); return kResultOk; }
+    tresult PLUGIN_API endEdit(ParamID id) override { end.push_back(id); return kResultOk; }
+    tresult PLUGIN_API restartComponent(int32 flags) override { restartFlags |= flags; return kResultOk; }
+    tresult PLUGIN_API setDirty(TBool state) override { if (state) ++dirty; return kResultOk; }
+    tresult PLUGIN_API requestOpenEditor(FIDString) override { return kNotImplemented; }
+    tresult PLUGIN_API startGroupEdit() override { return kResultOk; }
+    tresult PLUGIN_API finishGroupEdit() override { return kResultOk; }
+    void clear() { begin.clear(); edits.clear(); end.clear(); restartFlags = 0; dirty = 0; }
+    uint32 references = 1;
+    std::vector<ParamID> begin, edits, end;
+    int32 restartFlags = 0;
+    int dirty = 0;
+};
+
+struct Bundle {
+    explicit Bundle(const juce::File& file)
+    {
+        auto path = file.getFullPathName().toRawUTF8();
+        auto url = CFURLCreateFromFileSystemRepresentation(nullptr, reinterpret_cast<const UInt8*>(path),
+                                                          static_cast<CFIndex>(std::strlen(path)), true);
+        bundle = CFBundleCreate(nullptr, url); CFRelease(url);
+        require(bundle != nullptr && CFBundleLoadExecutable(bundle), "packaged VST3 bundle loads");
+        const auto entry = reinterpret_cast<bool (*)(CFBundleRef)>(CFBundleGetFunctionPointerForName(bundle, CFSTR("bundleEntry")));
+        exit = reinterpret_cast<bool (*)()>(CFBundleGetFunctionPointerForName(bundle, CFSTR("bundleExit")));
+        const auto getFactory = reinterpret_cast<IPluginFactory* (*)()>(CFBundleGetFunctionPointerForName(bundle, CFSTR("GetPluginFactory")));
+        require(entry != nullptr && exit != nullptr && getFactory != nullptr && entry(bundle), "VST3 bundle entry succeeds");
+        factory = getFactory(); require(factory != nullptr, "VST3 factory available");
+    }
+    ~Bundle() { if (factory) factory->release(); if (exit) exit(); if (bundle) CFRelease(bundle); }
+    CFBundleRef bundle = nullptr;
+    IPluginFactory* factory = nullptr;
+    bool (*exit)() = nullptr;
+};
+
+class Queue final:public IParamValueQueue {
+public:
+    ParamID id;std::vector<std::pair<int32,ParamValue>> points;
+    Queue(ParamID parameter,std::vector<std::pair<int32,ParamValue>> data):id(parameter),points(std::move(data)){}
+    tresult PLUGIN_API queryInterface(const TUID uid,void** result) override {*result=nullptr;if(juce::doUIDsMatch(uid,FUnknown::iid)||juce::doUIDsMatch(uid,IParamValueQueue::iid)){*result=this;return kResultOk;}return kNoInterface;}
+    uint32 PLUGIN_API addRef() override{return 1;}uint32 PLUGIN_API release() override{return 1;}
+    ParamID PLUGIN_API getParameterId() override{return id;}int32 PLUGIN_API getPointCount() override{return int32(points.size());}
+    tresult PLUGIN_API getPoint(int32 i,int32& at,ParamValue& value) override{if(i<0||size_t(i)>=points.size())return kInvalidArgument;at=points[size_t(i)].first;value=points[size_t(i)].second;return kResultOk;}
+    tresult PLUGIN_API addPoint(int32,ParamValue,int32&) override{return kNotImplemented;}
+};
+class Changes final:public IParameterChanges {
+public:
+    std::vector<std::unique_ptr<Queue>> queues;
+    void add(ParamID id,std::vector<std::pair<int32,ParamValue>> points){queues.push_back(std::make_unique<Queue>(id,std::move(points)));}
+    tresult PLUGIN_API queryInterface(const TUID uid,void** result) override{*result=nullptr;if(juce::doUIDsMatch(uid,FUnknown::iid)||juce::doUIDsMatch(uid,IParameterChanges::iid)){*result=this;return kResultOk;}return kNoInterface;}
+    uint32 PLUGIN_API addRef() override{return 1;}uint32 PLUGIN_API release() override{return 1;}
+    int32 PLUGIN_API getParameterCount() override{return int32(queues.size());}
+    IParamValueQueue* PLUGIN_API getParameterData(int32 i) override{return i>=0&&size_t(i)<queues.size()?queues[size_t(i)].get():nullptr;}
+    IParamValueQueue* PLUGIN_API addParameterData(const ParamID&,int32&) override{return nullptr;}
+};
+thread_local bool quiet=false;
+void pass(bool value,const char* message){require(value,message);if(!quiet)std::cout<<"PASS "<<message<<'\n';}
+void test(Bundle& bundle,Host& host){
+    IComponent* component=nullptr;int found=0;
+    for(int32 i=0;i<bundle.factory->countClasses();++i){PClassInfo info{};bundle.factory->getClassInfo(i,&info);if(std::strcmp(info.category,kVstAudioEffectClass)==0){++found;require(bundle.factory->createInstance(info.cid,IComponent::iid,reinterpret_cast<void**>(&component))==kResultOk,"component creation");}}
+    pass(found==1&&component,"one audio component");TUID controllerId{};
+    require(component->initialize(static_cast<IHostApplication*>(&host))==kResultOk&&component->getControllerClassId(controllerId)==kResultOk,"component initialization");
+    IEditController* controller=nullptr;require(bundle.factory->createInstance(controllerId,IEditController::iid,reinterpret_cast<void**>(&controller))==kResultOk,"controller creation");
+    controller->initialize(static_cast<IHostApplication*>(&host));controller->setComponentHandler(&host);
+    auto* a=query<IConnectionPoint>(component);auto* b=query<IConnectionPoint>(controller);a->connect(b);b->connect(a);
+    auto* concrete=query<juce::JuceVST3EditController>(controller);auto* actual=static_cast<EnergyHarvesterProcessor*>(concrete->getPluginInstance());
+    pass(actual&&actual->getName()=="ENERGY HARVESTER","test inspects processor from shipping bundle");auto* processor=query<IAudioProcessor>(component);
+    struct Cleanup{IComponent* c;IEditController* e;IConnectionPoint* a;IConnectionPoint* b;juce::JuceVST3EditController* concrete;IAudioProcessor* p;
+        ~Cleanup(){p->setProcessing(false);c->setActive(false);a->disconnect(b);b->disconnect(a);a->release();b->release();e->setComponentHandler(nullptr);e->terminate();c->terminate();concrete->release();p->release();e->release();c->release();}} cleanup{component,controller,a,b,concrete,processor};
+    const ParamID gate=juce::String("harvest").hashCode()&0x7fffffff,time=juce::String("spinUpMs").hashCode()&0x7fffffff,fx=juce::String("fxAmount").hashCode()&0x7fffffff;
+    const ParamID outputDb=juce::String("outputDb").hashCode()&0x7fffffff;
+    ParamID bypass=0;std::set<ParamID> ids;
+    for(int i=0;i<controller->getParameterCount();++i){ParameterInfo info{};controller->getParameterInfo(i,info);ids.insert(info.id);if(info.flags&ParameterInfo::kIsBypass)bypass=info.id;}
+    pass(ids.size()==12&&ids.count(gate)&&ids.count(time)&&ids.count(fx)&&ids.count(bypass)&&ids.count(outputDb),"eleven named controls including stable original IDs plus VST3 host bypass");
+    constexpr int block=1024;ProcessSetup setup{};setup.maxSamplesPerBlock=block;setup.sampleRate=48000;setup.symbolicSampleSize=kSample32;setup.processMode=kRealtime;
+    require(component->activateBus(kAudio,kInput,0,true)==kResultOk&&component->activateBus(kAudio,kOutput,0,true)==kResultOk,"main buses activation");
+    require(processor->setupProcessing(setup)==kResultOk&&component->setActive(true)==kResultOk&&processor->setProcessing(true)==kResultOk,"processor activation");
+    juce::AudioBuffer<float> audio(2,block);std::vector<energy::Frame> expected(block);Steinberg::int64 position=0;
+    energy::HarvestEngine reference;reference.setTime(800);reference.setFx(45);reference.prepare(48000,2);
+    bool referenceGate=false,referenceBypass=false;bool compare=true;double maximum=0;bool tempoValid=false;double tempo=120;int numerator=4,denominator=4;
+    auto render=[&](Changes* changes,bool playing=true,bool reset=false,int count=128){
+        if(reset)reference.reset(referenceGate);
+        std::array<size_t,12> cursor{};
+        for(int s=0;s<count;++s){float input=float(.3*std::sin(2*juce::MathConstants<double>::pi*220*(position+s)/48000.));audio.setSample(0,s,input);audio.setSample(1,s,input);
+            if(changes)for(ParamID id:{time,fx,outputDb,bypass,gate})for(size_t q=0;q<changes->queues.size();++q){auto& queue=*changes->queues[q];if(queue.id!=id)continue;
+                // Test queues cover all eleven controls plus bypass; keep each queue's cursor independently.
+                auto& index=cursor[q];while(index<queue.points.size()&&queue.points[index].first<=s){const auto value=queue.points[index++].second;
+                    if(id==time)reference.setTime(float(80*std::pow(100.,value)));
+                    if(id==fx)reference.setFx(float(value*100));
+                    if(id==outputDb)reference.setOutputDb(float(-18+36*value));
+                    if(id==bypass){referenceBypass=value>=.5;reference.setBypass(referenceBypass);}
+                    if(id==gate){referenceGate=value>=.5;reference.setGate(referenceGate);}
+                }
+            }
+            expected[size_t(s)]=reference.process({input,input},referenceBypass);
+        }
+        AudioBusBuffers in{},out{};in.numChannels=out.numChannels=2;float* channels[]{audio.getWritePointer(0),audio.getWritePointer(1)};in.channelBuffers32=out.channelBuffers32=channels;
+        ProcessContext context{};context.sampleRate=48000;context.state=playing?ProcessContext::kPlaying:0;context.projectTimeSamples=position;if(tempoValid){context.state|=ProcessContext::kTempoValid|ProcessContext::kTimeSigValid;context.tempo=tempo;context.timeSigNumerator=numerator;context.timeSigDenominator=denominator;}
+        ProcessData data{};data.processMode=kRealtime;data.symbolicSampleSize=kSample32;data.numSamples=count;data.numInputs=data.numOutputs=1;data.inputs=&in;data.outputs=&out;data.inputParameterChanges=changes;data.processContext=&context;
+        require(processor->process(data)==kResultOk,"raw VST3 processing");
+        for(int s=0;s<count;++s){require(std::isfinite(audio.getSample(0,s)),"finite actual VST3 output");if(compare)maximum=std::max(maximum,double(std::abs(audio.getSample(0,s)-expected[size_t(s)].left)));}
+        position+=count;
+    };
+    render(nullptr);for(int i=0;i<30;++i)render(nullptr);
+    Changes shortPulse;shortPulse.add(gate,{{17,1},{24,0},{97,1}});render(&shortPulse);
+    pass(actual->launchCount==2&&actual->visualGate,"17/24/97 intra-block gate points all survive wrapper");
+    pass(maximum<2e-6,"actual VST3 sample offsets match independent DSP reference");
+    Changes repeatedBypass;repeatedBypass.add(bypass,{{0,0},{31,0},{127,0}});render(&repeatedBypass);
+    pass(actual->visualState==1&&maximum<2e-6,"repeated bypass OFF points preserve running spin-up");
+    Changes release;release.add(gate,{{0,0}});render(&release);for(int i=0;i<5;++i)render(nullptr);
+    Changes sameSample;sameSample.add(gate,{{31,1}});sameSample.add(time,{{31,0}});sameSample.add(fx,{{31,1}});render(&sameSample);
+    pass(std::abs(actual->latchedTime.load()-80)<.001,"same-sample duration applied before gate regardless of host queue order");
+    Changes future;future.add(time,{{5,1}});render(&future);pass(std::abs(actual->latchedTime.load()-80)<.001,"active spin-up duration remains latched");
+    for(int i=0;i<40;++i)render(nullptr);pass(actual->visualState==2&&actual->launchCount==3,"held ON reaches clean speed without retrigger");
+    Changes off;off.add(gate,{{0,0}});render(&off);for(int i=0;i<5;++i)render(nullptr);
+    auto before=actual->launchCount.load();Changes dense;std::vector<std::pair<int32,ParamValue>> points;
+    for(int i=0;i<5001;++i)points.push_back({64,i%2==0?1.:0.});dense.add(gate,std::move(points));render(&dense);
+    pass(actual->launchCount==before+2501,"5001 same-offset events stream without fixed-buffer overflow");
+    pass(maximum<3e-6,"dense queue output still matches reference");
+    Changes bypassed;bypassed.add(bypass,{{9,1}});bypassed.add(gate,{{10,0},{11,1}});before=actual->launchCount;render(&bypassed);
+    pass(actual->visualBypass&&actual->launchCount==before,"host bypass cancels effect and suppresses launches");
+    Changes resume;resume.add(bypass,{{4,0}});render(&resume);pass(!actual->visualBypass&&actual->visualState==2&&actual->launchCount==before,"unbypass while ON returns clean without synthetic start");
+    Changes reenter;reenter.add(bypass,{{3,1}});render(&reenter);before=actual->launchCount;
+    Changes explicitExit;explicitExit.add(gate,{{8,0},{8,1}});explicitExit.add(bypass,{{8,0}});render(&explicitExit);
+    pass(!actual->visualBypass&&actual->visualState==1&&actual->launchCount==before+1&&maximum<3e-6,"explicit OFF then ON at bypass-exit sample launches correctly");
+    Changes trim;trim.add(outputDb,{{11,1},{64,0},{92,.5}});render(&trim);
+    pass(maximum<3e-6,"actual VST3 output dB automation follows sample offsets and smoothing");
+    compare=false;render(nullptr,false);position+=48000;before=actual->launchCount;render(nullptr,true);
+    pass(actual->visualState==2&&actual->launchCount==before,"transport start and seek while ON prime clean state");
+    render(nullptr,false);Changes baseline;baseline.add(gate,{{0,1},{0,0},{0,1}});before=actual->launchCount;render(&baseline,true);
+    pass(actual->launchCount==before+1,"transport baseline consumes first point and preserves same-offset OFF then ON");
+    position=0;before=actual->launchCount;Changes loopStart;loopStart.add(gate,{{0,1}});render(&loopStart);
+    pass(actual->launchCount==before&&actual->visualState==2,"loop restart ON baseline stays dry");
+    Changes preroll;preroll.add(gate,{{0,0},{64,1}});before=actual->launchCount;render(&preroll);
+    pass(actual->launchCount==before+1,"OFF pre-roll then ON retriggers correctly after loop reset");
+    Changes flush;flush.add(gate,{{0,0}});flush.add(time,{{0,0}});before=actual->launchCount;
+    ProcessContext flushContext{};flushContext.sampleRate=48000;flushContext.state=ProcessContext::kPlaying;flushContext.projectTimeSamples=position;
+    ProcessData empty{};empty.processMode=kRealtime;empty.symbolicSampleSize=kSample32;empty.inputParameterChanges=&flush;empty.processContext=&flushContext;
+    require(processor->process(empty)==kResultOk,"zero-length control flush");pass(!actual->visualGate&&actual->launchCount==before,"zero-length flush accepts controls without new launch or audio time");
+    const std::vector<std::pair<int32,ParamValue>> gateEvents{{0,0},{1024,1},{1025,0},{2087,1},{2100,1},{2150,0},{3333,1},{5000,0},{5001,1}};
+    const std::vector<std::pair<int32,ParamValue>> outputEvents{{0,.5},{1500,1},{2100,0},{5001,2./3},{7500,.5}};
+    const std::vector<std::pair<int32,ParamValue>> fxEvents{{0,0},{1281,1},{3872,.45}};
+    for(int size:{1,64,257,1024,-1}){
+        processor->setProcessing(false);component->setActive(false);
+        actual->apvts.getParameter("harvest")->setValueNotifyingHost(0);actual->apvts.getParameter("spinUpMs")->setValueNotifyingHost(0);actual->apvts.getParameter("fxAmount")->setValueNotifyingHost(0);
+        require(component->setActive(true)==kResultOk&&processor->setProcessing(true)==kResultOk,"matrix activation");
+        reference.setTime(80);reference.setFx(0);reference.setOutputDb(0);actual->apvts.getParameter("outputDb")->setValueNotifyingHost(.5);reference.prepare(48000,2);referenceGate=false;referenceBypass=false;reference.reset(false);position=0;compare=true;maximum=0;int iteration=0;
+        while(position<12000){const int variable[]={1,257,64,1024,17};const int count=std::min<int>(size<0?variable[iteration++%5]:size,int(12000-position));Changes events;
+            for(auto entry:{std::pair{gate,&gateEvents},std::pair{fx,&fxEvents},std::pair{outputDb,&outputEvents}}){std::vector<std::pair<int32,ParamValue>> points;for(auto [at,value]:*entry.second)if(at>=position&&at<position+count)points.push_back({int32(at-position),value});if(!points.empty())events.add(entry.first,std::move(points));}
+            render(events.queues.empty()?nullptr:&events,true,false,count);
+        }
+        require(maximum<3e-6,"block size invariant actual VST3 audio");require(actual->launchCount==4,"single-sample pulses and repeated ON yield four launches");
+        if(!quiet)std::cout<<"PASS raw VST3 block size "<<size<<" (variable=-1), maximum difference "<<maximum<<'\n';
+    }
+    compare=false;
+    const auto pid=[](const char* name){return ParamID(juce::String(name).hashCode()&0x7fffffff);};
+    tempoValid=true;
+    for(double hostTempo:{60.,90.,120.,150.})for(int hostNumerator:{3,4})for(int division=0;division<6;++division){tempo=hostTempo;numerator=hostNumerator;Changes off;off.add(gate,{{0,0}});render(&off);for(int i=0;i<5;++i)render(nullptr);
+        Changes selected;selected.add(gate,{{31,1}});selected.add(pid("syncMode"),{{31,1}});selected.add(pid("syncDivision"),{{31,division/5.}});
+        for(const char* id:{"fxPan","fxChorus","fxPhaser","fxFlanger","fxWashout"})selected.add(pid(id),{{31,1}});selected.add(fx,{{31,.85}});render(&selected);
+        const float latched=actual->latchedTime.load();require(std::abs(latched-energy::syncMilliseconds(division,tempo,numerator,denominator))<.001,"raw queue sync controls applied before same-offset launch");
+        tempo=hostTempo*1.2;render(nullptr);require(actual->latchedTime.load()==latched,"mid-spin host tempo change keeps latched endpoint");
+    }
+    pass(true,"all five FX and 48 host BPM/time-signature/division launches; tempo latch and same-offset automation");
+    if(!quiet)std::cout<<"VST3 queue points "<<actual->queuePoints<<'\n';
+}
+}
+int main(int argc,char** argv){try{juce::ScopedJuceInitialiser_GUI gui;require(argc>=2,"Supply VST3 bundle path");Bundle bundle(juce::File(juce::String::fromUTF8(argv[1])));
+    std::vector<std::unique_ptr<Bundle>> siblings;for(int i=2;i<argc;++i)siblings.push_back(std::make_unique<Bundle>(juce::File(juce::String::fromUTF8(argv[i]))));
+    if(!siblings.empty())std::cout<<"PASS ENERGY loads while "<<siblings.size()<<" sibling VST3 modules remain loaded\n";
+    Host host;test(bundle,host);
+    // Fresh sequential instances and concurrently processed instances use the same loaded module.
+    quiet=true;Host second;test(bundle,second);quiet=false;std::cout<<"PASS second instance on same thread has independent delivery\n";
+    std::exception_ptr errors[2];std::thread threads[2];for(int i=0;i<2;++i)threads[i]=std::thread([&,i]{try{quiet=true;Host h;test(bundle,h);}catch(...){errors[i]=std::current_exception();}});for(auto& t:threads)t.join();for(auto error:errors)if(error)std::rethrow_exception(error);
+    std::cout<<"PASS simultaneous instances on separate processing threads have independent delivery\nENERGY HARVESTER shipping VST3 automation checks passed\n";return 0;}catch(const std::exception& e){std::cerr<<"FAIL "<<e.what()<<'\n';return 1;}}
