@@ -1126,26 +1126,30 @@ public:
         {
             shellCache = juce::Image(juce::Image::ARGB, w, h, true);
             juce::Graphics cache(shellCache);
-            cache.addTransform(juce::AffineTransform::translation(-static_cast<float>(shellX), -static_cast<float>(shellY)).scaled(scale));
             // A tight corner matching the artwork: the standalone's transparent window shows the desktop there.
             juce::Path silhouette;
             silhouette.addRoundedRectangle(10.5f, 19.0f, 1057.6f, 719.0f, 10.0f);
-            cache.reduceClipRegion(silhouette);
-            drawShellSlices(cache);
+            cache.reduceClipRegion(silhouette, juce::AffineTransform::translation(-static_cast<float>(shellX), -static_cast<float>(shellY)).scaled(scale));
+            drawShellSlices(cache, scale);
         }
         g.drawImage(shellCache, area.toFloat());
     }
-    void drawShellSlices(juce::Graphics& g)
+    // Draws into the cache's physical pixels. Every slice lands on whole pixel rows so neighbouring slices share
+    // an exact boundary; fractional edges at 125% and 150% left a see-through row at each seam of the band.
+    void drawShellSlices(juce::Graphics& g, float scale)
     {
         g.setImageResamplingQuality(juce::Graphics::highResamplingQuality);
+        const auto px = [&](float x) { return juce::roundToInt((x - static_cast<float>(shellX)) * scale); };
+        const auto py = [&](float y) { return juce::roundToInt((y - static_cast<float>(shellY)) * scale); };
         // Retain the original control artwork at its exact coordinates. The new
         // board strip is inserted below the utility panel; the bottom rim moves.
         const auto drawShellSlice = [&](float destinationY, float destinationHeight,
                                        float sourceY, float sourceHeight)
         {
             const auto sourceScale = static_cast<float>(shellArtwork.getHeight()) / artworkHeight;
-            g.drawImage(shellArtwork, 0, juce::roundToInt(destinationY), designWidth,
-                        juce::roundToInt(destinationHeight), 0, juce::roundToInt(sourceY * sourceScale),
+            const int top = py(destinationY), bottom = py(destinationY + destinationHeight);
+            g.drawImage(shellArtwork, px(0), top, px(static_cast<float>(designWidth)) - px(0), bottom - top,
+                        0, juce::roundToInt(sourceY * sourceScale),
                         shellArtwork.getWidth(), juce::roundToInt(sourceHeight * sourceScale));
         };
         drawShellSlice(0, infoBandTop, 0, infoBandTop);
@@ -1156,7 +1160,7 @@ public:
             // Keep the added band in the same photographed lavender resin as
             // the original chassis, with its existing reflections and details.
             juce::Graphics::ScopedSaveState surfaceState(g);
-            g.reduceClipRegion(65, infoBandTop, 948, infoBandHeight);
+            g.reduceClipRegion(px(65), py(infoBandTop), px(65 + 948) - px(65), py(infoBandTop + infoBandHeight) - py(infoBandTop));
             drawShellSlice(infoBandTop, infoBandHeight, infoBandTop, 20);
         }
     }
