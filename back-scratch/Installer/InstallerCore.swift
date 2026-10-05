@@ -7,26 +7,79 @@ enum InstallError: LocalizedError {
     var errorDescription: String? { if case .message(let value) = self { return value }; return nil }
 }
 
+enum PluginFormat: String, Codable, CaseIterable, Comparable {
+    case vst3, au
+    var fileExtension: String { self == .vst3 ? "vst3" : "component" }
+    var label: String { self == .vst3 ? "VST3" : "AU" }
+    static func < (lhs: PluginFormat, rhs: PluginFormat) -> Bool { lhs == .vst3 && rhs == .au }
+}
+
+/// The identity macOS registers an Audio Unit under: the AudioComponents type, subtype and manufacturer codes.
+struct AudioUnitIdentity: Codable, Hashable {
+    let type: String
+    let subtype: String
+    let manufacturer: String
+    var description: String { "\(type)/\(subtype)/\(manufacturer)" }
+}
+
+/// Format 2 covers the VST3 and the AU bundle of the same release.
 struct PayloadManifest: Codable {
     let format: Int
     let version: String
     let bundleIdentifier: String
     let componentID: String
     let controllerID: String
-    let files: [String: String]
+    let audioUnits: [AudioUnitIdentity]
+    let vst3Files: [String: String]
+    let audioUnitFiles: [String: String]
+    func files(_ format: PluginFormat) -> [String: String] { format == .vst3 ? vst3Files : audioUnitFiles }
 }
 
 struct InstallResult {
-    let updated: Bool
+    let installed: [PluginFormat]
+    let updated: [PluginFormat]
+    /// Selected formats whose installed bytes already matched the payload; they were not touched.
+    let skipped: [PluginFormat]
     let version: String
-    let destination: URL
+    let audioUnitsRefreshed: Bool
     let log: [String]
+    var summary: String {
+        let parts = installed.map { "\($0.label) installed" } + updated.map { "\($0.label) updated" } + skipped.map { "\($0.label) already up to date" }
+        return parts.joined(separator: ", ")
+    }
 }
 
 struct PluginIdentity: Equatable {
     let version: String
-    let componentID: String
-    let controllerID: String
+    var componentID: String?
+    var controllerID: String?
+    var audioUnits: [AudioUnitIdentity]?
+}
+
+/// Where everything lives. The shipping app uses `standard`; every self-test uses a temporary folder.
+struct InstallLocations {
+    var userVST3: URL
+    var userComponents: URL
+    var systemVST3: URL
+    var systemComponents: URL
+    var recovered: URL
+    func destinationRoot(_ format: PluginFormat) -> URL { format == .vst3 ? userVST3 : userComponents }
+    func systemRoot(_ format: PluginFormat) -> URL { format == .vst3 ? systemVST3 : systemComponents }
+    static var standard: InstallLocations {
+        let home = FileManager.default.homeDirectoryForCurrentUser
+        return InstallLocations(userVST3: home.appendingPathComponent("Library/Audio/Plug-Ins/VST3"),
+                                userComponents: home.appendingPathComponent("Library/Audio/Plug-Ins/Components"),
+                                systemVST3: URL(fileURLWithPath: "/Library/Audio/Plug-Ins/VST3"),
+                                systemComponents: URL(fileURLWithPath: "/Library/Audio/Plug-Ins/Components"),
+                                recovered: home.appendingPathComponent("Library/Application Support/Vivid Fever Dreams/Recovered"))
+    }
+    static func inside(_ folder: URL) -> InstallLocations {
+        InstallLocations(userVST3: folder.appendingPathComponent("User/Library/Audio/Plug-Ins/VST3"),
+                         userComponents: folder.appendingPathComponent("User/Library/Audio/Plug-Ins/Components"),
+                         systemVST3: folder.appendingPathComponent("System/Library/Audio/Plug-Ins/VST3"),
+                         systemComponents: folder.appendingPathComponent("System/Library/Audio/Plug-Ins/Components"),
+                         recovered: folder.appendingPathComponent("User/Library/Application Support/Vivid Fever Dreams/Recovered"))
+    }
 }
 
 /// Command-line modes. Anything without a recognised "--" option opens the window, because LaunchServices can
@@ -34,6 +87,7 @@ struct PluginIdentity: Equatable {
 enum LaunchMode: Equatable {
     case gui, selfTest, inspectPayload, checkHosts
     case makeManifest(payload: String, manifest: String, version: String)
+    case checkWhatsNew(String)
     case invalid
     static func parse(_ rawArguments: [String]) -> LaunchMode {
         let arguments = Array(rawArguments.dropFirst().filter { !$0.hasPrefix("-psn_") })
@@ -43,6 +97,7 @@ enum LaunchMode: Equatable {
         case ("--self-test", 1): return .selfTest
         case ("--inspect-payload", 1): return .inspectPayload
         case ("--check-hosts", 1): return .checkHosts
+        case ("--check-whats-new", 2): return .checkWhatsNew(arguments[1])
         case ("--make-manifest", 4): return .makeManifest(payload: arguments[1], manifest: arguments[2], version: arguments[3])
         default: return .invalid
         }
@@ -56,7 +111,7 @@ enum InstallerHostDetection {
         return id == "xyz.vividfeverdreams.suite.installer" || id == "com.yoiboi.installer" ||
             (id.hasPrefix("com.yoiboi.") && id.hasSuffix(".installer"))
     }
-    /// VST3-capable hosts with stable bundle identifiers (compared lowercased).
+    /// VST3-capable hosts with stable bundle identifiers (compared lowercased). Most of them load Audio Units too.
     static let hostIdentifiers: Set<String> = [
         "com.ableton.live",          // Ableton Live 9–12: Suite, Standard, Intro and Lite
         "com.bitwig.bitwigstudio",   // Bitwig Studio
@@ -73,18 +128,26 @@ enum InstallerHostDetection {
     static let hostNames = ["ableton live", "bitwig studio", "reaper", "fl studio", "cubase", "nuendo", "studio one",
                             "digital performer", "renoise", "reason", "maschine 2", "komplete kontrol", "gig performer",
                             "vienna ensemble pro", "waveform", "pluginval"]
+    /// Hosts that only load Audio Units: they must be quit only when the AU is being installed.
+    static let audioUnitHostIdentifiers: Set<String> = ["com.apple.logic10", "com.apple.garageband10", "com.apple.mainstage3"]
+    static let audioUnitHostNames = ["logic pro", "garageband", "mainstage"]
 
-    static func isAudioApplication(bundleIdentifier: String?, name: String?,
-                                   processID: Int32, installerProcessID: Int32) -> Bool {
-        guard processID != installerProcessID, !isInstaller(bundleIdentifier) else { return false }
-        let id = (bundleIdentifier ?? "").lowercased()
-        if hostIdentifiers.contains(id) || hostIdentifierPrefixes.contains(where: id.hasPrefix) { return true }
-        let applicationName = (name ?? "").lowercased()
-        return hostNames.contains { hostName in
+    private static func nameMatches(_ applicationName: String, _ names: [String]) -> Bool {
+        names.contains { hostName in
             if applicationName == hostName { return true }
             guard applicationName.hasPrefix(hostName + " ") else { return false }
             return applicationName.dropFirst(hostName.count + 1).first?.isNumber == true
         }
+    }
+    static func isAudioApplication(bundleIdentifier: String?, name: String?, processID: Int32, installerProcessID: Int32,
+                                   formats: Set<PluginFormat> = [.vst3]) -> Bool {
+        guard processID != installerProcessID, !isInstaller(bundleIdentifier) else { return false }
+        let id = (bundleIdentifier ?? "").lowercased()
+        let applicationName = (name ?? "").lowercased()
+        if hostIdentifiers.contains(id) || hostIdentifierPrefixes.contains(where: id.hasPrefix) { return true }
+        if nameMatches(applicationName, hostNames) { return true }
+        guard formats.contains(.au) else { return false }
+        return audioUnitHostIdentifiers.contains(id) || nameMatches(applicationName, audioUnitHostNames)
     }
 
     static func fileUsers(_ output: String, excluding processIDs: Set<Int32>) -> [String] {
@@ -117,38 +180,38 @@ enum InstallerHostDetection {
     }
 }
 
-/// The engine receives explicit paths so its entire transaction can be exercised in a temporary directory.
-/// The shipping UI always supplies the standard per-user VST3 location.
+/// The engine receives explicit locations so its entire transaction can be exercised in a temporary directory.
+/// The shipping UI always supplies the standard per-user plug-in folders.
 final class InstallerEngine {
     static let identifier = "com.yoiboi.backscratch"
     static let executable = "BACK-SCRATCH"
-    /// Shared with the Vivid Fever Dreams Suite installer, so the two never change the VST3 folder at the same time.
+    /// JUCE derives these from IS_SYNTH, PLUGIN_CODE and PLUGIN_MANUFACTURER_CODE in the plug-in's CMakeLists.txt.
+    static let audioUnit = AudioUnitIdentity(type: "aufx", subtype: "Bsc1", manufacturer: "Yoib")
+    /// Shared with the Vivid Fever Dreams Suite installer, so the two never change the plug-in folders at the same time.
     static let suiteLockName = ".vfd-suite-installer.lock"
     static let suiteTransactionPrefix = ".vfd-suite-transaction-"
     /// Build-time guard for --make-manifest: the released VST3 class IDs (nil when not pinned).
     static let pinnedIdentity: (componentID: String, controllerID: String)? = nil
     private let fm = FileManager.default
-    let payload: URL
+    /// Resources/Payload, holding BACK-SCRATCH.vst3 and BACK-SCRATCH.component.
+    let payloadRoot: URL
     let manifest: PayloadManifest
-    let destination: URL
-    let systemCopy: URL
-    /// Where a previous copy is kept if a rollback cannot finish: outside every folder audio apps scan.
-    let recoveryRoot: URL
-    let runningHosts: () -> [String]
+    let locations: InstallLocations
+    let runningHosts: (Set<PluginFormat>) -> [String]
     var log: [String] = []
+    /// Makes macOS re-read its Audio Unit registrations. Replaced by a recorder in the self-tests.
+    var refreshAudioUnits: () -> String = { InstallerEngine.refreshAudioUnitRegistrar() }
     // Test fault injection never appears in the app's command line or UI.
     var failAfterCommitForTesting = false
     var afterStagingForTesting: (() throws -> Void)?
-    var afterCommitForTesting: (() throws -> Void)?
+    var afterCommitForTesting: ((PluginFormat) throws -> Void)?
 
-    init(payload: URL, manifest: PayloadManifest, destination: URL, systemCopy: URL, recoveryRoot: URL,
-         runningHosts: @escaping () -> [String]) {
+    init(payloadRoot: URL, manifest: PayloadManifest, locations: InstallLocations,
+         runningHosts: @escaping (Set<PluginFormat>) -> [String]) {
         // The payload is only read, so it may be reached through a symlinked folder.
-        self.payload = Self.canonical(payload)
+        self.payloadRoot = Self.canonical(payloadRoot)
         self.manifest = manifest
-        self.destination = destination
-        self.systemCopy = systemCopy
-        self.recoveryRoot = recoveryRoot
+        self.locations = locations
         self.runningHosts = runningHosts
     }
 
@@ -166,6 +229,15 @@ final class InstallerEngine {
         var info = stat()
         return lstat(url.path, &info) == 0
     }
+
+    static func isRealDirectory(_ url: URL) -> Bool {
+        var info = stat()
+        return lstat(url.path, &info) == 0 && (info.st_mode & S_IFMT) == S_IFDIR
+    }
+
+    func payloadURL(_ format: PluginFormat) -> URL { payloadRoot.appendingPathComponent("BACK-SCRATCH.\(format.fileExtension)") }
+    func destinationURL(_ format: PluginFormat) -> URL { locations.destinationRoot(format).appendingPathComponent("BACK-SCRATCH.\(format.fileExtension)") }
+    func systemURL(_ format: PluginFormat) -> URL { locations.systemRoot(format).appendingPathComponent("BACK-SCRATCH.\(format.fileExtension)") }
 
     static func refuseSymlinkAncestors(_ url: URL) throws {
         var current = URL(fileURLWithPath: "/", isDirectory: true)
@@ -224,6 +296,21 @@ final class InstallerEngine {
         for case let relative as String in enumerator { try strip(root.path + "/" + relative) }
     }
 
+    /// macOS caches Audio Unit registrations in the per-user AudioComponentRegistrar agent. Ending it — the approach
+    /// plug-in installers commonly use — makes macOS rebuild that cache the next time an app asks; launchd starts it
+    /// again on demand. Apple does not document this, so it is best effort: SIGTERM, current user's process only.
+    static func refreshAudioUnitRegistrar() -> String {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/killall")
+        process.arguments = ["-u", NSUserName(), "AudioComponentRegistrar"]
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        do { try process.run(); process.waitUntilExit() }
+        catch { return "macOS will refresh its Audio Unit list after a restart (\(error.localizedDescription))." }
+        return process.terminationStatus == 0 ? "Asked macOS to refresh its Audio Unit list." :
+            "macOS will refresh its Audio Unit list the next time an app scans for Audio Units."
+    }
+
     @discardableResult
     static func run(_ executable: String, _ arguments: [String]) throws -> String {
         let process = Process()
@@ -242,7 +329,7 @@ final class InstallerEngine {
         return text
     }
 
-    static func identity(at bundle: URL) throws -> PluginIdentity {
+    static func identity(at bundle: URL, format: PluginFormat = .vst3) throws -> PluginIdentity {
         try refuseSymlinkAncestors(bundle)
         let plist = bundle.appendingPathComponent("Contents/Info.plist")
         let object = try PropertyListSerialization.propertyList(from: Data(contentsOf: plist), format: nil)
@@ -251,6 +338,21 @@ final class InstallerEngine {
               info["CFBundleExecutable"] as? String == executable,
               let version = info["CFBundleShortVersionString"] as? String else {
             throw InstallError.message("The existing item is not the expected BACK-SCRATCH plug-in. It has been left untouched.")
+        }
+        if format == .au {
+            guard let components = info["AudioComponents"] as? [[String: Any]], !components.isEmpty else {
+                throw InstallError.message("The Audio Unit identity does not match BACK-SCRATCH. No installed plug-in was changed.")
+            }
+            var units: [AudioUnitIdentity] = []
+            for component in components {
+                guard let type = component["type"] as? String, let subtype = component["subtype"] as? String,
+                      let manufacturer = component["manufacturer"] as? String,
+                      [type, subtype, manufacturer].allSatisfy({ $0.utf8.count == 4 }) else {
+                    throw InstallError.message("The Audio Unit identity does not match BACK-SCRATCH. No installed plug-in was changed.")
+                }
+                units.append(AudioUnitIdentity(type: type, subtype: subtype, manufacturer: manufacturer))
+            }
+            return PluginIdentity(version: version, audioUnits: units)
         }
         // JUCE's VST3 metadata permits trailing commas; normalize those before parsing it.
         let module = bundle.appendingPathComponent("Contents/Resources/moduleinfo.json")
@@ -268,31 +370,35 @@ final class InstallerEngine {
               component.uppercased() != controller.uppercased() else {
             throw InstallError.message("The VST3 identity does not match BACK-SCRATCH. No installed plug-in was changed.")
         }
-        return PluginIdentity(version: version, componentID: component.uppercased(),
-                              controllerID: controller.uppercased())
+        return PluginIdentity(version: version, componentID: component.uppercased(), controllerID: controller.uppercased())
     }
 
-    func verifyPayload(at bundle: URL) throws {
-        guard manifest.format == 1, manifest.bundleIdentifier == Self.identifier else {
+    /// True when an installed bundle is the same plug-in as this release (VST3 class IDs, or the AU's registered codes).
+    func sameProduct(_ identity: PluginIdentity, format: PluginFormat) -> Bool {
+        if format == .vst3 { return identity.componentID == manifest.componentID && identity.controllerID == manifest.controllerID }
+        return identity.audioUnits?.contains(Self.audioUnit) == true
+    }
+
+    func verifyPayload(at bundle: URL, format: PluginFormat) throws {
+        guard manifest.format == 2, manifest.bundleIdentifier == Self.identifier, manifest.audioUnits.contains(Self.audioUnit) else {
             throw InstallError.message("The installer manifest does not describe this BACK-SCRATCH plug-in.")
         }
-        let identity = try Self.identity(at: bundle)
-        guard identity.version == manifest.version,
-              identity.componentID == manifest.componentID,
-              identity.controllerID == manifest.controllerID else {
+        let identity = try Self.identity(at: bundle, format: format)
+        guard identity.version == manifest.version, sameProduct(identity, format: format),
+              format == .vst3 || identity.audioUnits == manifest.audioUnits else {
             throw InstallError.message("The plug-in identity does not match the installer.")
         }
         guard fm.isExecutableFile(atPath: bundle.appendingPathComponent("Contents/MacOS/BACK-SCRATCH").path) else {
             throw InstallError.message("The plug-in executable does not have executable permissions.")
         }
-        guard try Self.fileHashes(in: bundle) == manifest.files else {
+        guard try Self.fileHashes(in: bundle) == manifest.files(format) else {
             throw InstallError.message("The plug-in files did not pass their integrity check. Download a fresh installer and try again.")
         }
         try Self.run("/usr/bin/codesign", ["--verify", "--deep", "--strict", bundle.path])
     }
 
-    private func checkHosts() throws {
-        let hosts = runningHosts().sorted()
+    private func checkHosts(_ formats: Set<PluginFormat>) throws {
+        let hosts = runningHosts(formats).sorted()
         guard hosts.isEmpty else {
             throw InstallError.message("Quit \(hosts.joined(separator: ", ")) and click Install / Update again. Your current plug-in has not been changed.")
         }
@@ -303,7 +409,7 @@ final class InstallerEngine {
         let lockURL = folder.appendingPathComponent(suiteLockName)
         let lock = open(lockURL.path, O_CREAT | O_RDWR | O_NOFOLLOW | O_CLOEXEC, S_IRUSR | S_IWUSR)
         guard lock >= 0 else {
-            throw InstallError.message("The installer can’t open its lock file (\(String(cString: strerror(errno)))):\n\(lockURL.path)\n\nCheck that your user account can write to your VST3 folder, then try again.")
+            throw InstallError.message("The installer can’t open its lock file (\(String(cString: strerror(errno)))):\n\(lockURL.path)\n\nCheck that your user account can write to your plug-in folder, then try again.")
         }
         var info = stat()
         guard fstat(lock, &info) == 0, (info.st_mode & S_IFMT) == S_IFREG, info.st_nlink == 1, info.st_uid == geteuid() else {
@@ -312,21 +418,21 @@ final class InstallerEngine {
         }
         guard flock(lock, LOCK_EX | LOCK_NB) == 0 else {
             close(lock)
-            throw InstallError.message("Another Vivid Fever Dreams installer is changing your VST3 folder right now. Let it finish (or quit it), then try again.")
+            throw InstallError.message("Another Vivid Fever Dreams installer is changing your plug-in folders right now. Let it finish (or quit it), then try again.")
         }
         return lock
     }
 
-    /// Moves a previous copy that could not be restored out of the VST3 folder, under a visible name.
-    private func preservePrevious(_ stage: URL, version: String?) -> URL {
+    /// Moves a previous copy that could not be restored out of the plug-in folders, under a visible name.
+    private func preservePrevious(_ stage: URL, format: PluginFormat, version: String?) -> URL {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
         formatter.dateFormat = "yyyy-MM-dd HH.mm.ss"
-        let name = "BACK-SCRATCH \(version ?? "previous") (saved \(formatter.string(from: Date()))).vst3"
+        let name = "BACK-SCRATCH \(version ?? "previous") (saved \(formatter.string(from: Date()))).\(format.fileExtension)"
         do {
-            try fm.createDirectory(at: recoveryRoot, withIntermediateDirectories: true)
-            try Self.refuseSymlinkAncestors(recoveryRoot)
-            let target = recoveryRoot.appendingPathComponent(name)
+            try fm.createDirectory(at: locations.recovered, withIntermediateDirectories: true)
+            try Self.refuseSymlinkAncestors(locations.recovered)
+            let target = locations.recovered.appendingPathComponent(name)
             guard renameatx_np(AT_FDCWD, stage.path, AT_FDCWD, target.path, UInt32(RENAME_EXCL)) == 0 else { return stage }
             log.append("Previous plug-in saved to \(target.path).")
             return target
@@ -335,104 +441,154 @@ final class InstallerEngine {
         }
     }
 
-    func install() throws -> InstallResult {
-        log = ["BACK-SCRATCH installer \(manifest.version)", "Destination: \(destination.path)"]
-        try checkHosts()
-        try Self.refuseSymlinkAncestors(destination)
-        guard destination.lastPathComponent == "BACK-SCRATCH.vst3" else {
-            throw InstallError.message("The destination must be named BACK-SCRATCH.vst3.")
-        }
-        guard !Self.exists(systemCopy) else {
-            throw InstallError.message("BACK-SCRATCH is already in the system VST3 folder:\n\(systemCopy.path)\n\nTo avoid duplicate entries, move that BACK-SCRATCH.vst3 into your user VST3 folder first, then run this installer again:\n\(destination.deletingLastPathComponent().path)")
-        }
-        try verifyPayload(at: payload)
-        log.append("Embedded payload: SHA-256, bundle identity, VST3 identities and code signature verified.")
-        let parent = destination.deletingLastPathComponent()
-        try fm.createDirectory(at: parent, withIntermediateDirectories: true)
-        try Self.refuseSymlinkAncestors(parent)
-        let lock = try Self.acquireSuiteLock(in: parent)
-        defer { flock(lock, LOCK_UN); close(lock) }
-        if let pending = try fm.contentsOfDirectory(atPath: parent.path).first(where: { $0.hasPrefix(Self.suiteTransactionPrefix) }) {
-            throw InstallError.message("An interrupted Vivid Fever Dreams Suite installation needs attention first, so BACK-SCRATCH was not changed. Open the Vivid Fever Dreams Suite installer and follow its directions.\n\nHidden folder: \(parent.appendingPathComponent(pending).path)")
-        }
-        let updated = Self.exists(destination)
-        var previousIdentity: PluginIdentity?
-        var previousHashes: [String: String]?
-        if updated {
-            let oldIdentity = try Self.identity(at: destination)
-            guard oldIdentity.componentID == manifest.componentID,
-                  oldIdentity.controllerID == manifest.controllerID else {
-                throw InstallError.message("This BACK-SCRATCH copy uses different VST3 identities. It has been left untouched to protect existing projects.")
+    private struct Item {
+        let format: PluginFormat
+        let destination: URL
+        var stage: URL
+        let updated: Bool
+        let previousIdentity: PluginIdentity?
+        let previousHashes: [String: String]?
+    }
+
+    func install(formats selected: Set<PluginFormat> = [.vst3]) throws -> InstallResult {
+        let formats = selected.sorted()
+        guard !formats.isEmpty else { throw InstallError.message("Tick VST3, AU or both.") }
+        log = ["BACK-SCRATCH installer \(manifest.version)", "Formats: \(formats.map(\.label).joined(separator: ", "))"]
+        try checkHosts(selected)
+        for format in formats {
+            let destination = destinationURL(format)
+            try Self.refuseSymlinkAncestors(destination)
+            guard !Self.exists(systemURL(format)) else {
+                throw InstallError.message("BACK-SCRATCH is already in the system \(format.label) folder:\n\(systemURL(format).path)\n\nTo avoid duplicate entries, move that copy into your user folder first, then run this installer again:\n\(destination.deletingLastPathComponent().path)")
             }
-            let oldVersion = oldIdentity.version
-            guard oldVersion.compare(manifest.version, options: .numeric) != .orderedDescending else {
-                throw InstallError.message("BACK-SCRATCH \(oldVersion) is already installed. This installer contains the older version \(manifest.version), so no changes were made.")
+            try verifyPayload(at: payloadURL(format), format: format)
+        }
+        log.append("Embedded payload: SHA-256, bundle identity, plug-in identities and code signature verified.")
+        var locks: [Int32] = []
+        defer { for lock in locks { flock(lock, LOCK_UN); close(lock) } }
+        for format in PluginFormat.allCases.sorted() {
+            let parent = locations.destinationRoot(format)
+            try Self.refuseSymlinkAncestors(parent)
+            if selected.contains(format) {
+                try fm.createDirectory(at: parent, withIntermediateDirectories: true)
+                try Self.refuseSymlinkAncestors(parent)
+            } else if !Self.isRealDirectory(parent) { continue }
+            locks.append(try Self.acquireSuiteLock(in: parent))
+            if let pending = try fm.contentsOfDirectory(atPath: parent.path).first(where: { $0.hasPrefix(Self.suiteTransactionPrefix) }) {
+                throw InstallError.message("An interrupted Vivid Fever Dreams Suite installation needs attention first, so BACK-SCRATCH was not changed. Open the Vivid Fever Dreams Suite installer and click Repair….\n\nHidden folder: \(parent.appendingPathComponent(pending).path)")
+            }
+        }
+        var work: [Item] = []
+        var skipped: [PluginFormat] = []
+        for format in formats {
+            let destination = destinationURL(format)
+            guard Self.exists(destination) else {
+                work.append(Item(format: format, destination: destination, stage: destination, updated: false, previousIdentity: nil, previousHashes: nil))
+                continue
+            }
+            let oldIdentity = try Self.identity(at: destination, format: format)
+            guard sameProduct(oldIdentity, format: format) else {
+                let what = format == .vst3 ? "VST3 identities" : "Audio Unit codes"
+                throw InstallError.message("This BACK-SCRATCH \(format.label) copy uses different \(what). It has been left untouched to protect existing projects.")
+            }
+            guard oldIdentity.version.compare(manifest.version, options: .numeric) != .orderedDescending else {
+                throw InstallError.message("BACK-SCRATCH \(format.label) \(oldIdentity.version) is already installed. This installer contains the older version \(manifest.version), so no changes were made.")
             }
             // Refuse links anywhere in an installed bundle before replacing it.
-            previousIdentity = oldIdentity
-            previousHashes = try Self.fileHashes(in: destination)
-            log.append("Updating existing version \(oldVersion).")
+            let hashes = try Self.fileHashes(in: destination)
+            if hashes == manifest.files(format) {
+                skipped.append(format)
+                log.append("\(format.label) is already up to date; left untouched.")
+                continue
+            }
+            log.append("Updating existing \(format.label) version \(oldIdentity.version).")
+            work.append(Item(format: format, destination: destination, stage: destination, updated: true, previousIdentity: oldIdentity, previousHashes: hashes))
         }
-        // No .vst3 extension: audio apps scanning the VST3 folder never see the temporary copy.
-        let stage = parent.appendingPathComponent(".backscratch-stage-\(UUID().uuidString)", isDirectory: true)
-        var ownsStage = false
+        guard !work.isEmpty else {
+            return InstallResult(installed: [], updated: [], skipped: skipped, version: manifest.version, audioUnitsRefreshed: false, log: log)
+        }
+        var owned: [URL] = []
+        var preserved: Set<String> = []
         defer {
-            if ownsStage && Self.exists(stage) {
+            for stage in owned where !preserved.contains(stage.path) && Self.exists(stage) {
                 do { try fm.removeItem(at: stage) }
                 catch { log.append("Temporary transaction folder remains at \(stage.path): \(error.localizedDescription)") }
             }
         }
-        try fm.copyItem(at: payload, to: stage)
-        ownsStage = true
-        try Self.stripQuarantine(in: stage)
-        try verifyPayload(at: stage)
-        try afterStagingForTesting?()
-        try checkHosts()
-        try Self.refuseSymlinkAncestors(destination)
-        guard Self.exists(destination) == updated else {
-            throw InstallError.message("The installed plug-in changed during preparation. Please try again.")
+        for index in work.indices {
+            // No .vst3 or .component extension: audio apps and the AU registrar never see the temporary copy.
+            let stage = locations.destinationRoot(work[index].format).appendingPathComponent(".backscratch-stage-\(UUID().uuidString)", isDirectory: true)
+            try fm.copyItem(at: payloadURL(work[index].format), to: stage)
+            owned.append(stage)
+            work[index].stage = stage
+            try Self.stripQuarantine(in: stage)
+            try verifyPayload(at: stage, format: work[index].format)
         }
-        if updated {
-            let current = try Self.identity(at: destination)
-            guard let originalIdentity = previousIdentity,
-                  let originalHashes = previousHashes,
-                  current == originalIdentity,
-                  try Self.fileHashes(in: destination) == originalHashes else {
+        try afterStagingForTesting?()
+        try checkHosts(selected)
+        for item in work {
+            try Self.refuseSymlinkAncestors(item.destination)
+            guard Self.exists(item.destination) == item.updated else {
                 throw InstallError.message("The installed plug-in changed during preparation. Please try again.")
             }
+            if item.updated {
+                let current = try Self.identity(at: item.destination, format: item.format)
+                guard current == item.previousIdentity, try Self.fileHashes(in: item.destination) == item.previousHashes else {
+                    throw InstallError.message("The installed plug-in changed during preparation. Please try again.")
+                }
+            }
         }
-        let flags = updated ? UInt32(RENAME_SWAP) : UInt32(RENAME_EXCL)
-        guard renameatx_np(AT_FDCWD, stage.path, AT_FDCWD, destination.path, flags) == 0 else {
-            throw InstallError.message("Unable to replace BACK-SCRATCH: \(String(cString: strerror(errno))). The previous version remains in place.")
-        }
+        var committed: [Int] = []
         do {
-            try afterCommitForTesting?()
+            for (index, item) in work.enumerated() {
+                let flags = item.updated ? UInt32(RENAME_SWAP) : UInt32(RENAME_EXCL)
+                guard renameatx_np(AT_FDCWD, item.stage.path, AT_FDCWD, item.destination.path, flags) == 0 else {
+                    throw InstallError.message("Unable to replace BACK-SCRATCH \(item.format.label): \(String(cString: strerror(errno))).")
+                }
+                committed.append(index)
+                try afterCommitForTesting?(item.format)
+            }
             if failAfterCommitForTesting { throw InstallError.message("Injected verification failure") }
-            try verifyPayload(at: destination)
-            log.append(updated ? "Atomic replacement completed and verified." : "Installation completed and verified.")
+            for item in work { try verifyPayload(at: item.destination, format: item.format) }
+            log.append("Installation completed and verified: \(work.map(\.format.label).joined(separator: ", ")).")
         } catch {
-            // Undo only our own commit: the destination must still be exactly the bundle this installer placed there.
-            let destinationIsOurs = (try? Self.fileHashes(in: destination)) == manifest.files
-            if updated {
-                guard destinationIsOurs,
-                      renameatx_np(AT_FDCWD, stage.path, AT_FDCWD, destination.path, UInt32(RENAME_SWAP)) == 0 else {
-                    ownsStage = false
-                    let saved = preservePrevious(stage, version: previousIdentity?.version)
-                    throw InstallError.message("Verification failed and the automatic rollback could not finish, so the plug-in in your VST3 folder was left as it is. Your previous BACK-SCRATCH was saved to:\n\(saved.path)\n\nTo restore it, quit your audio apps, move BACK-SCRATCH.vst3 out of ~/Library/Audio/Plug-Ins/VST3, then put the saved copy there and rename it BACK-SCRATCH.vst3. Details: \(error.localizedDescription)")
+            // Undo only our own commits: each destination must still be exactly the bundle this installer placed there.
+            var problems: [String] = []
+            for index in committed.reversed() {
+                let item = work[index]
+                let destinationIsOurs = (try? Self.fileHashes(in: item.destination)) == manifest.files(item.format)
+                if item.updated {
+                    if destinationIsOurs && renameatx_np(AT_FDCWD, item.stage.path, AT_FDCWD, item.destination.path, UInt32(RENAME_SWAP)) == 0 {
+                        log.append("Verification failed; previous \(item.format.label) restored atomically.")
+                        continue
+                    }
+                    preserved.insert(item.stage.path)
+                    let saved = preservePrevious(item.stage, format: item.format, version: item.previousIdentity?.version)
+                    problems.append("The \(item.format.label) in your plug-in folder was left as it is. Your previous BACK-SCRATCH \(item.format.label) was saved to:\n\(saved.path)\nTo restore it, quit your audio apps and use Repair… in the Vivid Fever Dreams Suite installer, or replace BACK-SCRATCH.\(item.format.fileExtension) with the saved copy.")
+                } else {
+                    guard destinationIsOurs else {
+                        problems.append("\(item.destination.path) changed while the installer was working, so it was left in place.")
+                        continue
+                    }
+                    if renameatx_np(AT_FDCWD, item.destination.path, AT_FDCWD, item.stage.path, UInt32(RENAME_EXCL)) == 0 {
+                        log.append("Verification failed; new \(item.format.label) installation rolled back.")
+                    } else {
+                        problems.append("Could not remove the new plug-in at \(item.destination.path).")
+                    }
                 }
-                log.append("Verification failed; previous plug-in restored atomically.")
-            } else {
-                guard destinationIsOurs else {
-                    throw InstallError.message("Verification failed, and \(destination.path) changed while the installer was working, so it was left in place. Details: \(error.localizedDescription)")
-                }
-                guard renameatx_np(AT_FDCWD, destination.path, AT_FDCWD, stage.path, UInt32(RENAME_EXCL)) == 0 else {
-                    throw InstallError.message("Verification failed. Could not remove the new plug-in at \(destination.path): \(error.localizedDescription)")
-                }
-                log.append("Verification failed; initial installation rolled back.")
+            }
+            if !problems.isEmpty {
+                throw InstallError.message("Verification failed and the automatic rollback could not finish.\n\n\(problems.joined(separator: "\n\n"))\n\nDetails: \(error.localizedDescription)")
             }
             throw error
         }
+        var refreshed = false
+        if work.contains(where: { $0.format == .au }) {
+            log.append(refreshAudioUnits())
+            refreshed = true
+        }
         log.append("Saved presets, DAW projects and other plug-ins were not modified.")
-        return InstallResult(updated: updated, version: manifest.version, destination: destination, log: log)
+        return InstallResult(installed: work.filter { !$0.updated }.map(\.format), updated: work.filter(\.updated).map(\.format),
+                             skipped: skipped, version: manifest.version, audioUnitsRefreshed: refreshed, log: log)
     }
 }

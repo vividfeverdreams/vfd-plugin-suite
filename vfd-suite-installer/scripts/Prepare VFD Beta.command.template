@@ -1,0 +1,39 @@
+#!/bin/bash
+set -euo pipefail
+export LC_ALL=C
+
+# Private beta preparation for the exact, unmodified suite @SUITE_VERSION@ release.
+# Run using /bin/bash as described in START HERE.txt if Finder blocks this file.
+# This helper does not install plugins or change system security settings.
+fail() { printf '\n%s\n' "$1" >&2; exit 1; }
+[[ $# -eq 0 ]] || fail 'Run this helper without arguments, beside the supplied installer.'
+[[ "$(/usr/bin/uname -s)" == Darwin ]] || fail 'This beta requires macOS.'
+if [[ "$(/usr/bin/uname -m)" != arm64 ]]; then
+    [[ "$(/usr/sbin/sysctl -n hw.optional.arm64 2>/dev/null || printf '0')" == 1 ]] || fail 'This beta requires an Apple Silicon Mac (M1 or later).'
+fi
+vfd_os_version="$(/usr/bin/sw_vers -productVersion)"
+[[ "${vfd_os_version%%.*}" -ge 12 ]] || fail 'This beta requires macOS 12 or later.'
+
+vfd_package="$(cd -- "$(/usr/bin/dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+vfd_app="$vfd_package/Install Vivid Fever Dreams Suite.app"
+vfd_executable="$vfd_app/Contents/MacOS/VFD-Suite-Installer"
+[[ -d "$vfd_app" && ! -L "$vfd_app" ]] || fail 'Keep this helper beside Install Vivid Fever Dreams Suite.app in the extracted folder.'
+[[ -f "$vfd_executable" && ! -L "$vfd_executable" ]] || fail 'The installer executable is missing or linked. Obtain a fresh beta package.'
+[[ -z "$(/usr/bin/find "$vfd_app" -type l -print -quit)" ]] || fail 'Unexpected links in the installer. Obtain a fresh beta package.'
+
+printf 'Checking the supplied Vivid Fever Dreams Suite @SUITE_VERSION@ installer...\n'
+vfd_identifier="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$vfd_app/Contents/Info.plist")"
+vfd_version="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$vfd_app/Contents/Info.plist")"
+[[ "$vfd_identifier" == xyz.vividfeverdreams.suite.installer && "$vfd_version" == "@SUITE_VERSION@" ]] || fail 'This helper is only for the supplied suite @SUITE_VERSION@ installer.'
+vfd_hash="$(/usr/bin/shasum -a 256 "$vfd_executable")"
+vfd_hash="${vfd_hash%% *}"
+[[ "$vfd_hash" == @INSTALLER_SHA256@ ]] || fail 'The installer differs from the supplied release. Obtain a fresh beta package.'
+/usr/bin/codesign --verify --deep --strict "$vfd_app" || fail 'The installer or bundled plugins failed signature verification. Obtain a fresh beta package.'
+
+printf 'Clearing the download quarantine only inside:\n%s\n' "$vfd_app"
+/usr/bin/xattr -dr com.apple.quarantine "$vfd_app" || fail 'Could not prepare the installer. Move the extracted folder to a writable local folder and retry. Do not use sudo.'
+/usr/bin/codesign --verify --deep --strict "$vfd_app"
+"$vfd_executable" --inspect-payload || fail 'The installer payload failed verification. Obtain a fresh beta package.'
+
+printf '\nReady. Quit your audio apps, then double-click the installer, choose the VST3 and AU formats you want, and click Install / Update.\n'
+printf 'After installation, follow the rescan steps the installer shows for your DAW.\n'

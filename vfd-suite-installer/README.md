@@ -1,29 +1,47 @@
-# Vivid Fever Dreams Suite 1.2.2
+# Vivid Fever Dreams Suite 1.3.0
 
-One native installer for YOI-BOI 0.1.6, THROW-UP 0.1.5, BACK-SCRATCH 0.10.2, SHIFTY 0.4.2, and ENERGY HARVESTER 0.3.2.
+One native installer for YOI-BOI 0.2.0, THROW-UP 0.2.0, BACK-SCRATCH 0.11.0, SHIFTY 0.5.0, and ENERGY HARVESTER 0.4.0, each as a **VST3** and an **Audio Unit**.
 
-All five report **VIVID FEVER DREAMS** as their creator/vendor. This is the manufacturer field used by plug-in browsers, including Ableton Live’s Creator filter. Plug-in names, bundle identifiers, and VST3 component/controller identities remain compatible with earlier releases. Rescan VST3 plug-ins after updating to refresh the browser metadata.
+All five report **VIVID FEVER DREAMS** as their creator/vendor. Plug-in names, bundle identifiers, and VST3 component/controller identities remain compatible with earlier releases. The Audio Units register under these codes (type/subtype/manufacturer): YOI-BOI `aumu/YB01/YBoi`, THROW-UP `aufx/Thr1/Yoib`, BACK-SCRATCH `aufx/Bsc1/Yoib`, SHIFTY `aufx/Shf1/Yoib`, ENERGY HARVESTER `aufx/Enh1/Yoib`.
 
-Requires **macOS 12 or later on Apple Silicon**. These are **VST3** plug-ins. This package does not provide Intel, Audio Unit, or AAX builds. The installer and included plug-ins are ad-hoc signed and are not Apple notarized.
+Requires **macOS 12 or later on Apple Silicon**. This package does not provide Intel or AAX builds. The installer and included plug-ins are ad-hoc signed and are not Apple notarized, so macOS asks you to approve the installer once (System Settings → Privacy & Security → Open Anyway). Developer ID signing and notarization will follow once the developer enrollment is in place.
 
 ## Install or update
 
-1. Quit your audio applications.
+1. Quit your audio applications. Logic Pro, GarageBand and MainStage only need to be quit when an Audio Unit is selected.
 2. Open **Install Vivid Fever Dreams Suite.app**.
-3. Click **Install / Update All Five**.
-4. Open your audio application and rescan VST3 plug-ins.
+3. Each plug-in has a **VST3** and an **AU** checkbox, all ticked by default, with its status: *New*, *Installed 0.10.2 → 0.11.0*, *Up to date*, *Reinstall*, or *Newer … installed* (unticked, because the installer never downgrades). Untick anything you don’t want.
+4. Click **Install / Update**. Items whose installed bytes already match are left untouched; everything else selected is installed as one transaction.
+5. Follow the **Next steps** the installer shows for the audio apps on your Mac (for example Ableton Live: Settings → Plug-Ins → Rescan, Option-click for a full rescan; Logic Pro: reopen Logic, or Plug-in Manager → Reset & Rescan Selection). The same page shows a short **What’s new** for every plug-in that changed.
 
-All five go to `~/Library/Audio/Plug-Ins/VST3`. Compatible existing copies update in place; presets and DAW projects are not edited. The installer refuses downgrades, conflicting VST3 identities, symbolic-link targets, running VST3 hosts (by bundle identifier or name, plus any process that has an installed suite plug-in loaded), and duplicate copies — matched by bundle identifier or VST3 class ID anywhere in the user or system VST3 folder and their subfolders. Resolve a reported conflict before retrying. Administrative access is not required. The download quarantine flag is cleared from the installed copies, so a DAW does not show a Gatekeeper prompt for each plug-in.
+VST3 bundles go to `~/Library/Audio/Plug-Ins/VST3` and Audio Units to `~/Library/Audio/Plug-Ins/Components`. Presets and DAW projects are not edited. Administrative access is not required. The download quarantine flag is cleared from the installed copies, so a DAW does not show a Gatekeeper prompt for each plug-in.
 
-The log is `~/Library/Logs/Vivid Fever Dreams Suite/installer.log`; the installer’s **View Log** button opens it. Each attempt is appended; the log rotates to `installer.log.1` past 256 KB.
+After any Audio Unit is installed or removed, the installer asks macOS to refresh its Audio Unit list by ending the current user’s `AudioComponentRegistrar` agent with a normal SIGTERM (`killall -u <you> AudioComponentRegistrar`). This is the approach plug-in installers commonly use; Apple does not document it, and launchd restarts the agent on demand. Restart Logic Pro, GarageBand or MainStage afterwards.
 
-## Complete-suite transaction
+The installer refuses downgrades, conflicting identities (VST3 class IDs, or AU codes), symbolic-link targets, running hosts, and duplicate copies. Running hosts are found by bundle identifier or name, plus any process that has an installed suite plug-in loaded. Duplicates are matched by bundle identifier, VST3 class ID or AU codes anywhere in the user or system VST3 and Components folders and their subfolders.
 
-The installer verifies every payload’s SHA-256 file inventory, bundle identity, actual VST3 component/controller identities, executable permission, and code signature. It stages and rechecks all five before changing installed plug-ins. Updates use atomic per-bundle swaps, and new installs use exclusive renames. Every prior bundle is retained until all five destinations have passed verification. A detected failure rolls committed items back in reverse order, including mixed new/update installations.
+The log is `~/Library/Logs/Vivid Fever Dreams Suite/installer.log` (**View Log**). Each attempt is appended; the log rotates to `installer.log.1` past 256 KB.
 
-A lock file (`.vfd-suite-installer.lock`, shared with the single-plugin installers) prevents concurrent changes to the VST3 folder; it is an advisory lock that is released when the installer exits, so the file itself never blocks a later run. Since macOS has no single atomic rename for five bundles, the group transaction is implemented by staging and rollback. Staged copies use extension-less names (`<index>.staged`) so audio apps never scan them as plug-ins. The journal (`transaction.json`) records each plug-in’s state — pending, committing, committed, restoring, restored, or rollback-failed — and is written before every rename.
+## Uninstall
 
-Abrupt process termination or power loss can leave a `.vfd-suite-transaction-*` folder. The next run removes it automatically only when that is provably safe: the journal says staging, prepared or rolled back and every installed plug-in still matches its recorded previous state, or the journal says all five were verified and every installed plug-in matches that transaction’s payload hashes. Anything else blocks installation with the folder’s location; review its journal and retained bundles before recovery, and do not delete it casually. If another program independently changes a committed destination, recovery preserves the transaction and reports its path instead of overwriting that change. A temporary copy left by an interrupted single-plugin update (`.<name>-stage-<UUID>.vst3`) is reported with directions, and removed automatically only when it is byte-identical to the installed plug-in or the payload.
+Tick the formats to remove and click **Uninstall…**, then confirm in the window. Every selected bundle is verified first (bundle identifier plus VST3 class IDs or AU codes); if any one cannot be verified, nothing moves. Verified bundles are moved to the **Trash**, so an uninstall can be undone by dragging them back.
+
+## Repair
+
+**Repair…** lists anything left behind by an interrupted installation:
+
+- an interrupted suite transaction (`.vfd-suite-transaction-*`) — **Restore Previous Versions** puts back the backups it holds, after checking each against its recorded SHA-256 hashes, and moves any plug-in the transaction had added to the Trash; it is only offered when every step verifies;
+- a temporary copy from a single-plugin installer (`.<name>-stage-<UUID>`);
+- a previous copy a single-plugin installer saved to `~/Library/Application Support/Vivid Fever Dreams/Recovered` — **Restore Previous Versions** puts it back after verifying its identity and moves the current copy to the Trash;
+- leftovers of a finished installation.
+
+**Clean Up…** moves the item to the Trash. **Reveal in Finder** shows it (hidden items need Command-Shift-Period).
+
+## Transaction details
+
+A lock file (`.vfd-suite-installer.lock`, shared with the single-plugin installers) in each plug-in folder prevents concurrent changes; it is an advisory lock released when the installer exits, so the file never blocks a later run. macOS has no single atomic rename for several bundles, so the transaction stages every selected bundle under extension-less names (`<n>.staged`, never scanned by hosts or the AU registrar), verifies them, then commits each with an atomic rename swap (updates) or exclusive rename (new installs). Every previous bundle is kept until all selected bundles verify. A detected failure rolls committed items back in reverse order. The journal (`transaction.json`, format 3) records each bundle’s destination and state — pending, committing, committed, restoring, restored or rollback-failed — and is written before every rename.
+
+Abrupt termination or power loss can leave a `.vfd-suite-transaction-*` folder. The next run removes it automatically only when that is provably safe: the journal says staging, prepared or rolled back and every bundle still matches its recorded previous state, or the journal says everything was verified and every bundle matches that transaction’s payload hashes. Anything else blocks installation and points to **Repair…**. A temporary copy left by an interrupted single-plugin update is reported with directions, and removed automatically only when it is byte-identical to the installed plug-in or the payload.
 
 ## Inspect and test
 
@@ -33,29 +51,27 @@ Run these read-only or temporary-fixture commands from the built app:
 "Install Vivid Fever Dreams Suite.app/Contents/MacOS/VFD-Suite-Installer" --inspect-payload
 "Install Vivid Fever Dreams Suite.app/Contents/MacOS/VFD-Suite-Installer" --check-hosts
 "Install Vivid Fever Dreams Suite.app/Contents/MacOS/VFD-Suite-Installer" --self-test
+"Install Vivid Fever Dreams Suite.app/Contents/MacOS/VFD-Suite-Installer" --check-whats-new whats-new.json
 ```
 
-Self-tests write only in a fresh temporary directory. They never install into the live user VST3 folder. Coverage includes injected failures after each of the five commits for fresh installs, updates, and mixed installations; conflicting identities; newer versions; corrupt payloads; duplicate copies; symlinks; host detection; staging changes; and unfinished recovery data. Build-time test and payload-verification logs accompany the app.
+Self-tests write only in a fresh temporary directory, use a fixture Trash and a recorded Audio Unit refresh, and never touch your plug-in folders. Coverage includes injected failures after each of the ten commits for fresh installs, updates and mixed installations; selection subsets; skipping identical bundles; status labels; AU identities and AU duplicates in a fixture system Components folder; AU-only hosts; uninstall and its verification; every Repair path; conflicting identities; newer versions; corrupt payloads; duplicates; symlinks; host detection; staging changes; and unfinished recovery data.
 
-For visual review, `--render-preview /absolute/path/preview.png` saves the native window as an image without displaying it or running installation. This diagnostic needs access to the macOS window server.
+For visual review, `--render-preview /absolute/path/preview.png [main|uninstall|result|repair]` saves one window state, drawn with sample data, without displaying it or reading your plug-in folders. This needs access to the macOS window server.
 
 ## Build from source
 
-The source archive contains the Swift/AppKit transaction engine, native UI, tests, exact supplied logo SVG, asset renderer, and packaging script. It does not include the five plug-in source trees or their payloads. Supply the current signed VST3 bundles in this exact order:
+The source archive contains the Swift/AppKit transaction engine (`InstallerCore.swift`, `InstallerMaintenance.swift`), the shared guidance and What’s new code (`InstallerGuidance.swift`, also used by the single-plugin installers), the native UI, tests, the logo SVG, the asset renderer, the packaging script and `scripts/Prepare VFD Beta.command.template`. Supply each plug-in’s signed VST3 and AU bundle, in this order, plus the output folder, suite version and What’s new file:
 
 ```sh
 bash build-installer.sh \
-  /absolute/path/YOI-BOI.vst3 \
-  /absolute/path/THROW-UP.vst3 \
-  /absolute/path/BACK-SCRATCH.vst3 \
-  /absolute/path/SHIFTY.vst3 \
-  "/absolute/path/ENERGY HARVESTER.vst3" \
-  /absolute/path/new-release-directory \
-  1.2.2
+  /absolute/path/YOI-BOI.vst3 /absolute/path/YOI-BOI.component \
+  /absolute/path/THROW-UP.vst3 /absolute/path/THROW-UP.component \
+  /absolute/path/BACK-SCRATCH.vst3 /absolute/path/BACK-SCRATCH.component \
+  /absolute/path/SHIFTY.vst3 /absolute/path/SHIFTY.component \
+  "/absolute/path/ENERGY HARVESTER.vst3" "/absolute/path/ENERGY HARVESTER.component" \
+  /absolute/path/new-release-directory 1.3.0 /absolute/path/whats-new.json
 ```
 
-Requires Apple’s Xcode command-line tools. Packaging preserves plug-in bytes and their existing signatures; component and controller IDs are read from the actual supplied bundles. The script verifies required versions and identities, embeds a manifest, signs the installer ad hoc, runs verification and fixture tests, and produces the installer ZIP, source ZIP, and checksums. The supplied SVG is rendered into a restrained monochrome suite icon using AppKit, without redrawing its shapes.
+`whats-new.json` is a JSON object keyed by plug-in name; each value is one to six short lines (at most 160 characters each), for example `{"YOI-BOI": ["Now also an Audio Unit for Logic Pro and GarageBand."], …}`. Every suite plug-in needs an entry.
 
-The suite includes the current sources of all five plugins, including the BACK-SCRATCH factory-position fix from 0.10.1. The changes from those current versions are the creator metadata and patch version numbers.
-
-ENERGY HARVESTER includes a precise −18 to +18 dB OUTPUT dial that adjusts the spin-up only and returns to original clean level afterward.
+Requires Apple’s Xcode command-line tools. Packaging preserves plug-in bytes and their existing signatures. It reads the VST3 class IDs and AU codes from the supplied bundles and refuses any AU whose codes differ from `SuiteCatalog` (update the catalog if a plug-in’s codes change on purpose). It embeds the manifest and What’s new, signs the installer ad hoc, runs verification and fixture tests, and builds everything in a work folder before moving it into place. The release contains the installer ZIP, source ZIP, `SHA256SUMS.txt`, and `Prepare VFD Beta.command`, generated from the template with the signed installer executable’s SHA-256 filled in.

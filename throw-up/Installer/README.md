@@ -13,10 +13,10 @@ The embedded payload is checked against a SHA-256 manifest, its bundle identity,
 Build from the THROW-UP source root after building the VST3:
 
 ```sh
-bash Installer/build-installer.sh "/absolute/path/THROW-UP.vst3" "/absolute/path/new-installer-output" 0.1.4
+bash Installer/build-installer.sh "/absolute/path/THROW-UP.vst3" "/absolute/path/THROW-UP.component" "/absolute/path/new-installer-output" 0.2.0 /absolute/path/whats-new.json
 ```
 
-The third argument must match the built plug-in. The optional fourth argument sets the installer build independently; it defaults to the plug-in version. The output directory must not already contain `Install THROW-UP.app`. The script compiles the native app, copies the embedded plug-in and verifies its existing signature (it never re-signs it), creates its manifest, signs the installer, verifies both bundles, and runs isolated checks covering host detection, installation, updates, rollback and preservation of existing YOI-BOI plug-ins. It does not install the plug-in or write to the user's VST3 folder.
+Arguments: the VST3, the AU (.component), the output folder, the version (which must match both built bundles), the what's-new JSON (the suite's file works; only this plug-in's entry is required), and optionally an installer build number that defaults to the version. The output directory must not already contain `Install THROW-UP.app`. The script compiles the native app, copies the embedded plug-in and verifies its existing signature (it never re-signs it), creates its manifest, signs the installer, verifies both bundles, and runs isolated checks covering host detection, installation, updates, rollback and preservation of existing YOI-BOI plug-ins. It does not install the plug-in or write to the user's VST3 folder.
 
 The compiled executable supports `--inspect-payload`, `--check-hosts` and `--self-test`; it has no silent install option. The installer uses `Assets/AppIcon.icns`; the plug-in uses the matching THROW-UP icon supplied with the source.
 
@@ -26,7 +26,7 @@ To run the isolated installer tests before a VST3 payload is ready:
 mkdir -p build/installer-checks
 xcrun swiftc -O -target arm64-apple-macosx12.0 \
   -module-cache-path build/installer-checks/module-cache \
-  Installer/InstallerCore.swift Installer/InstallerTests.swift \
+  Installer/InstallerCore.swift Installer/InstallerGuidance.swift Installer/InstallerTests.swift \
   Installer/InstallerApp.swift Installer/main.swift \
   -framework AppKit -framework CryptoKit \
   -o build/installer-checks/THROW-UP-Installer
@@ -34,3 +34,5 @@ build/installer-checks/THROW-UP-Installer --self-test
 ```
 
 The app and plug-in are signed locally with an ad hoc identity. Public distribution without macOS's **Open Anyway** step requires a Developer ID certificate and Apple notarization. This release is not notarized.
+
+Since suite 1.3.0 the installer also installs the Audio Unit (`~/Library/Audio/Plug-Ins/Components`, for Logic Pro and GarageBand). VST3 and AU each have a checkbox; a format whose installed bytes already match is left untouched; the AU's AudioComponents codes are verified like the VST3 class IDs; Logic Pro, GarageBand and MainStage must be quit only when the AU is selected; and after an AU install the installer asks macOS to refresh its Audio Unit list (restart Logic afterwards). The window shows this release's What's new line, and a Next steps sheet gives rescan directions for the audio apps on this Mac.

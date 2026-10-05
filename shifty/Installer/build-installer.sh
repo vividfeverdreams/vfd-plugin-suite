@@ -1,31 +1,43 @@
 #!/bin/bash
 set -euo pipefail
 
-# Usage: Installer/build-installer.sh /absolute/SHIFTY.vst3 /absolute/output-directory version [installer-build]
+# Usage: Installer/build-installer.sh "/absolute/SHIFTY.vst3" "/absolute/SHIFTY.component" /absolute/output-directory 0.5.0 /absolute/whats-new.json [installer-build]
+# The what's-new JSON may be the suite's file; only the SHIFTY entry is required and shown.
 installer_source_dir="$(cd "$(dirname "$0")" && pwd -P)"
 installer_icon="$installer_source_dir/../Assets/AppIcon.icns"
-plugin_source="${1:?Supply the built VST3 bundle path}"
-installer_output="${2:?Supply the output directory}"
-installer_version="${3:?Supply the plug-in version, for example 0.1.0}"
-installer_build="${4:-$installer_version}"
-case "$plugin_source" in /*) ;; *) printf 'VST3 path must be absolute.\n' >&2; exit 1 ;; esac
-case "$installer_output" in /*) ;; *) printf 'Output path must be absolute.\n' >&2; exit 1 ;; esac
+plugin_vst3="${1:?Supply the built VST3 bundle path}"
+plugin_au="${2:?Supply the built Audio Unit (.component) bundle path}"
+installer_output="${3:?Supply the output directory}"
+installer_version="${4:?Supply the plug-in version, for example 0.5.0}"
+installer_whats_new="${5:?Supply the whats-new.json file}"
+installer_build="${6:-$installer_version}"
+for installer_path in "$plugin_vst3" "$plugin_au" "$installer_output" "$installer_whats_new"; do
+    case "$installer_path" in /*) ;; *) printf 'Paths must be absolute: %s\n' "$installer_path" >&2; exit 1 ;; esac
+done
 if [[ ! "$installer_version" =~ ^[0-9]+(\.[0-9]+){1,3}$ || ! "$installer_build" =~ ^[0-9]+(\.[0-9]+){1,3}$ ]]; then
-    printf 'Version must contain two to four numeric components, for example 0.1.0.\n' >&2
+    printf 'Version must contain two to four numeric components, for example 0.5.0.\n' >&2
     exit 1
 fi
-if [[ ! -d "$plugin_source" || "$(basename "$plugin_source")" != "SHIFTY.vst3" || ! -f "$plugin_source/Contents/Info.plist" || ! -x "$plugin_source/Contents/MacOS/SHIFTY" ]]; then
-    printf 'Supply a built SHIFTY.vst3 bundle with its executable.\n' >&2
-    exit 1
-fi
+for installer_bundle in "$plugin_vst3" "$plugin_au"; do
+    installer_kind="${installer_bundle##*.}"
+    if [[ ! -d "$installer_bundle" || "$(basename "$installer_bundle")" != "SHIFTY.$installer_kind" || ( "$installer_kind" != vst3 && "$installer_kind" != component ) \
+          || ! -f "$installer_bundle/Contents/Info.plist" || ! -x "$installer_bundle/Contents/MacOS/SHIFTY" ]]; then
+        printf 'Supply built SHIFTY.vst3 and SHIFTY.component bundles with their executables (got %s).\n' "$installer_bundle" >&2
+        exit 1
+    fi
+done
+[[ "$(basename "$plugin_vst3")" == "SHIFTY.vst3" && "$(basename "$plugin_au")" == "SHIFTY.component" ]] || { printf 'Supply the VST3 first, then the AU.\n' >&2; exit 1; }
 if [[ ! -f "$installer_icon" ]]; then
     printf 'Missing installer icon: %s\n' "$installer_icon" >&2
     exit 1
 fi
+[[ -f "$installer_whats_new" ]] || { printf 'Missing what'"'"'s-new JSON: %s\n' "$installer_whats_new" >&2; exit 1; }
 # Normalize explicit absolute paths before hashing bundle-relative filenames.
 # Foundation resolves '..' while enumerating, so an unnormalized root can produce
 # incorrect manifest keys even though all payload bytes are valid.
-plugin_source="$(cd "$plugin_source" && pwd -P)"
+plugin_vst3="$(cd "$plugin_vst3" && pwd -P)"
+plugin_au="$(cd "$plugin_au" && pwd -P)"
+installer_whats_new="$(cd "$(dirname "$installer_whats_new")" && pwd -P)/$(basename "$installer_whats_new")"
 mkdir -p "$installer_output"
 installer_output="$(cd "$installer_output" && pwd -P)"
 if [[ "$installer_output" == "/" || "$installer_output" == "$HOME" ]]; then
@@ -36,19 +48,24 @@ if [[ -e "$installer_output/Install SHIFTY.app" ]]; then
     printf 'Output already exists: %s\nUse a fresh output directory.\n' "$installer_output/Install SHIFTY.app" >&2
     exit 1
 fi
-mkdir -p "$installer_output"
 installer_work="$(mktemp -d "$installer_output/.shifty-installer-build.XXXXXX")"
 trap 'rm -rf "$installer_work"' EXIT
 installer_app="$installer_work/Install SHIFTY.app"
+installer_executable="$installer_app/Contents/MacOS/SHIFTY-Installer"
 mkdir -p "$installer_app/Contents/MacOS" "$installer_app/Contents/Resources/Payload"
 cp "$installer_icon" "$installer_app/Contents/Resources/AppIcon.icns"
 xcrun swiftc -O -target arm64-apple-macosx12.0 -module-cache-path "$installer_work/module-cache" \
-    "$installer_source_dir/InstallerCore.swift" "$installer_source_dir/InstallerTests.swift" \
+    "$installer_source_dir/InstallerCore.swift" "$installer_source_dir/InstallerGuidance.swift" "$installer_source_dir/InstallerTests.swift" \
     "$installer_source_dir/InstallerApp.swift" "$installer_source_dir/main.swift" \
-    -framework AppKit -framework CryptoKit -o "$installer_app/Contents/MacOS/SHIFTY-Installer"
-ditto --noqtn "$plugin_source" "$installer_app/Contents/Resources/Payload/SHIFTY.vst3"
-# Preserve the supplied plug-in bytes and signature: verify it, never re-sign the payload.
-codesign --verify --deep --strict "$installer_app/Contents/Resources/Payload/SHIFTY.vst3" || { printf 'The supplied plug-in is not validly signed. Sign the plug-in build, then retry.\n' >&2; exit 1; }
+    -framework AppKit -framework CryptoKit -o "$installer_executable"
+ditto --noqtn "$plugin_vst3" "$installer_app/Contents/Resources/Payload/SHIFTY.vst3"
+ditto --noqtn "$plugin_au" "$installer_app/Contents/Resources/Payload/SHIFTY.component"
+# Preserve the supplied plug-in bytes and signatures: verify them, never re-sign the payloads.
+for installer_payload in "$installer_app/Contents/Resources/Payload/SHIFTY.vst3" "$installer_app/Contents/Resources/Payload/SHIFTY.component"; do
+    codesign --verify --deep --strict "$installer_payload" || { printf 'The supplied plug-in is not validly signed: %s\n' "$installer_payload" >&2; exit 1; }
+done
+"$installer_executable" --check-whats-new "$installer_whats_new"
+cp "$installer_whats_new" "$installer_app/Contents/Resources/whats-new.json"
 cat > "$installer_app/Contents/Info.plist" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -66,13 +83,12 @@ cat > "$installer_app/Contents/Info.plist" <<EOF
 <key>NSPrincipalClass</key><string>NSApplication</string>
 </dict></plist>
 EOF
-"$installer_app/Contents/MacOS/SHIFTY-Installer" --make-manifest \
-    "$installer_app/Contents/Resources/Payload/SHIFTY.vst3" \
+"$installer_executable" --make-manifest "$installer_app/Contents/Resources/Payload" \
     "$installer_app/Contents/Resources/payload-manifest.json" "$installer_version"
 codesign --force --sign - "$installer_app"
 codesign --verify --deep --strict "$installer_app"
-"$installer_app/Contents/MacOS/SHIFTY-Installer" --inspect-payload
-"$installer_app/Contents/MacOS/SHIFTY-Installer" --self-test > "$installer_work/installer-tests.txt"
+"$installer_executable" --inspect-payload
+"$installer_executable" --self-test > "$installer_work/installer-tests.txt"
 mv "$installer_app" "$installer_output/Install SHIFTY.app"
 cp "$installer_work/installer-tests.txt" "$installer_output/installer-tests.txt"
 printf 'Built and verified: %s\n' "$installer_output/Install SHIFTY.app"

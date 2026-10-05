@@ -6,6 +6,10 @@ final class InstallerDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate
     private let status = NSTextField(wrappingLabelWithString: "Quit Ableton Live and any other audio app before installing.")
     private let progress = NSProgressIndicator()
     private var busy = false
+    private let vst3Box = NSButton(checkboxWithTitle: "VST3  →  ~/Library/Audio/Plug-Ins/VST3", target: nil, action: nil)
+    private let auBox = NSButton(checkboxWithTitle: "Audio Unit for Logic Pro and GarageBand  →  ~/Library/Audio/Plug-Ins/Components",
+                                 target: nil, action: nil)
+    private let whatsNewLabel = NSTextField(wrappingLabelWithString: "")
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         installMainMenu()
@@ -29,18 +33,28 @@ final class InstallerDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate
         subtitle.frame = NSRect(x: 36, y: 377, width: 520, height: 22)
         content.addSubview(subtitle)
         let explanation = NSTextField(wrappingLabelWithString:
-            "One installed plug-in. Your sounds come with you.\n\nInstall YOI-BOI in your user VST3 folder, or update the copy already there. Your saved presets stay in place.")
-        explanation.font = .systemFont(ofSize: 16)
+            "One installed plug-in. Your sounds come with you.\n\nInstall YOI-BOI as a VST3 and an Audio Unit, or update the copy already there. Your saved presets stay in place.")
+        explanation.font = .systemFont(ofSize: 14)
         explanation.textColor = NSColor(white: 0.94, alpha: 1)
-        explanation.frame = NSRect(x: 36, y: 262, width: 518, height: 103)
+        explanation.frame = NSRect(x: 36, y: 296, width: 518, height: 72)
         content.addSubview(explanation)
-        let location = label("~/Library/Audio/Plug-Ins/VST3/YOI-BOI.vst3", size: 12, weight: .medium,
-                             color: NSColor(calibratedRed: 0.72, green: 0.70, blue: 0.9, alpha: 1))
-        location.frame = NSRect(x: 36, y: 232, width: 518, height: 22)
-        content.addSubview(location)
+        let accent = NSColor(calibratedRed: 0.72, green: 0.70, blue: 0.9, alpha: 1)
+        whatsNewLabel.frame = NSRect(x: 36, y: 262, width: 518, height: 30)
+        whatsNewLabel.font = .systemFont(ofSize: 11)
+        whatsNewLabel.textColor = accent
+        whatsNewLabel.stringValue = Self.whatsNewText()
+        whatsNewLabel.cell?.truncatesLastVisibleLine = true
+        content.addSubview(whatsNewLabel)
+        for (box, y) in [(vst3Box, CGFloat(236)), (auBox, CGFloat(212))] {
+            box.frame = NSRect(x: 34, y: y, width: 522, height: 20)
+            box.state = .on
+            box.attributedTitle = NSAttributedString(string: box.title,
+                attributes: [.foregroundColor: accent, .font: NSFont.systemFont(ofSize: 12, weight: .medium)])
+            content.addSubview(box)
+        }
         status.font = .systemFont(ofSize: 14)
         status.textColor = NSColor(calibratedRed: 0.84, green: 0.96, blue: 0.49, alpha: 1)
-        status.frame = NSRect(x: 36, y: 112, width: 518, height: 102)
+        status.frame = NSRect(x: 36, y: 104, width: 518, height: 100)
         content.addSubview(status)
         action.target = self
         action.action = #selector(install)
@@ -90,7 +104,7 @@ final class InstallerDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate
         return result
     }
 
-    static func runningHosts(destination: URL) -> [String] {
+    static func runningHosts(formats: Set<PluginFormat>) -> [String] {
         let ownPID = ProcessInfo.processInfo.processIdentifier
         let applications = NSWorkspace.shared.runningApplications
         var excludedPIDs: Set<Int32> = [ownPID]
@@ -99,48 +113,69 @@ final class InstallerDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate
         }
         var found = applications.filter { app in
             InstallerHostDetection.isAudioApplication(bundleIdentifier: app.bundleIdentifier,
-                name: app.localizedName, processID: app.processIdentifier, installerProcessID: ownPID)
+                name: app.localizedName, processID: app.processIdentifier, installerProcessID: ownPID, formats: formats)
         }.map { $0.localizedName ?? $0.bundleIdentifier ?? "Audio application" }
-        let executable = destination.appendingPathComponent("Contents/MacOS/YOI-BOI")
-        if InstallerEngine.exists(executable) {
-            // Covers hosts we do not recognize by application name, without changing or terminating them.
-            found.append(contentsOf: InstallerHostDetection.openFileUsers(paths: [executable.path], excluding: excludedPIDs))
-        }
+        // Covers hosts we do not recognize by application name, without changing or terminating them.
+        let locations = InstallLocations.standard
+        let executables = formats.map {
+            locations.destinationRoot($0).appendingPathComponent("YOI-BOI.\($0.fileExtension)/Contents/MacOS/YOI-BOI")
+        }.filter { InstallerEngine.exists($0) }.map(\.path)
+        found.append(contentsOf: InstallerHostDetection.openFileUsers(paths: executables, excluding: excludedPIDs))
         return Array(Set(found))
     }
 
-    /// A previous copy that cannot be restored automatically is kept here, outside every folder audio apps scan.
-    static var recoveryRoot: URL {
-        FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Library/Application Support/Vivid Fever Dreams/Recovered", isDirectory: true)
+    /// This release's What's new notes, shown above the format checkboxes.
+    static func whatsNewText() -> String {
+        guard let url = Bundle.main.url(forResource: "whats-new", withExtension: "json"), let data = try? Data(contentsOf: url),
+              let notes = try? WhatsNew.parse(data, requiredNames: ["YOI-BOI"], allowOtherNames: true), let lines = notes["YOI-BOI"] else { return "" }
+        let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? ""
+        return "What’s new in \(version): " + lines.joined(separator: " · ")
+    }
+
+    /// Rescan directions for the audio apps installed on this Mac.
+    static func nextSteps(_ result: InstallResult) -> [String] {
+        let hosts = Set(RescanGuidance.allBundleIdentifiers.filter { NSWorkspace.shared.urlForApplication(withBundleIdentifier: $0) != nil })
+        var steps = RescanGuidance.steps(installedBundleIdentifiers: hosts, formats: Set(result.installed + result.updated + result.skipped))
+        if result.audioUnitsRefreshed {
+            steps.append("macOS was asked to refresh its Audio Unit list. Restart Logic Pro, GarageBand or MainStage before looking for the new Audio Unit.")
+        }
+        return steps
     }
 
     @objc private func install() {
         guard !busy else { return }
+        var formats = Set<PluginFormat>()
+        if vst3Box.state == .on { formats.insert(.vst3) }
+        if auBox.state == .on { formats.insert(.au) }
+        guard !formats.isEmpty else { status.stringValue = "Tick VST3, Audio Unit or both."; return }
         busy = true
+        vst3Box.isEnabled = false
+        auBox.isEnabled = false
         action.isEnabled = false
         status.stringValue = "Checking the plug-in and preparing your update…"
         progress.startAnimation(nil)
         let resources = Bundle.main.resourceURL!
-        let destination = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Library/Audio/Plug-Ins/VST3/YOI-BOI.vst3", isDirectory: true)
         DispatchQueue.global(qos: .userInitiated).async {
             do {
                 let manifest = try InstallerEngine.readManifest(resources.appendingPathComponent("payload-manifest.json"))
-                let engine = InstallerEngine(payload: resources.appendingPathComponent("Payload/YOI-BOI.vst3"),
-                    manifest: manifest, destination: destination,
-                    systemCopy: URL(fileURLWithPath: "/Library/Audio/Plug-Ins/VST3/YOI-BOI.vst3"),
-                    recoveryRoot: Self.recoveryRoot,
-                    runningHosts: { Self.runningHosts(destination: destination) })
-                let result = try engine.install()
+                let engine = InstallerEngine(payloadRoot: resources.appendingPathComponent("Payload"), manifest: manifest,
+                    locations: .standard, runningHosts: { Self.runningHosts(formats: $0) })
+                let result = try engine.install(formats: formats)
+                let steps = Self.nextSteps(result)
                 Self.writeLog(result.log)
                 DispatchQueue.main.async {
                     self.progress.stopAnimation(nil)
                     self.busy = false
-                    self.status.stringValue = "YOI-BOI \(result.version) is \(result.updated ? "updated" : "installed").\n\nOpen Live → Settings → Plug-Ins → Rescan. Load YOI-BOI on a MIDI track, or reopen your existing project."
+                    self.status.stringValue = "YOI-BOI \(result.version): \(result.summary).\n\nOpen Live → Settings → Plug-Ins → Rescan. Load YOI-BOI on a MIDI track, or reopen your existing project."
                     self.action.title = "Done"
                     self.action.action = #selector(self.closeWindow)
                     self.action.isEnabled = true
+                    let alert = NSAlert()
+                    alert.messageText = "Next steps"
+                    alert.informativeText = steps.joined(separator: "\n\n")
+                    alert.alertStyle = .informational
+                    alert.addButton(withTitle: "OK")
+                    alert.beginSheetModal(for: self.window)
                 }
             } catch {
                 Self.writeLog(["Installation did not complete.", error.localizedDescription])
@@ -148,6 +183,8 @@ final class InstallerDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate
                     self.progress.stopAnimation(nil)
                     self.busy = false
                     self.action.isEnabled = true
+                    self.vst3Box.isEnabled = true
+                    self.auBox.isEnabled = true
                     self.status.stringValue = "Installation did not complete. Review the message below, then try again."
                     let alert = NSAlert()
                     alert.messageText = "YOI-BOI could not be installed"
