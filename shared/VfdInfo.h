@@ -254,26 +254,19 @@ public:
         setVisible(false);
     }
 
-    ~InfoOverlay() override
-    {
-        if (isCurrentlyModal()) exitModalState(0);
-    }
-
     void open(juce::Component* source)
     {
         returnFocus = source;
         setVisible(true);
         toFront(false);
+        // The page covers the editor and contains keyboard focus without going modal: JUCE's modal state is
+        // shared by every instance of a plug-in, so a modal page here would block the other open instances.
         // Editors can also be rendered without a peer by host validation tools.
-        if (getPeer() != nullptr) {
-            if (!isCurrentlyModal()) enterModalState(false, nullptr, false);
-            panel.focusOrder().front()->grabKeyboardFocus();
-        }
+        if (getPeer() != nullptr) panel.focusOrder().front()->grabKeyboardFocus();
     }
 
     void dismiss()
     {
-        if (isCurrentlyModal()) exitModalState(0);
         setVisible(false);
         if (returnFocus != nullptr && returnFocus->isShowing() && returnFocus->getPeer() != nullptr)
             returnFocus->grabKeyboardFocus();
@@ -284,8 +277,9 @@ public:
         constexpr float width = 480, height = 595;
         const auto scale = juce::jmin(1.0f, juce::jmin((getWidth() - 28.0f) / width, (getHeight() - 28.0f) / height));
         panel.setBounds(0, 0, static_cast<int>(width), static_cast<int>(height));
+        // Whole-pixel offsets keep the page's text and hairlines crisp on 1x displays.
         panel.setTransform(juce::AffineTransform::scale(juce::jmax(0.1f, scale))
-            .translated((getWidth() - width * scale) * 0.5f, (getHeight() - height * scale) * 0.5f));
+            .translated(std::round((getWidth() - width * scale) * 0.5f), std::round((getHeight() - height * scale) * 0.5f)));
     }
 
     void paint(juce::Graphics& g) override { g.fillAll(juce::Colours::black.withAlpha(0.68f)); }
@@ -309,13 +303,17 @@ public:
             for (int i = 0; i < static_cast<int>(buttons.size()); ++i)
                 if (buttons[static_cast<size_t>(i)]->hasKeyboardFocus(true)) current = i;
             const int count = static_cast<int>(buttons.size());
-            const int next = (current + (key.getModifiers().isShiftDown() ? count - 1 : 1) + count) % count;
+            const bool backwards = key.getModifiers().isShiftDown();
+            const int next = current < 0 ? (backwards ? count - 1 : 0) : (current + (backwards ? count - 1 : 1)) % count;
             if (getPeer() != nullptr) buttons[static_cast<size_t>(next)]->grabKeyboardFocus();
             return true;
         }
-        // Buttons handle their own activation first. Other keys must not reach
-        // the editor's preset navigation or Undo/Redo shortcuts through this page.
-        return true;
+        // Buttons handle their own activation first. Command shortcuts (save, quit, ...) go back to the host so
+        // they still work while the page is open; Undo/Redo and every other key stay here so they can't change
+        // the sound or presets under the page.
+        const auto modifiers = key.getModifiers();
+        const bool undoRedo = modifiers.isCommandDown() && (key.getKeyCode() == 'z' || key.getKeyCode() == 'Z');
+        return undoRedo || !modifiers.isCommandDown();
     }
 
 private:
