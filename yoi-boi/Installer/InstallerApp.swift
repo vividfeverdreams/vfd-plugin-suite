@@ -8,6 +8,7 @@ final class InstallerDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate
     private var busy = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        installMainMenu()
         window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 590, height: 490),
                           styleMask: [.titled, .closable, .miniaturizable], backing: .buffered, defer: false)
         window.title = "YOI-BOI Installer"
@@ -61,6 +62,27 @@ final class InstallerDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate
         NSApplication.shared.activate(ignoringOtherApps: true)
     }
 
+    private func installMainMenu() {
+        let mainMenu = NSMenu()
+        let appItem = NSMenuItem()
+        let appMenu = NSMenu()
+        appMenu.addItem(withTitle: "Quit Install YOI-BOI", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+        appItem.submenu = appMenu
+        mainMenu.addItem(appItem)
+        let fileItem = NSMenuItem()
+        let fileMenu = NSMenu(title: "File")
+        fileMenu.addItem(withTitle: "Close", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
+        fileItem.submenu = fileMenu
+        mainMenu.addItem(fileItem)
+        let editItem = NSMenuItem()
+        let editMenu = NSMenu(title: "Edit")
+        editMenu.addItem(withTitle: "Copy", action: #selector(NSText.copy(_:)), keyEquivalent: "c")
+        editMenu.addItem(withTitle: "Select All", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
+        editItem.submenu = editMenu
+        mainMenu.addItem(editItem)
+        NSApplication.shared.mainMenu = mainMenu
+    }
+
     private func label(_ text: String, size: CGFloat, weight: NSFont.Weight, color: NSColor) -> NSTextField {
         let result = NSTextField(labelWithString: text)
         result.font = .systemFont(ofSize: size, weight: weight)
@@ -68,27 +90,29 @@ final class InstallerDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate
         return result
     }
 
-    private static func runningHosts(destination: URL) -> [String] {
-        let prefixes = ["com.ableton.", "com.apple.logic", "com.apple.garageband", "com.cockos.reaper",
-                        "com.steinberg.", "com.bitwig.", "com.presonus.", "com.image-line.",
-                        "com.motu.", "com.avid.protools", "com.tracktion.", "com.yoiboi.synth"]
-        let names = ["ableton live", "reaper", "cubase", "nuendo", "bitwig studio", "studio one",
-                     "fl studio", "logic pro", "garageband", "pluginval", "digital performer", "pro tools"]
-        var found = NSWorkspace.shared.runningApplications.filter { app in
-            guard app.processIdentifier != ProcessInfo.processInfo.processIdentifier else { return false }
-            let id = (app.bundleIdentifier ?? "").lowercased()
-            let name = (app.localizedName ?? "").lowercased()
-            return prefixes.contains(where: id.hasPrefix) || names.contains(where: name.hasPrefix)
-        }.compactMap { $0.localizedName }
+    static func runningHosts(destination: URL) -> [String] {
+        let ownPID = ProcessInfo.processInfo.processIdentifier
+        let applications = NSWorkspace.shared.runningApplications
+        var excludedPIDs: Set<Int32> = [ownPID]
+        for app in applications where InstallerHostDetection.isInstaller(app.bundleIdentifier) {
+            excludedPIDs.insert(app.processIdentifier)
+        }
+        var found = applications.filter { app in
+            InstallerHostDetection.isAudioApplication(bundleIdentifier: app.bundleIdentifier,
+                name: app.localizedName, processID: app.processIdentifier, installerProcessID: ownPID)
+        }.map { $0.localizedName ?? $0.bundleIdentifier ?? "Audio application" }
         let executable = destination.appendingPathComponent("Contents/MacOS/YOI-BOI")
         if InstallerEngine.exists(executable) {
             // Covers hosts we do not recognize by application name, without changing or terminating them.
-            if let output = try? InstallerEngine.run("/usr/sbin/lsof", ["-Fpc", "--", executable.path]) {
-                let processes = output.split(separator: "\n").filter { $0.first == "c" }.map { String($0.dropFirst()) }
-                found.append(contentsOf: processes)
-            }
+            found.append(contentsOf: InstallerHostDetection.openFileUsers(paths: [executable.path], excluding: excludedPIDs))
         }
         return Array(Set(found))
+    }
+
+    /// A previous copy that cannot be restored automatically is kept here, outside every folder audio apps scan.
+    static var recoveryRoot: URL {
+        FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Application Support/Vivid Fever Dreams/Recovered", isDirectory: true)
     }
 
     @objc private func install() {
@@ -106,6 +130,7 @@ final class InstallerDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate
                 let engine = InstallerEngine(payload: resources.appendingPathComponent("Payload/YOI-BOI.vst3"),
                     manifest: manifest, destination: destination,
                     systemCopy: URL(fileURLWithPath: "/Library/Audio/Plug-Ins/VST3/YOI-BOI.vst3"),
+                    recoveryRoot: Self.recoveryRoot,
                     runningHosts: { Self.runningHosts(destination: destination) })
                 let result = try engine.install()
                 Self.writeLog(result.log)

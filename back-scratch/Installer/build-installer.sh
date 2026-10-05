@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # Usage: Installer/build-installer.sh /absolute/BACK-SCRATCH.vst3 /absolute/output-directory version [installer-build]
-installer_source_dir="$(cd "$(dirname "$0")" && pwd)"
+installer_source_dir="$(cd "$(dirname "$0")" && pwd -P)"
 installer_icon="$installer_source_dir/../Assets/AppIcon.icns"
 plugin_source="${1:?Supply the built VST3 bundle path}"
 installer_output="${2:?Supply the output directory}"
@@ -47,7 +47,8 @@ xcrun swiftc -O -target arm64-apple-macosx12.0 -module-cache-path "$installer_wo
     "$installer_source_dir/InstallerApp.swift" "$installer_source_dir/main.swift" \
     -framework AppKit -framework CryptoKit -o "$installer_app/Contents/MacOS/BACK-SCRATCH-Installer"
 ditto --noqtn "$plugin_source" "$installer_app/Contents/Resources/Payload/BACK-SCRATCH.vst3"
-codesign --force --deep --sign - "$installer_app/Contents/Resources/Payload/BACK-SCRATCH.vst3"
+# Preserve the supplied plug-in bytes and signature: verify it, never re-sign the payload.
+codesign --verify --deep --strict "$installer_app/Contents/Resources/Payload/BACK-SCRATCH.vst3" || { printf 'The supplied plug-in is not validly signed. Sign the plug-in build, then retry.\n' >&2; exit 1; }
 cat > "$installer_app/Contents/Info.plist" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">

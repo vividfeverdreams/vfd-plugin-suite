@@ -73,10 +73,12 @@ EOF
 /usr/bin/codesign --verify --deep --strict "$installer_app"
 "$installer_app/Contents/MacOS/VFD-Suite-Installer" --inspect-payload > "$installer_work/payload-verification.txt"
 "$installer_app/Contents/MacOS/VFD-Suite-Installer" --self-test > "$installer_work/installer-tests.txt"
-cp "$installer_source_dir/README.md" "$installer_output/README.md"
-cp "$installer_resources/suite-manifest.json" "$installer_output/suite-manifest.json"
-cp "$installer_work/payload-verification.txt" "$installer_output/payload-verification.txt"
-cp "$installer_work/installer-tests.txt" "$installer_output/installer-tests.txt"
+# Every release artifact is produced inside the work directory first. Nothing reaches the output directory
+# until all of them exist, so a failed step never leaves a half-finished release that blocks a rerun.
+installer_stage="$installer_work/release"
+mkdir -p "$installer_stage"
+installer_app_zip="Vivid-Fever-Dreams-Suite-v$installer_version-macOS-AppleSilicon.zip"
+installer_source_zip="VFD-Suite-Installer-Source-v$installer_version.zip"
 installer_source_pack="$installer_work/VFD-Suite-Installer-Source"
 mkdir -p "$installer_source_pack/Assets"
 cp "$installer_source_dir/InstallerCore.swift" "$installer_source_dir/InstallerTests.swift" \
@@ -84,14 +86,26 @@ cp "$installer_source_dir/InstallerCore.swift" "$installer_source_dir/InstallerT
     "$installer_source_dir/MakeAssets.swift" "$installer_source_dir/build-installer.sh" \
     "$installer_source_dir/README.md" "$installer_source_pack/"
 cp "$installer_source_dir/Assets/VfdLogo.svg" "$installer_source_pack/Assets/"
-/usr/bin/ditto -c -k --keepParent --sequesterRsrc "$installer_source_pack" \
-    "$installer_output/VFD-Suite-Installer-Source-v$installer_version.zip"
-mv "$installer_app" "$installer_output/Install Vivid Fever Dreams Suite.app"
-/usr/bin/ditto -c -k --keepParent --sequesterRsrc "$installer_output/Install Vivid Fever Dreams Suite.app" \
-    "$installer_output/Vivid-Fever-Dreams-Suite-v$installer_version-macOS-AppleSilicon.zip"
+/usr/bin/ditto -c -k --keepParent --sequesterRsrc "$installer_source_pack" "$installer_stage/$installer_source_zip"
+/usr/bin/ditto -c -k --keepParent --sequesterRsrc "$installer_app" "$installer_stage/$installer_app_zip"
 (
-    cd "$installer_output"
-    /usr/bin/shasum -a 256 "Vivid-Fever-Dreams-Suite-v$installer_version-macOS-AppleSilicon.zip" \
-        "VFD-Suite-Installer-Source-v$installer_version.zip" > SHA256SUMS.txt
+    cd "$installer_stage"
+    /usr/bin/shasum -a 256 "$installer_app_zip" "$installer_source_zip" > SHA256SUMS.txt
 )
+cp "$installer_source_dir/README.md" "$installer_stage/README.md"
+cp "$installer_resources/suite-manifest.json" "$installer_stage/suite-manifest.json"
+cp "$installer_work/payload-verification.txt" "$installer_stage/payload-verification.txt"
+cp "$installer_work/installer-tests.txt" "$installer_stage/installer-tests.txt"
+for installer_artifact in README.md suite-manifest.json payload-verification.txt installer-tests.txt \
+    "$installer_source_zip" "$installer_app_zip" SHA256SUMS.txt; do
+    if [[ -e "$installer_output/$installer_artifact" ]]; then
+        printf 'Output already contains %s. Use a fresh output directory.\n' "$installer_artifact" >&2; exit 1
+    fi
+done
+for installer_artifact in README.md suite-manifest.json payload-verification.txt installer-tests.txt \
+    "$installer_source_zip" "$installer_app_zip" SHA256SUMS.txt; do
+    mv "$installer_stage/$installer_artifact" "$installer_output/$installer_artifact"
+done
+# The app moves last: its presence marks a complete release.
+mv "$installer_app" "$installer_output/Install Vivid Fever Dreams Suite.app"
 printf 'Built and verified: %s\n' "$installer_output/Install Vivid Fever Dreams Suite.app"

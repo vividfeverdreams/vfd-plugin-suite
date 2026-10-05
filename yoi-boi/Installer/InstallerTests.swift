@@ -12,6 +12,8 @@ func runInstallerTests() throws {
     try fm.createDirectory(at: root, withIntermediateDirectories: true)
     defer { try? fm.removeItem(at: root) }
     var count = 0
+    let componentID = "0123456789ABCDEF0123456789ABCDEF"
+    let controllerID = "FEDCBA9876543210FEDCBA9876543210"
     func expect(_ truth: @autoclosure () throws -> Bool, _ message: String) throws {
         guard try truth() else { throw InstallError.message("SELF-TEST FAILED: \(message)") }
         count += 1
@@ -21,6 +23,60 @@ func runInstallerTests() throws {
         var failed = false
         do { try action() } catch { failed = true }
         try expect(failed, description)
+    }
+    func rejectsWith(_ description: String, containing text: String, _ action: () throws -> Void) throws {
+        var message: String?
+        do { try action() } catch { message = error.localizedDescription }
+        try expect(message?.contains(text) == true, description)
+    }
+    let installerPID: Int32 = 100
+    let otherInstallerPID: Int32 = 101
+    try expect(!InstallerHostDetection.isAudioApplication(bundleIdentifier: "com.yoiboi.installer",
+        name: "YOI-BOI-Installer", processID: otherInstallerPID, installerProcessID: installerPID),
+        "a second YOI-BOI installer is not mistaken for an audio host")
+    try expect(!InstallerHostDetection.isAudioApplication(bundleIdentifier: "COM.YOIBOI.INSTALLER",
+        name: "Install YOI-BOI", processID: otherInstallerPID, installerProcessID: installerPID),
+        "installer exclusion accepts case-insensitive bundle identifiers")
+    try expect(!InstallerHostDetection.isAudioApplication(bundleIdentifier: "com.ableton.live",
+        name: "Ableton Live", processID: installerPID, installerProcessID: installerPID),
+        "the current installer process is excluded before application matching")
+    try expect(InstallerHostDetection.isAudioApplication(bundleIdentifier: "com.ableton.live",
+        name: nil, processID: 102, installerProcessID: installerPID),
+        "Ableton is detected by bundle identifier without an application name")
+    try expect(InstallerHostDetection.isAudioApplication(bundleIdentifier: nil,
+        name: "REAPER", processID: 102, installerProcessID: installerPID),
+        "audio hosts without a bundle identifier are detected by name")
+    try expect(InstallerHostDetection.isAudioApplication(bundleIdentifier: nil,
+        name: "pluginval", processID: 102, installerProcessID: installerPID),
+        "the plugin validation host is still detected")
+    try expect(!InstallerHostDetection.isAudioApplication(bundleIdentifier: "com.yoiboi.synth.utility",
+        name: "YOI-BOI Utility", processID: 102, installerProcessID: installerPID),
+        "sharing YOI-BOI's bundle prefix does not make an app an audio host")
+    try expect(!InstallerHostDetection.isAudioApplication(bundleIdentifier: nil,
+        name: nil, processID: 102, installerProcessID: installerPID),
+        "an application with no identifying metadata is not falsely blocked")
+    let openFileOutput = """
+    cUnassociated command
+    p100
+    cYOI-BOI-Installer
+    p101
+    cYOI-BOI-Installer
+    p102
+    cUnknown Audio Host
+    p103
+    cAbleton Live
+    pnot-a-pid
+    cInvalid process
+    """
+    try expect(InstallerHostDetection.fileUsers(openFileOutput, excluding: [installerPID, otherInstallerPID])
+        == ["Unknown Audio Host", "Ableton Live"],
+        "open-file detection excludes both installers and retains real known and unknown hosts")
+    try expect(InstallerHostDetection.fileUsers("", excluding: [installerPID]).isEmpty,
+        "no open-file records means no running host")
+    let otherInstallerHosts: () -> [String] = {
+        InstallerHostDetection.isAudioApplication(bundleIdentifier: "com.yoiboi.installer",
+            name: "YOI-BOI-Installer", processID: otherInstallerPID, installerProcessID: installerPID)
+            ? ["YOI-BOI-Installer"] : []
     }
     func bundle(_ name: String, version: String) throws -> URL {
         let result = root.appendingPathComponent(name)
@@ -35,8 +91,8 @@ func runInstallerTests() throws {
             .write(to: contents.appendingPathComponent("Info.plist"))
         let module = """
         { "Classes": [
-          { "CID": "\(InstallerEngine.componentID)", "Category": "Audio Module Class", },
-          { "CID": "\(InstallerEngine.controllerID)", "Category": "Component Controller Class", },
+          { "CID": "\(componentID)", "Category": "Audio Module Class", },
+          { "CID": "\(controllerID)", "Category": "Component Controller Class", },
         ], }
         """
         try module.write(to: contents.appendingPathComponent("Resources/moduleinfo.json"), atomically: true, encoding: .utf8)
@@ -46,29 +102,34 @@ func runInstallerTests() throws {
     let payload = try bundle("payload.vst3", version: "0.1.4")
     let previous = try bundle("previous.vst3", version: "0.1.2")
     let manifest = PayloadManifest(format: 1, version: "0.1.4", bundleIdentifier: InstallerEngine.identifier,
-        componentID: InstallerEngine.componentID, controllerID: InstallerEngine.controllerID,
+        componentID: componentID, controllerID: controllerID,
         files: try InstallerEngine.fileHashes(in: payload))
     let parent = root.appendingPathComponent("User/Library/Audio/Plug-Ins/VST3")
     let destination = parent.appendingPathComponent("YOI-BOI.vst3")
     let system = root.appendingPathComponent("System/YOI-BOI.vst3")
+    let recovery = root.appendingPathComponent("User/Library/Application Support/Vivid Fever Dreams/Recovered")
     func engine(hosts: @escaping () -> [String] = { [] }) -> InstallerEngine {
         InstallerEngine(payload: payload, manifest: manifest, destination: destination,
-                        systemCopy: system, runningHosts: hosts)
+                        systemCopy: system, recoveryRoot: recovery, runningHosts: hosts)
+    }
+    /// The VST3 folder's contents, ignoring the shared suite lock file.
+    func visible() throws -> [String] {
+        try fm.contentsOfDirectory(atPath: parent.path).filter { $0 != InstallerEngine.suiteLockName }.sorted()
     }
     let preset = root.appendingPathComponent("User/Library/Application Support/YOI-BOI/Presets/keep.json")
     try fm.createDirectory(at: preset.deletingLastPathComponent(), withIntermediateDirectories: true)
     try Data("saved user sound".utf8).write(to: preset)
-    let initial = try engine().install()
-    try expect(!initial.updated && initial.version == "0.1.4", "initial install into missing user VST3 folder")
+    let initial = try engine(hosts: otherInstallerHosts).install()
+    try expect(!initial.updated && initial.version == "0.1.4", "initial installation succeeds with another installer running")
     try expect(try InstallerEngine.fileHashes(in: destination) == manifest.files, "installed payload is byte-identical")
     try expect(try String(contentsOf: preset) == "saved user sound", "saved user presets remain untouched")
     let reinstall = try engine().install()
     try expect(reinstall.updated, "same-version reinstall replaces in place")
     try fm.removeItem(at: destination)
     try fm.copyItem(at: previous, to: destination)
-    let update = try engine().install()
-    try expect(update.updated && (try InstallerEngine.identity(at: destination)) == "0.1.4", "older version updates in place")
-    try expect(try fm.contentsOfDirectory(atPath: parent.path) == ["YOI-BOI.vst3"], "successful update leaves no old version to manage")
+    let update = try engine(hosts: otherInstallerHosts).install()
+    try expect(update.updated && (try InstallerEngine.identity(at: destination)).version == "0.1.4", "older version updates in place with another installer running")
+    try expect(try visible() == ["YOI-BOI.vst3"], "successful update leaves no old version to manage")
 
     let newer = try bundle("newer.vst3", version: "0.1.10")
     try fm.removeItem(at: destination)
@@ -84,8 +145,13 @@ func runInstallerTests() throws {
     rollback.failAfterCommitForTesting = true
     try rejects("post-commit failure triggers rollback") { _ = try rollback.install() }
     try expect(try InstallerEngine.fileHashes(in: destination) == oldHashes, "rollback restores exact prior bundle")
-    try expect(try fm.contentsOfDirectory(atPath: parent.path) == ["YOI-BOI.vst3"], "rollback removes temporary new bundle")
-    try rejects("open audio host blocks update") { _ = try engine(hosts: { ["Ableton Live"] }).install() }
+    try expect(try visible() == ["YOI-BOI.vst3"], "rollback removes temporary new bundle")
+    try rejects("a classified open audio host still blocks update") {
+        _ = try engine(hosts: {
+            InstallerHostDetection.isAudioApplication(bundleIdentifier: "com.ableton.live",
+                name: "Ableton Live", processID: 102, installerProcessID: installerPID) ? ["Ableton Live"] : []
+        }).install()
+    }
     try expect(try InstallerEngine.fileHashes(in: destination) == oldHashes, "host refusal leaves existing plugin unchanged")
 
     var hostCheckCount = 0
@@ -100,7 +166,7 @@ func runInstallerTests() throws {
 
     let infoURL = destination.appendingPathComponent("Contents/Info.plist")
     let oldInfo = try Data(contentsOf: infoURL)
-    var wrongInfo = try PropertyListSerialization.propertyList(from: oldInfo, format: nil) as! [String: Any]
+    var wrongInfo = try PropertyListSerialization.propertyList(from: oldInfo, format: nil) as? [String: Any] ?? [:]
     wrongInfo["CFBundleIdentifier"] = "com.someone.unrelated"
     try PropertyListSerialization.data(fromPropertyList: wrongInfo, format: .xml, options: 0).write(to: infoURL)
     let unrelatedHashes = try InstallerEngine.fileHashes(in: destination)
@@ -110,22 +176,30 @@ func runInstallerTests() throws {
 
     let moduleURL = destination.appendingPathComponent("Contents/Resources/moduleinfo.json")
     let oldModule = try Data(contentsOf: moduleURL)
-    try String(decoding: oldModule, as: UTF8.self).replacingOccurrences(of: InstallerEngine.componentID, with: "UNRELATED")
+    try String(decoding: oldModule, as: UTF8.self).replacingOccurrences(of: componentID, with: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
         .write(to: moduleURL, atomically: true, encoding: .utf8)
     try rejects("wrong VST3 class identity is refused") { _ = try engine().install() }
+    try oldModule.write(to: moduleURL)
+
+    let differentIdentity = String(decoding: oldModule, as: UTF8.self)
+        .replacingOccurrences(of: componentID, with: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
+    try differentIdentity.write(to: moduleURL, atomically: true, encoding: .utf8)
+    let identityHashes = try InstallerEngine.fileHashes(in: destination)
+    try rejects("different valid class identity blocks update") { _ = try engine().install() }
+    try expect(try InstallerEngine.fileHashes(in: destination) == identityHashes, "different class identity stays untouched")
     try oldModule.write(to: moduleURL)
 
     try fm.removeItem(at: destination)
     try fm.createSymbolicLink(at: destination, withDestinationURL: previous)
     try rejects("symlink destination is refused") { _ = try engine().install() }
-    try expect(try InstallerEngine.identity(at: previous) == "0.1.2", "symlink target remains intact")
+    try expect(try InstallerEngine.identity(at: previous).version == "0.1.2", "symlink target remains intact")
     try fm.removeItem(at: destination)
     let realFolder = root.appendingPathComponent("linked-target")
     try fm.createDirectory(at: realFolder, withIntermediateDirectories: true)
     let linkedParent = root.appendingPathComponent("linked-parent")
     try fm.createSymbolicLink(at: linkedParent, withDestinationURL: realFolder)
     let linkedEngine = InstallerEngine(payload: payload, manifest: manifest,
-        destination: linkedParent.appendingPathComponent("YOI-BOI.vst3"), systemCopy: system, runningHosts: { [] })
+        destination: linkedParent.appendingPathComponent("YOI-BOI.vst3"), systemCopy: system, recoveryRoot: recovery, runningHosts: { [] })
     try rejects("symlink ancestor is refused") { _ = try linkedEngine.install() }
     try expect(try fm.contentsOfDirectory(atPath: realFolder.path).isEmpty, "symlink folder receives no files")
 
@@ -140,6 +214,118 @@ func runInstallerTests() throws {
     freshRollback.failAfterCommitForTesting = true
     try rejects("initial-install verification failure rolls back") { _ = try freshRollback.install() }
     try expect(!InstallerEngine.exists(destination), "failed initial install leaves no plugin")
-    try expect(try fm.contentsOfDirectory(atPath: parent.path).isEmpty, "all failed transactions clean up staging")
+    try expect(try visible().isEmpty, "all failed transactions clean up staging")
+    let priorPlugin = parent.appendingPathComponent("SHIFTY.vst3")
+    let otherPlugin = parent.appendingPathComponent("THROW-UP.vst3")
+    for item in [priorPlugin, otherPlugin] {
+        try fm.createDirectory(at: item, withIntermediateDirectories: true)
+        try Data("existing plug-in content".utf8).write(to: item.appendingPathComponent("keep.txt"))
+    }
+    let alongside = try engine().install()
+    try expect(!alongside.updated, "YOI-BOI installs beside previously installed plug-ins")
+    try expect(try String(contentsOf: priorPlugin.appendingPathComponent("keep.txt")) == "existing plug-in content",
+        "existing SHIFTY plug-in stays untouched")
+    try expect(try String(contentsOf: otherPlugin.appendingPathComponent("keep.txt")) == "existing plug-in content",
+        "existing THROW-UP plug-in stays untouched")
+
+    // P1: the download quarantine flag never reaches the VST3 folder.
+    func allPaths(_ folder: URL) -> [String] {
+        [folder.path] + (fm.enumerator(atPath: folder.path)?.compactMap { $0 as? String }.map { folder.path + "/" + $0 } ?? [])
+    }
+    func hasQuarantine(_ path: String) -> Bool { getxattr(path, "com.apple.quarantine", nil, 0, 0, XATTR_NOFOLLOW) >= 0 }
+    try fm.removeItem(at: destination)
+    let quarantinedPayload = root.appendingPathComponent("quarantined.vst3")
+    try fm.copyItem(at: payload, to: quarantinedPayload)
+    let flag = Array("0083;00000000;Safari;".utf8)
+    for path in allPaths(quarantinedPayload) {
+        guard flag.withUnsafeBytes({ setxattr(path, "com.apple.quarantine", $0.baseAddress, $0.count, 0, XATTR_NOFOLLOW) }) == 0 else {
+            throw InstallError.message("Cannot set the fixture quarantine flag on \(path)")
+        }
+    }
+    _ = try InstallerEngine(payload: quarantinedPayload, manifest: manifest, destination: destination, systemCopy: system,
+                            recoveryRoot: recovery, runningHosts: { [] }).install()
+    try expect(allPaths(quarantinedPayload).allSatisfy(hasQuarantine) && !allPaths(destination).contains(where: hasQuarantine),
+               "a quarantined payload installs without passing its quarantine flag to the installed plug-in")
+
+    // P2: launch arguments.
+    try expect(LaunchMode.parse(["app"]) == .gui && LaunchMode.parse(["app", "-psn_0_1234567"]) == .gui
+               && LaunchMode.parse(["app", "-NSDocumentRevisionsDebugMode", "YES"]) == .gui,
+               "the window opens even when macOS adds a -psn_ or runtime argument")
+    try expect(LaunchMode.parse(["app", "-psn_0_1", "--self-test"]) == .selfTest && LaunchMode.parse(["app", "--bogus"]) == .invalid
+               && LaunchMode.parse(["app", "--make-manifest", "a", "b", "1.0"]) == .makeManifest(payload: "a", manifest: "b", version: "1.0"),
+               "known options parse and unknown -- options are rejected")
+
+    // P3: the temporary copy is never a .vst3 bundle.
+    var stagedNames: [String] = []
+    let naming = engine()
+    naming.afterStagingForTesting = { stagedNames = try fm.contentsOfDirectory(atPath: parent.path).filter { $0.contains("-stage-") } }
+    _ = try naming.install()
+    try expect(stagedNames.count == 1 && stagedNames[0].hasPrefix(".yoi-boi-stage-") && !stagedNames[0].lowercased().hasSuffix(".vst3"),
+               "the temporary copy has no .vst3 extension, so audio apps never scan it")
+
+    // P3 + P6: a rollback that cannot be done safely keeps the previous copy outside the VST3 folder.
+    try fm.removeItem(at: destination)
+    try fm.copyItem(at: previous, to: destination)
+    let previousHashes = try InstallerEngine.fileHashes(in: destination)
+    let outsideEdit = destination.appendingPathComponent("Contents/Resources/outside.txt")
+    let interfered = engine()
+    interfered.afterCommitForTesting = { try Data("changed by another program".utf8).write(to: outsideEdit) }
+    interfered.failAfterCommitForTesting = true
+    try rejectsWith("a rollback blocked by an outside change reports where the previous copy was saved", containing: "was saved to") {
+        _ = try interfered.install()
+    }
+    let recovered = (try? fm.contentsOfDirectory(at: recovery, includingPropertiesForKeys: nil)) ?? []
+    try expect(recovered.count == 1 && recovered[0].pathExtension == "vst3" && (try InstallerEngine.fileHashes(in: recovered[0])) == previousHashes,
+               "the previous copy is saved, intact, in the Recovered folder outside the VST3 folder")
+    try expect(InstallerEngine.exists(outsideEdit) && !(try visible()).contains { $0.contains("-stage-") },
+               "the changed destination is never swapped back, and nothing is left in the VST3 folder")
+    try fm.removeItem(at: destination)
+    let freshInterfered = engine()
+    freshInterfered.afterCommitForTesting = { try Data("changed by another program".utf8).write(to: outsideEdit) }
+    freshInterfered.failAfterCommitForTesting = true
+    try rejects("an initial install changed by another program reports failure") { _ = try freshInterfered.install() }
+    try expect(InstallerEngine.exists(outsideEdit), "an initial install changed by another program is left in place, not removed")
+    try fm.removeItem(at: destination)
+
+    // P5: the suite installer's lock and unfinished transactions are respected.
+    let suiteLeftover = parent.appendingPathComponent(InstallerEngine.suiteTransactionPrefix + UUID().uuidString)
+    try fm.createDirectory(at: suiteLeftover, withIntermediateDirectories: false)
+    try rejectsWith("an interrupted suite installation blocks a single-plugin change", containing: "Vivid Fever Dreams Suite installer") {
+        _ = try engine().install()
+    }
+    try expect(!InstallerEngine.exists(destination) && InstallerEngine.exists(suiteLeftover), "the suite's recovery folder and the VST3 folder are untouched")
+    try fm.removeItem(at: suiteLeftover)
+    let held = open(parent.appendingPathComponent(InstallerEngine.suiteLockName).path, O_CREAT | O_RDWR, 0o600)
+    guard held >= 0, flock(held, LOCK_EX | LOCK_NB) == 0 else { throw InstallError.message("Cannot hold the fixture lock") }
+    try rejectsWith("a suite installation in progress blocks a single-plugin change", containing: "Another Vivid Fever Dreams installer") {
+        _ = try engine().install()
+    }
+    flock(held, LOCK_UN); close(held)
+    try expect(!(try engine().install()).updated, "installation proceeds once the shared lock is free")
+
+    // P8: same host list as the suite installer.
+    func host(_ identifier: String?, _ name: String?) -> Bool {
+        InstallerHostDetection.isAudioApplication(bundleIdentifier: identifier, name: name, processID: 102, installerProcessID: installerPID)
+    }
+    try expect(!host("com.apple.logic10", "Logic Pro") && !host("com.apple.garageband10", "GarageBand") && !host("com.avid.ProTools", "Pro Tools")
+               && !host("com.steinberg.activationmanager", "Steinberg Activation Manager") && !host("com.yoiboi.synth", "YOI-BOI"),
+               "Audio Unit-only hosts, vendor utilities and the plug-in's own identifier are not audio hosts")
+    try expect(host("com.steinberg.cubase13", nil) && host("com.bitwig.BitwigStudio", nil) && host(nil, "Gig Performer 5") && host(nil, "Maschine 2"),
+               "VST3 hosts are detected by identifier or name")
+    let holder = Process()
+    holder.executableURL = URL(fileURLWithPath: "/usr/bin/tail")
+    let heldFile = root.appendingPathComponent("held.bin")
+    try Data("held".utf8).write(to: heldFile)
+    holder.arguments = ["-f", heldFile.path]
+    holder.standardOutput = FileHandle.nullDevice
+    try holder.run()
+    var users: [String] = []
+    for _ in 0..<50 {
+        users = InstallerHostDetection.openFileUsers(paths: [heldFile.path, previous.path + "/Contents/Info.plist"], excluding: [])
+        if !users.isEmpty { break }
+        usleep(100_000)
+    }
+    holder.terminate(); holder.waitUntilExit()
+    try expect(users.contains("tail"), "the open-file check finds a process holding the plug-in even when another listed path is not open")
     print("Installer self-test passed: \(count) checks. All writes stayed in \(root.path).")
 }

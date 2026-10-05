@@ -8,6 +8,7 @@ final class InstallerDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate
     private var busy = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        installMainMenu()
         window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 590, height: 490),
                           styleMask: [.titled, .closable, .miniaturizable], backing: .buffered, defer: false)
         window.title = "ENERGY HARVESTER Installer"
@@ -63,6 +64,27 @@ final class InstallerDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate
         NSApplication.shared.activate(ignoringOtherApps: true)
     }
 
+    private func installMainMenu() {
+        let mainMenu = NSMenu()
+        let appItem = NSMenuItem()
+        let appMenu = NSMenu()
+        appMenu.addItem(withTitle: "Quit Install ENERGY HARVESTER", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+        appItem.submenu = appMenu
+        mainMenu.addItem(appItem)
+        let fileItem = NSMenuItem()
+        let fileMenu = NSMenu(title: "File")
+        fileMenu.addItem(withTitle: "Close", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
+        fileItem.submenu = fileMenu
+        mainMenu.addItem(fileItem)
+        let editItem = NSMenuItem()
+        let editMenu = NSMenu(title: "Edit")
+        editMenu.addItem(withTitle: "Copy", action: #selector(NSText.copy(_:)), keyEquivalent: "c")
+        editMenu.addItem(withTitle: "Select All", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
+        editItem.submenu = editMenu
+        mainMenu.addItem(editItem)
+        NSApplication.shared.mainMenu = mainMenu
+    }
+
     private func label(_ text: String, size: CGFloat, weight: NSFont.Weight, color: NSColor) -> NSTextField {
         let result = NSTextField(labelWithString: text)
         result.font = .systemFont(ofSize: size, weight: weight)
@@ -74,7 +96,7 @@ final class InstallerDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate
         let ownPID = ProcessInfo.processInfo.processIdentifier
         let applications = NSWorkspace.shared.runningApplications
         var excludedPIDs: Set<Int32> = [ownPID]
-        for app in applications where app.bundleIdentifier?.lowercased() == InstallerHostDetection.installerIdentifier {
+        for app in applications where InstallerHostDetection.isInstaller(app.bundleIdentifier) {
             excludedPIDs.insert(app.processIdentifier)
         }
         var found = applications.filter { app in
@@ -84,11 +106,15 @@ final class InstallerDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate
         let executable = destination.appendingPathComponent("Contents/MacOS/ENERGY HARVESTER")
         if InstallerEngine.exists(executable) {
             // Covers hosts we do not recognize by application name, without changing or terminating them.
-            if let output = try? InstallerEngine.run("/usr/sbin/lsof", ["-Fpc", "--", executable.path]) {
-                found.append(contentsOf: InstallerHostDetection.fileUsers(output, excluding: excludedPIDs))
-            }
+            found.append(contentsOf: InstallerHostDetection.openFileUsers(paths: [executable.path], excluding: excludedPIDs))
         }
         return Array(Set(found))
+    }
+
+    /// A previous copy that cannot be restored automatically is kept here, outside every folder audio apps scan.
+    static var recoveryRoot: URL {
+        FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Application Support/Vivid Fever Dreams/Recovered", isDirectory: true)
     }
 
     @objc private func install() {
@@ -106,6 +132,7 @@ final class InstallerDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate
                 let engine = InstallerEngine(payload: resources.appendingPathComponent("Payload/ENERGY HARVESTER.vst3"),
                     manifest: manifest, destination: destination,
                     systemCopy: URL(fileURLWithPath: "/Library/Audio/Plug-Ins/VST3/ENERGY HARVESTER.vst3"),
+                    recoveryRoot: Self.recoveryRoot,
                     runningHosts: { Self.runningHosts(destination: destination) })
                 let result = try engine.install()
                 Self.writeLog(result.log)
