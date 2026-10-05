@@ -17,7 +17,7 @@ if(NOT EXISTS "${JUCE_SOURCE_DIR}/CMakeLists.txt")
   message(FATAL_ERROR "Set JUCE_SOURCE_DIR to a JUCE 9.0.2 checkout")
 endif()
 add_subdirectory("${JUCE_SOURCE_DIR}" "${CMAKE_BINARY_DIR}/JUCE")
-juce_add_binary_data(ThrowUpAssets SOURCES Assets/AppIcon.png Assets/DeviceShell-v2.png ../shared/VfdLogo.svg Assets/ChakraPetch-SemiBold.ttf Assets/ChakraPetch-BoldItalic.ttf)
+juce_add_binary_data(ThrowUpAssets SOURCES Assets/AppIcon.png Assets/DeviceShell-fullbleed.png ../shared/VfdLogo.svg Assets/ChakraPetch-SemiBold.ttf Assets/ChakraPetch-BoldItalic.ttf)
 juce_add_plugin(ThrowUp
   COMPANY_NAME "VIVID FEVER DREAMS" BUNDLE_ID com.yoiboi.throwup
   PLUGIN_MANUFACTURER_CODE Yoib PLUGIN_CODE Thr1 FORMATS VST3 PRODUCT_NAME "THROW-UP"

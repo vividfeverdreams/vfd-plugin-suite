@@ -33,11 +33,11 @@ void saveImage(juce::Component& editor, const juce::File& file, bool checkCorner
 {
     auto snapshot = editor.createComponentSnapshot(editor.getLocalBounds(), true, 1.0f);
     check(snapshot.isValid(), "editor renders at native resolution");
-    check(!checkCorners || (snapshot.getPixelAt(0, 0).getAlpha() < 8
-        && snapshot.getPixelAt(snapshot.getWidth() - 1, 0).getAlpha() < 8
-        && snapshot.getPixelAt(0, snapshot.getHeight() - 1).getAlpha() < 8
-        && snapshot.getPixelAt(snapshot.getWidth() - 1, snapshot.getHeight() - 1).getAlpha() < 8),
-        "hardware enclosure retains transparent corners");
+    check(!checkCorners || (snapshot.getPixelAt(0, 0).getAlpha() == 255
+        && snapshot.getPixelAt(snapshot.getWidth() - 1, 0).getAlpha() == 255
+        && snapshot.getPixelAt(0, snapshot.getHeight() - 1).getAlpha() == 255
+        && snapshot.getPixelAt(snapshot.getWidth() - 1, snapshot.getHeight() - 1).getAlpha() == 255),
+        "hardware enclosure fills the window edge to edge");
     juce::FileOutputStream stream(file);
     check(stream.openedOk(), "snapshot file opens");
     stream.setPosition(0); stream.truncate();
@@ -356,7 +356,7 @@ int main(int argc, char** argv)
             presetMenu->setSelectedId(24, juce::sendNotificationSync);
             saveImage(editor, folder.getChildFile("THROW-UP.png"));
             checkInfoPage(editor, p, folder.getChildFile("THROW-UP-info.png"));
-            editor.setSize(528, 679);
+            editor.setSize(528, 684);
             saveImage(editor, folder.getChildFile("THROW-UP-compact.png"));
             checkInfoPage(editor, p, folder.getChildFile("THROW-UP-info-compact.png"));
             renderDemo(folder.getChildFile("THROW-UP-dry-then-throws.wav"));

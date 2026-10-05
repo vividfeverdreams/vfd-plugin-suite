@@ -8,7 +8,11 @@
 namespace {
 // Artwork coordinates are kept separate from the editor size so controls remain
 // registered with the physical caps at every host-supported zoom level.
-constexpr int shellX = 34, shellY = 18, shellWidth = 1058, shellHeight = 1360;
+// The crop sits on the enclosure's own straight edges in Assets/DeviceShell-fullbleed.png (corners
+// tightened to match), so the device meets the host window on every side.
+constexpr int shellX = 46, shellY = 28, shellWidth = 1030, shellHeight = 1335;
+// The physical INFO key on the lower board strip, in artwork coordinates.
+const juce::Rectangle<float> infoKeyBounds { 486.1f, 1222.4f, 153.9f, 60.9f };
 constexpr float startAngle = juce::MathConstants<float>::pi * 1.25f;
 constexpr float endAngle = juce::MathConstants<float>::pi * 2.75f;
 const juce::Colour cream { 0xffffeed3 }, amber { 0xffffca70 }, orange { 0xffff9d43 };
@@ -29,7 +33,7 @@ juce::String valueText (const juce::String& id, double value)
 juce::Image loadShell()
 {
     int size = 0;
-    if (const auto* data = BinaryData::getNamedResource ("DeviceShellv2_png", size))
+    if (const auto* data = BinaryData::getNamedResource ("DeviceShellfullbleed_png", size))
         return juce::ImageCache::getFromMemory (data, size);
     return {};
 }
@@ -190,7 +194,7 @@ ThrowUpEditor::ThrowUpEditor (ThrowUpProcessor& p)
       skin (std::make_unique<Skin> (normalTypeface, titleTypeface))
 {
     setLookAndFeel (skin.get());
-    setOpaque (false);
+    setOpaque (true);
     addControl ("mix", "THROW", "Adds pure reverb over your original bass. Dry stays at full level. 0% adds no reverb; 100% adds the full wet return. Automate THROW in your DAW.",
                 { 400, 616, 320, 320 }, { 445, 947, 230, 51 }, true, true);
     addControl ("size", "SIZE", "Changes the dimensions and spacing of the reverb room.",
@@ -266,7 +270,7 @@ ThrowUpEditor::ThrowUpEditor (ThrowUpProcessor& p)
     addAndMakeVisible (*infoButton);
     addChildComponent (*infoOverlay);
     setResizable (true, false);
-    setResizeLimits (528, 679, 990, 1273);
+    setResizeLimits (528, 528 * shellHeight / shellWidth, 990, 990 * shellHeight / shellWidth);
     if (auto* constrainer = getConstrainer()) constrainer->setFixedAspectRatio ((double) shellWidth / shellHeight);
     setSize (660, juce::roundToInt (660.0 * shellHeight / shellWidth));
     startTimerHz (24);
@@ -463,9 +467,25 @@ void ThrowUpEditor::drawFooter (juce::Graphics& g)
     drawMeters (g, { 618, 1101, 285, 55 });
 }
 
+void ThrowUpEditor::paintShell (juce::Graphics& g)
+{
+    // Resample the enclosure once per size and screen density, then blit it 1:1. A logical-size cache was
+    // upsampled, and soft, on Retina.
+    const float scale = g.getInternalContext().getPhysicalPixelScaleFactor();
+    const int width = juce::jmax (1, juce::roundToInt (getWidth() * scale));
+    const int height = juce::jmax (1, juce::roundToInt (getHeight() * scale));
+    if (shell.isValid() && (scaledShell.getWidth() != width || scaledShell.getHeight() != height)) {
+        scaledShell = juce::Image (juce::Image::RGB, width, height, false);
+        juce::Graphics shellGraphics (scaledShell);
+        shellGraphics.setImageResamplingQuality (juce::Graphics::highResamplingQuality);
+        shellGraphics.drawImage (shell, 0, 0, width, height, shellX, shellY, shellWidth, shellHeight);
+    }
+    if (scaledShell.isValid()) g.drawImage (scaledShell, getLocalBounds().toFloat());
+}
+
 void ThrowUpEditor::paint (juce::Graphics& g)
 {
-    if (scaledShell.isValid()) g.drawImageAt (scaledShell, 0, 0);
+    paintShell (g);
     juce::Graphics::ScopedSaveState state (g);
     const float sx = (float) getWidth() / (float) shellWidth;
     const float sy = (float) getHeight() / (float) shellHeight;
@@ -488,13 +508,6 @@ void ThrowUpEditor::paint (juce::Graphics& g)
 void ThrowUpEditor::resized()
 {
     uiScale = (float) getWidth() / (float) shellWidth;
-    if (shell.isValid() && getWidth() > 0 && getHeight() > 0 &&
-        (scaledShell.getWidth() != getWidth() || scaledShell.getHeight() != getHeight())) {
-        scaledShell = juce::Image (juce::Image::ARGB, getWidth(), getHeight(), true);
-        juce::Graphics shellGraphics (scaledShell);
-        shellGraphics.setImageResamplingQuality (juce::Graphics::highResamplingQuality);
-        shellGraphics.drawImage (shell, 0, 0, getWidth(), getHeight(), shellX, shellY, shellWidth, shellHeight);
-    }
     for (const auto& c : controls) {
         c->slider.setBounds (scaled (c->hit));
         c->value.setBounds (scaled (c->readout));
@@ -505,8 +518,7 @@ void ThrowUpEditor::resized()
     previous.setBounds (scaled ({ 822, 204, 47, 44 }));
     next.setBounds (scaled ({ 882, 204, 47, 44 }));
     bypass.setBounds (scaled (bypassBounds));
-    if (infoButton) infoButton->setBounds (juce::Rectangle<float> (282, 751, 96, 38)
-        .transformedBy (juce::AffineTransform::scale (getWidth() / 660.0f, getHeight() / 848.0f)).toNearestInt());
+    if (infoButton) infoButton->setBounds (scaled (infoKeyBounds));
     if (infoOverlay) infoOverlay->setBounds (getLocalBounds());
 }
 

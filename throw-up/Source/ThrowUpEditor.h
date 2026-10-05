@@ -32,7 +32,8 @@ private:
                juce::Colour, juce::Justification = juce::Justification::centredLeft, bool italic = false);
 
     ThrowUpProcessor& pluginProcessor;
-    juce::Image shell, scaledShell;
+    void paintShell (juce::Graphics&);
+    juce::Image shell, scaledShell; // scaledShell: the enclosure at physical resolution for the current size
     juce::Typeface::Ptr normalTypeface, titleTypeface;
     std::unique_ptr<Skin> skin;
     std::vector<std::unique_ptr<Control>> controls;
