@@ -7,6 +7,7 @@
 #include <cmath>
 #include <iomanip>
 #include <iostream>
+#include <limits>
 #include <memory>
 #include <vector>
 
@@ -98,6 +99,14 @@ struct FixturePlayHead final : juce::AudioPlayHead
     }
 };
 
+// Time of the fixture's final CC123 (All Notes Off). Since 0.1.6 the current
+// engine (3) answers CC123 with a normal release instead of a hard reset, so
+// for engine-3 sounds the comparison with releases 0.1.3-0.1.5 stops at this
+// frame. Everything before it must still match exactly, and the frames after
+// it must be a decaying release. Engines 1 and 2 keep the hard cut and are
+// compared over the full render.
+constexpr double allNotesOffSeconds = 1.79;
+
 struct TimedMidi
 {
     int sample;
@@ -136,7 +145,7 @@ inline RenderedAudio render (juce::AudioPluginInstance& plugin, double sampleRat
         { at (1.1), juce::MidiMessage::allSoundOff (1) },
         { at (1.2), juce::MidiMessage::noteOn (1, 55, static_cast<juce::uint8> (127)) },
         { at (1.43), juce::MidiMessage::noteOff (1, 55) },
-        { at (1.79), juce::MidiMessage::allNotesOff (1) }
+        { at (allNotesOffSeconds), juce::MidiMessage::allNotesOff (1) }
     }};
 
     RenderedAudio result;
@@ -207,19 +216,21 @@ struct Difference
     bool passed = false;
 };
 
-inline Difference compare (const RenderedAudio& expected, const RenderedAudio& actual)
+inline Difference compare (const RenderedAudio& expected, const RenderedAudio& actual,
+                           std::size_t comparedFrames = std::numeric_limits<std::size_t>::max())
 {
     Difference result;
     if (! expected.finite || ! actual.finite || expected.samples.size() != actual.samples.size())
         return result;
-    for (std::size_t i = 0; i < expected.samples.size(); ++i)
+    comparedFrames = std::min (comparedFrames, expected.samples.size());
+    for (std::size_t i = 0; i < comparedFrames; ++i)
     {
         const auto error = std::abs (static_cast<double> (expected.samples[i]) - actual.samples[i]);
         if (error > result.maximum) { result.maximum = error; result.maximumFrame = i; }
         result.rms += error * error;
         result.peak = std::max (result.peak, std::abs (static_cast<double> (expected.samples[i])));
     }
-    result.rms = std::sqrt (result.rms / static_cast<double> (expected.samples.size()));
+    result.rms = std::sqrt (result.rms / static_cast<double> (std::max<std::size_t> (1, comparedFrames)));
     // Compare raw sample positions and host latency independently. An accidental
     // latency change must not be hidden by aligning otherwise similar waves.
     result.passed = result.maximum <= 2.0e-6 && result.peak > 1.0e-4
@@ -365,10 +376,32 @@ inline bool testPluginCompatibility (const juce::String& oldPath, const juce::St
                 const auto reference = render (*original, rate, block, automate, tempo);
                 const auto updated = render (*migrated, rate, block, automate, tempo);
                 const auto fromNewSave = render (*reopened, rate, block, automate, tempo);
-                const auto initialDifference = compare (reference, updated);
-                const auto reopenedDifference = compare (reference, fromNewSave);
+                // Engine 3: compare up to the CC123 frame, then require a release.
+                const auto cc123Frame = static_cast<std::size_t> (juce::roundToInt (allNotesOffSeconds * rate));
+                const auto comparedFrames = expectedEngine >= 3 ? cc123Frame : reference.samples.size();
+                const auto initialDifference = compare (reference, updated, comparedFrames);
+                const auto reopenedDifference = compare (reference, fromNewSave, comparedFrames);
+                const auto peakIn = [] (const RenderedAudio& audio, std::size_t begin, std::size_t end)
+                {
+                    double peak = 0.0;
+                    for (auto i = begin; i < std::min (end, audio.samples.size()); ++i)
+                        peak = std::max (peak, std::abs (static_cast<double> (audio.samples[i])));
+                    return peak;
+                };
+                bool releaseOk = true;
+                double releasePeak = 0.0, preReleasePeak = 0.0, referencePostPeak = 0.0;
+                if (expectedEngine >= 3)
+                {
+                    const auto window = static_cast<std::size_t> (juce::roundToInt (0.05 * rate));
+                    preReleasePeak = peakIn (updated, cc123Frame - window, cc123Frame);
+                    releasePeak = std::max (peakIn (updated, cc123Frame, updated.samples.size()),
+                                            peakIn (fromNewSave, cc123Frame, fromNewSave.samples.size()));
+                    referencePostPeak = peakIn (reference, cc123Frame, reference.samples.size());
+                    const auto lastTail = peakIn (updated, updated.samples.size() - window, updated.samples.size());
+                    releaseOk = releasePeak <= preReleasePeak * 1.25 + 1.0e-6 && lastTail <= preReleasePeak + 1.0e-6;
+                }
                 const bool ok = firstParameterCheck && secondParameterCheck && engineSaved && engineReopened
-                    && initialDifference.passed && reopenedDifference.passed;
+                    && initialDifference.passed && reopenedDifference.passed && releaseOk;
                 ok ? ++passed : ++failed;
                 worst = std::max ({ worst, initialDifference.maximum, reopenedDifference.maximum });
                 std::cout << (ok ? "PASS" : "FAIL") << " fixture=" << fixture << " rate=" << rate
@@ -380,6 +413,11 @@ inline bool testPluginCompatibility (const juce::String& oldPath, const juce::St
                           << " rms=" << initialDifference.rms
                           << " reopen-max=" << reopenedDifference.maximum
                           << " peak=" << initialDifference.peak << std::defaultfloat;
+                if (expectedEngine >= 3)
+                    std::cout << " compared-frames=" << comparedFrames << "/" << reference.samples.size()
+                              << std::scientific << " cc123-old-tail=" << referencePostPeak
+                              << " cc123-new-tail=" << releasePeak << " pre-cc123=" << preReleasePeak
+                              << std::defaultfloat << (releaseOk ? " release=ok" : " release=FAIL");
                 if (! ok) std::cout << " worst-frame=" << initialDifference.maximumFrame;
                 std::cout << std::endl;
             }

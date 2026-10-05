@@ -26,6 +26,21 @@ Frozen 0.1.0/0.1.1 and 0.1.2 DSP sources are retained inside the updated plug-in
 
 The current 0.1.3 synthesis implementation is unchanged. Its previously completed oversampling, Direct sub, low-cut and stress checks are documented in the 0.1.3 release; this release's hosted comparisons independently establish unchanged current-engine audio for the tested configurations.
 
+## 0.1.6 processor and editor fixes
+
+No engine's synthesis changed. The following behaviour changed for every sound, including recalled sessions:
+
+- **CC123 (All Notes Off)** now releases current-engine (0.1.3+) notes with their normal release tail instead of hard-resetting the voice, so hosts that send it on transport stop no longer click. **CC120 (All Sound Off)** still silences immediately. Sounds that use the preserved 0.1.0/0.1.1 and 0.1.2 engines keep their original CC123 hard cut.
+- **Host bypass** renders silence and releases held notes when bypass starts, so a note-off that arrives while bypassed can no longer leave a stuck note. Pitch bend, sustain pedal and All Notes/Sound Off are still followed during bypass. Zero-sample and zero-channel process calls also apply their MIDI.
+- **Engine switches while sounding** (Undo across engines, Use latest sound, preset or session load) fade the outgoing engine over 5 ms instead of cutting it. A silent engine (for example right after a session loads) switches exactly as before, and once the fade ends only the selected engine is heard, unchanged.
+- The generation family is stored canonically, so it is recalled after reopening a session. Sessions that stored the editor's upper-case spelling are repaired.
+- The Library rescans the shared preset folder when opened and refreshed, and before saving. Presets saved by other instances appear. Saving an existing name replaces that file instead of creating a "(2)" copy. Deleted files leave the list.
+- Loading the same preset twice or repeating Reset Shape no longer adds an Undo step that changes nothing. The unused APVTS UndoManager is gone; Undo/Redo still uses the sound history.
+- The output meter holds the peak between editor refreshes. Clicking a control no longer gives it keyboard focus, so later arrow or Return keys cannot silently edit the sound; Tab still reaches every control, and clicking a knob still enables its scroll wheel.
+- The standalone app remembers its audio/MIDI device choice in `~/Library/Application Support/YOI-BOI/YOI-BOI.settings` (device settings only; the sound is still never saved automatically). ZOOM and CLOSE no longer start a window drag.
+
+**Historical comparison change.** `--check-compat` still compares the very same saved project in the old and new binaries sample for sample. For engine-3 sounds (saved by 0.1.3–0.1.5), the comparison now stops at the fixture's final CC123, at 1.79 s of a 2.0 s render. Before that frame the tolerance is unchanged (maximum error 2e-6; observed 0). After it, the old binaries hard-cut while the update releases. The harness therefore also requires the new tail to stay at or below 1.25× the peak of the 50 ms before CC123, and the last 50 ms to be no louder than that window. Engines 1 and 2 are still compared over the full render.
+
 ## Practical limits
 
 These checks exercise real VST3 binaries in an automated host. A complete interactive Ableton save/reopen, automation, freeze/flatten, export and long-session test has not been performed. Installer transactions are tested in isolation; the actual user installation was deliberately left for the installer button. The native installer window has not been interactively inspected in this run.

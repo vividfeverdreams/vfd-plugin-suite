@@ -18,6 +18,16 @@ const juce::Colour lavender { 0xffb7a2e5 }, cream { 0xffeee8ff }, ink { 0xff1012
 const juce::Colour cobalt { 0xff202b88 }, cyan { 0xff65e8f2 }, lime { 0xffd7f76c };
 const juce::Colour midnight { 0xff071343 }, electricBlue { 0xff073fc5 }, shellPurple { 0xff7768c4 };
 const juce::StringArray vowels { "EE", "EH", "AH", "OH", "OO" };
+#ifdef JucePlugin_VersionString
+constexpr const char* versionString = JucePlugin_VersionString;
+#else
+constexpr const char* versionString = YOIBOI_VERSION_STRING; // non-plugin builds (tests)
+#endif
+
+// Controls stay reachable with Tab, but a mouse click must not give them
+// keyboard focus: a combo or knob that silently keeps focus would change the
+// sound when the producer later presses arrow keys or Return for the host.
+void keepFocusOnClick (juce::Component& component) { component.setMouseClickGrabsKeyboardFocus (false); }
 
 void drawDice(juce::Graphics& g, juce::Point<float> centre, float size, juce::Colour colour)
 {
@@ -372,7 +382,7 @@ public:
 class LockButton final : public juce::Button
 {
 public:
-    explicit LockButton(const juce::String& name) : Button(name) { setTitle(name); setClickingTogglesState(true); }
+    explicit LockButton(const juce::String& name) : Button(name) { setTitle(name); setClickingTogglesState(true); keepFocusOnClick(*this); }
     void paintButton(juce::Graphics& g, bool over, bool) override
     {
         auto r = getLocalBounds().toFloat().reduced(3);
@@ -439,7 +449,12 @@ using ParameterCombo = ParameterControl<juce::ComboBox>;
 class FocusedSlider final : public ParameterControl<juce::Slider>
 {
 public:
-    FocusedSlider() { setPopupMenuEnabled(false); }
+    FocusedSlider() { setPopupMenuEnabled(false); keepFocusOnClick(*this); }
+    // True between the drag start and end sent to attachments (mouse drag or
+    // a keyboard ScopedDragNotification), i.e. while a host gesture is open.
+    bool isDragGestureActive() const noexcept { return dragDepth > 0; }
+    void startedDragging() override { ++dragDepth; }
+    void stoppedDragging() override { dragDepth = juce::jmax(0, dragDepth - 1); }
     bool keyPressed(const juce::KeyPress& key) override
     {
         const int code = key.getKeyCode();
@@ -451,10 +466,25 @@ public:
         }
         return juce::Slider::keyPressed(key);
     }
+    // Clicking a knob arms its scroll wheel, as keyboard focus used to, so a
+    // stray wheel gesture over an untouched knob still cannot change it.
+    void mouseDown(const juce::MouseEvent& event) override
+    {
+        wheelArmed = ! event.mods.isPopupMenu();
+        ParameterControl<juce::Slider>::mouseDown(event);
+    }
+    void mouseExit(const juce::MouseEvent& event) override
+    {
+        wheelArmed = false;
+        ParameterControl<juce::Slider>::mouseExit(event);
+    }
     void mouseWheelMove(const juce::MouseEvent& event, const juce::MouseWheelDetails& details) override
     {
-        if (hasKeyboardFocus(true)) juce::Slider::mouseWheelMove(event, details);
+        if (hasKeyboardFocus(true) || wheelArmed) juce::Slider::mouseWheelMove(event, details);
     }
+private:
+    int dragDepth = 0;
+    bool wheelArmed = false;
 };
 
 class Macro final : public juce::Component
@@ -515,6 +545,7 @@ public:
         setTitle("Mouth motion: Start, Body, End");
         setDescription("Three vowel poses across the length of a note. Use the Shape controls to edit numerically.");
         setWantsKeyboardFocus(true);
+        keepFocusOnClick(*this);
     }
     std::function<void(int)> selectPoint;
     std::function<void()> openShape, beginEdit, endEdit;
@@ -750,6 +781,7 @@ public:
         family.setSelectedId(1, juce::dontSendNotification);
         family.setTitle("Generation family");
         family.setTooltip("New Yoi stays in the selected family. All Families permits a new family.");
+        keepFocusOnClick(family);
         family.onChange = [this] { if (callbacks.setGenerationFamily) callbacks.setGenerationFamily(family.getText()); };
         addAndMakeVisible(family);
 
@@ -792,6 +824,7 @@ public:
         bindContext(sync, "sync");
         subMode.addItemList({ "OFF", "DIRECT", "DRIVEN" }, 1);
         subMode.setTitle("Sub routing");
+        keepFocusOnClick(subMode);
         subMode.setTooltip("Off mutes the sine sub. Direct adds it after the body distortion. Driven saturates the sub.");
         subMode.onChange = [this] { if (! updatingInspector) setParam("sub_mode", (subMode.getSelectedId() - 1) / 2.0f); };
         addAndMakeVisible(subMode); bindContext(subMode, "sub_mode");
@@ -803,6 +836,7 @@ public:
         bindContext(lowCut, "low_cut");
         lengthFeel.addItemList({ "STRAIGHT", "TRIPLET · 2/3", "DOTTED · 3/2" }, 1);
         lengthFeel.setTitle("Length rhythm");
+        keepFocusOnClick(lengthFeel);
         lengthFeel.setTooltip("Apply straight, triplet or dotted timing to the Length division. Available when Sync is on.");
         lengthFeel.onChange = [this] { if (! updatingInspector) setParam("length_feel", (lengthFeel.getSelectedId() - 1) / 2.0f); };
         addAndMakeVisible(lengthFeel); bindContext(lengthFeel, "length_feel");
@@ -832,8 +866,10 @@ public:
         selectedPoint.addItemList({ "START", "BODY", "END" }, 1);
         selectedPoint.setSelectedId(2, juce::dontSendNotification);
         selectedPoint.setTitle("Selected gesture point");
+        keepFocusOnClick(selectedPoint);
         selectedPoint.onChange = [this] { gesture.selected = selectedPoint.getSelectedId() - 1; syncShapeInspector(); gesture.repaint(); };
         pose.addItemList(vowels, 1); pose.setSelectedId(4, juce::dontSendNotification); pose.setTitle("Vowel pose");
+        keepFocusOnClick(pose);
         pose.onChange = [this] { if (! updatingInspector) setParam(poseId(), (pose.getSelectedId() - 1) / 4.0f); };
         pose.onContextMenu = [this] { showParameterMenu(poseId(), pose); };
         setupButton(snap, "TIME SNAP", true);
@@ -918,6 +954,7 @@ public:
     void setupButton(juce::TextButton& button, const juce::String& name, bool dark = false)
     {
         button.setButtonText(name); button.setTitle(name); button.setWantsKeyboardFocus(true);
+        keepFocusOnClick(button);
         button.getProperties().set("dark", dark); addAndMakeVisible(button);
     }
     template <typename Control>
@@ -981,7 +1018,7 @@ public:
         for (const int percent : { 100, 125, 150 })
             menu.addItem(percent, juce::String(percent) + "%", true, current == percent);
         menu.addSeparator();
-        menu.addSectionHeader("YOI-BOI 0.1.4");
+        menu.addSectionHeader(juce::String("YOI-BOI ") + versionString);
         const int engine = callbacks.soundEngine ? callbacks.soundEngine() : 3;
         if (engine < 3)
         {
@@ -1260,7 +1297,10 @@ public:
         familyText = callbacks.familyName ? callbacks.familyName() : "Rubber";
         const auto isSync = readActual(state, "sync", 1) >= 0.5f;
         sync.setToggleState(isSync, juce::dontSendNotification);
-        if (! lengthAttached || isSync != lastSync)
+        // Swapping the Length attachment mid-drag would destroy the attachment
+        // that opened the host gesture, so its end would go to the other
+        // parameter. Wait until the drag (mouse or keyboard) has finished.
+        if ((! lengthAttached || isSync != lastSync) && ! macros[4]->slider.isDragGestureActive())
         {
             lastSync = isSync; lengthAttached = true;
             attachMacro(4, isSync ? "length_division" : "length_ms");
@@ -1365,6 +1405,9 @@ public:
     {
         const auto oldIndex = library.getSelectedRow();
         const auto oldId = oldIndex >= 0 && oldIndex < static_cast<int>(filtered.size()) ? filtered[static_cast<size_t>(oldIndex)].id : juce::String();
+        // Library open and refresh pick up presets saved by other instances.
+        // Existing entries keep their ids, so the selection survives.
+        if (page == 2 && callbacks.rescanPresets) callbacks.rescanPresets();
         auto items = callbacks.listPresets ? callbacks.listPresets() : std::vector<PresetItem>();
         filtered.clear();
         auto query = search.getText().trim();

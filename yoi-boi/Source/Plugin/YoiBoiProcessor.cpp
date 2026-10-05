@@ -82,6 +82,33 @@ bool sameSound (const Patch& a, const Patch& b) noexcept
         && close (a.glideMilliseconds, b.glideMilliseconds) && close (a.outputDecibels, b.outputDecibels);
 }
 
+// Undo entries differ when the sound or the recalled identity differs. A
+// repeated preset load or reset that changes neither must not add a step.
+bool sameHistoryEntry (const Patch& a, const Patch& b) noexcept
+{
+    return sameSound (a, b) && a.name == b.name && a.presetId == b.presetId;
+}
+
+// The editor passes its upper-case combo text ("RUBBER"). Store and restore
+// one canonical spelling so sessions compare and recall it reliably.
+juce::String canonicalFamilyName (const juce::String& requested)
+{
+    const auto text = requested.trim();
+    for (int i = 0; i < 4; ++i)
+        if (text.equalsIgnoreCase (familyName (static_cast<Family> (i))))
+            return familyName (static_cast<Family> (i));
+    return "All Families";
+}
+
+void holdPeak (std::atomic<float>& meter, float value) noexcept
+{
+    auto held = meter.load (std::memory_order_relaxed);
+    while (value > held
+           && ! meter.compare_exchange_weak (held, value, std::memory_order_release, std::memory_order_relaxed))
+    {
+    }
+}
+
 float safeParameterValue (const juce::var& value, float fallback)
 {
     if (value.isDouble() || value.isInt() || value.isInt64() || value.isBool())
@@ -143,7 +170,7 @@ APVTS::ParameterLayout YoiBoiProcessor::createParameterLayout()
 
 YoiBoiProcessor::YoiBoiProcessor (juce::File presetDirectory)
     : AudioProcessor (BusesProperties().withOutput ("Output", juce::AudioChannelSet::stereo(), true)),
-      apvts (*this, &parameterUndo, "PARAMETERS", createParameterLayout()),
+      apvts (*this, nullptr, "PARAMETERS", createParameterLayout()),
       presetRoot (std::move (presetDirectory)),
       currentPatch (makeDefaultPatch())
 {
@@ -154,7 +181,7 @@ YoiBoiProcessor::YoiBoiProcessor (juce::File presetDirectory)
     publishHiddenControls (currentPatch);
     history.push_back (currentPatch);
     historyIndex = 0;
-    loadUserPresets();
+    rescanUserPresets();
 }
 
 bool YoiBoiProcessor::isBusesLayoutSupported (const BusesLayout& layout) const
@@ -175,6 +202,7 @@ void YoiBoiProcessor::prepareToPlay (double sampleRate, int)
     for (auto& sample : waveformSamples) sample.store (0.0f, std::memory_order_relaxed);
     voice.prepare (currentSampleRate);
     allNotesOff();
+    bypassActive = false;
     meterLeft.store (0.0f); meterRight.store (0.0f);
 }
 
@@ -213,7 +241,16 @@ void YoiBoiProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Midi
     juce::ScopedNoDenormals noDenormals;
     const auto numSamples = buffer.getNumSamples();
     buffer.clear();
-    if (numSamples <= 0 || buffer.getNumChannels() == 0) { midi.clear(); return; }
+    bypassActive = false;
+    if (numSamples <= 0 || buffer.getNumChannels() == 0)
+    {
+        // Nothing renders, but note and controller state must still follow
+        // the host: a dropped note-off here would leave a stuck note.
+        for (const auto metadata : midi)
+            if (metadata.numBytes <= 3) handleMidi (metadata.getMessage());
+        midi.clear();
+        return;
+    }
 
     dsp::VoiceControls c;
     c.mouth = raw ("mouth"); c.size = raw ("size"); c.bite = raw ("bite");
@@ -294,11 +331,36 @@ void YoiBoiProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Midi
     }
     render (cursor, numSamples);
     midi.clear();
-    meterLeft.store (peak, std::memory_order_release);
-    meterRight.store (peak, std::memory_order_release);
+    holdPeak (meterLeft, peak);
+    holdPeak (meterRight, peak);
     displayedGesturePhase.store (voice.gesturePhase(), std::memory_order_release);
     midiActivityFramesLeft = std::max (0, midiActivityFramesLeft - numSamples);
     midiIndicator.store (midiActivityFramesLeft > 0, std::memory_order_release);
+}
+
+void YoiBoiProcessor::processBlockBypassed (juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midi)
+{
+    juce::ScopedNoDenormals noDenormals;
+    buffer.clear();
+    if (! bypassActive)
+    {
+        // Nothing renders while bypassed, so a held note could never see its
+        // note-off. Release and silence everything on entry; the pedal keeps
+        // its physical position.
+        const bool pedal = sustainDown;
+        allNotesOff();
+        sustainDown = pedal;
+        bypassActive = true;
+    }
+    // Keep controller state current without starting new notes. Note-offs
+    // for keys pressed before bypass are harmless: those keys are released.
+    for (const auto metadata : midi)
+        if (metadata.numBytes <= 3)
+        {
+            const auto message = metadata.getMessage();
+            if (! message.isNoteOn()) handleMidi (message);
+        }
+    midi.clear();
 }
 
 void YoiBoiProcessor::handleMidi (const juce::MidiMessage& message)
@@ -321,7 +383,15 @@ void YoiBoiProcessor::handleMidi (const juce::MidiMessage& message)
         }
         sustainDown = down;
     }
-    else if (message.isAllNotesOff() || message.isAllSoundOff()) allNotesOff();
+    else if (message.isAllSoundOff()) allNotesOff(); // CC120: immediate silence.
+    else if (message.isAllNotesOff())
+    {
+        // CC123 releases notes so their tails finish, as hosts send it on
+        // transport stop. The preserved 0.1.0-0.1.2 engines keep the hard cut
+        // they always had, so those sounds render exactly as before.
+        if (voice.activeEngine() < Patch::currentSoundEngine) allNotesOff();
+        else releaseAllNotes();
+    }
 }
 
 void YoiBoiProcessor::noteOn (int note, float velocity)
@@ -390,6 +460,18 @@ void YoiBoiProcessor::allNotesOff()
     midiActivityFramesLeft = 0; midiIndicator.store (false);
     displayedGesturePhase.store (0.0f);
     externalNotesIndicator.store (false); previewIndicator.store (false);
+}
+
+void YoiBoiProcessor::releaseAllNotes()
+{
+    // Like a key-up on every note, including pedal-held ones: the voice runs
+    // its normal release instead of being reset. The pedal position is kept.
+    pressed.fill (false); sustained.fill (false); noteOrderSize = 0;
+    activeNote = -1;
+    previewVoiceActive = false; previewFramesLeft = 0;
+    voice.noteOff();
+    externalNotesIndicator.store (false, std::memory_order_release);
+    previewIndicator.store (false, std::memory_order_release);
 }
 
 void YoiBoiProcessor::setParameterValue (const char* id, float value)
@@ -512,7 +594,11 @@ void YoiBoiProcessor::applyPatch (Patch patch, bool addToHistory, bool preserveL
     setParameterValue ("body_time", patch.bodyTime); setParameterValue ("curve", patch.curve);
     publishHiddenControls (patch);
     currentPatch = livePatch();
-    if (addToHistory) pushHistory (currentPatch);
+    // Loading the same preset twice (or resetting an unchanged shape) would
+    // otherwise add an Undo step that changes nothing.
+    if (addToHistory && (historyIndex < 0
+                         || ! sameHistoryEntry (history[static_cast<size_t> (historyIndex)], currentPatch)))
+        pushHistory (currentPatch);
 }
 
 void YoiBoiProcessor::newYoi()
@@ -612,23 +698,76 @@ juce::File YoiBoiProcessor::userPresetDirectory() const
         .getChildFile ("YOI-BOI").getChildFile ("Presets");
 }
 
-void YoiBoiProcessor::loadUserPresets()
+void YoiBoiProcessor::rescanUserPresets()
 {
+    // Message thread. File I/O happens outside the state lock; the merge is
+    // applied under it. Presets saved by another instance appear here, and
+    // existing entries keep their index so open Library selections stay valid.
     juce::Array<juce::File> files;
-    userPresetDirectory().findChildFiles (files, juce::File::findFiles, false, "*.xml");
+    const auto directory = userPresetDirectory();
+    if (directory.isDirectory())
+        directory.findChildFiles (files, juce::File::findFiles, false, "*.xml");
     std::sort (files.begin(), files.end(), [] (const juce::File& a, const juce::File& b)
                { return a.getFullPathName() < b.getFullPathName(); });
-    for (const auto& file : files)
+
+    struct Known { juce::File file; juce::Time modified; juce::int64 size; juce::String presetId; bool available; };
+    std::vector<Known> known;
     {
-        if (file.getSize() > 1024 * 1024) continue;
+        const juce::ScopedLock lock (stateMutex);
+        for (const auto& entry : userPresets)
+            known.push_back ({ entry.file, entry.modified, entry.size, entry.patch.presetId, entry.available });
+    }
+
+    const auto read = [] (const juce::File& file, juce::Time modified, juce::int64 size) -> std::optional<UserPreset>
+    {
         if (auto xml = juce::XmlDocument::parse (file))
             if (auto patch = fromValueTree (juce::ValueTree::fromXml (*xml)))
             {
                 if (! patch->presetId.startsWith ("user:")) patch->presetId = "user:" + file.getFileNameWithoutExtension();
-                userPresets.push_back (*patch);
-                userPresetFiles.push_back (file);
+                return UserPreset { *patch, file, modified, size, true };
             }
+        return std::nullopt;
+    };
+
+    std::vector<bool> seen (known.size(), false);
+    std::vector<std::pair<std::size_t, UserPreset>> changed;
+    std::vector<UserPreset> added;
+    for (const auto& file : files)
+    {
+        const auto size = file.getSize();
+        const auto modified = file.getLastModificationTime();
+        std::optional<std::size_t> match;
+        for (std::size_t i = 0; i < known.size() && ! match; ++i)
+            if (known[i].file == file) match = i;
+        if (match && known[*match].available && known[*match].modified == modified && known[*match].size == size)
+        {
+            seen[*match] = true;
+            continue;
+        }
+        if (size > 1024 * 1024) continue;
+        auto parsed = read (file, modified, size);
+        if (! parsed) continue;
+        if (! match)
+        {
+            // A preset re-created under another file name keeps its entry.
+            for (std::size_t i = 0; i < known.size() && ! match; ++i)
+                if (! seen[i] && known[i].presetId == parsed->patch.presetId && ! known[i].file.existsAsFile())
+                    match = i;
+        }
+        if (match)
+        {
+            seen[*match] = true;
+            changed.emplace_back (*match, std::move (*parsed));
+        }
+        else added.push_back (std::move (*parsed));
     }
+
+    const juce::ScopedLock lock (stateMutex);
+    for (std::size_t i = 0; i < known.size() && i < userPresets.size(); ++i)
+        if (! seen[i]) userPresets[i].available = false;
+    for (auto& [index, entry] : changed)
+        if (index < userPresets.size()) userPresets[index] = std::move (entry);
+    for (auto& entry : added) userPresets.push_back (std::move (entry));
 }
 
 bool YoiBoiProcessor::savePreset (const juce::String& name)
@@ -641,6 +780,9 @@ bool YoiBoiProcessor::savePreset (const juce::String& name)
     auto directory = userPresetDirectory();
     if (! directory.createDirectory())
     { const juce::ScopedLock lock (stateMutex); status = "Could not create preset folder"; return false; }
+    // Include presets saved by other instances, so saving a name that already
+    // exists on disk replaces that file instead of adding a "(2)" copy.
+    rescanUserPresets();
     // A suffix distinguishes names such as "My/Yoi" and "My:Yoi", which
     // otherwise collapse to the same legal filename on macOS.
     auto file = directory.getChildFile (juce::File::createLegalFileName (patch.name)
@@ -649,9 +791,9 @@ bool YoiBoiProcessor::savePreset (const juce::String& name)
     bool replacingKnownPreset = false;
     {
         const juce::ScopedLock lock (stateMutex);
-        for (std::size_t i = 0; i < userPresets.size(); ++i)
-            if (userPresets[i].name == patch.name)
-            { file = userPresetFiles[i]; patch.presetId = userPresets[i].presetId; replacingKnownPreset = true; break; }
+        for (const auto& entry : userPresets)
+            if (entry.available && entry.patch.name == patch.name)
+            { file = entry.file; patch.presetId = entry.patch.presetId; replacingKnownPreset = true; break; }
     }
     if (! replacingKnownPreset && file.exists())
         file = directory.getNonexistentChildFile (file.getFileNameWithoutExtension(), ".xml");
@@ -660,10 +802,12 @@ bool YoiBoiProcessor::savePreset (const juce::String& name)
         juce::TemporaryFile replacement (file);
         if (xml->writeTo (replacement.getFile()) && replacement.overwriteTargetFileWithTemporary())
         {
+            UserPreset saved { patch, file, file.getLastModificationTime(), file.getSize(), true };
             const juce::ScopedLock lock (stateMutex);
-            auto existing = std::find_if (userPresets.begin(), userPresets.end(), [&] (const Patch& other) { return other.name == patch.name; });
-            if (existing != userPresets.end()) *existing = patch;
-            else { userPresets.push_back (patch); userPresetFiles.push_back (file); }
+            auto existing = std::find_if (userPresets.begin(), userPresets.end(),
+                                          [&] (const UserPreset& entry) { return entry.file == file; });
+            if (existing != userPresets.end()) *existing = std::move (saved);
+            else userPresets.push_back (std::move (saved));
             currentPatch.name = patch.name;
             currentPatch.presetId = patch.presetId;
             if (std::find (favorites.begin(), favorites.end(), previousFavoriteKey) != favorites.end()
@@ -693,8 +837,9 @@ void YoiBoiProcessor::loadPreset (const juce::String& id)
         patch = factoryPresets()[static_cast<size_t> (index)];
     else if (prefix == "user")
     { const juce::ScopedLock lock (stateMutex);
-      if (index < 0 || index >= static_cast<int> (userPresets.size())) return;
-      patch = userPresets[static_cast<size_t> (index)]; }
+      if (index < 0 || index >= static_cast<int> (userPresets.size())
+          || ! userPresets[static_cast<size_t> (index)].available) return;
+      patch = userPresets[static_cast<size_t> (index)].patch; }
     else return;
     applyPatch (std::move (patch), true);
 }
@@ -711,7 +856,8 @@ std::vector<PresetItem> YoiBoiProcessor::listPresets() const
     }
     for (int i = 0; i < static_cast<int> (userPresets.size()); ++i)
     {
-        const auto& patch = userPresets[static_cast<size_t> (i)];
+        if (! userPresets[static_cast<size_t> (i)].available) continue;
+        const auto& patch = userPresets[static_cast<size_t> (i)].patch;
         result.push_back ({ "user:" + juce::String (i), patch.name, familyLabel (patch), favorites.end() != std::find (favorites.begin(), favorites.end(), favoriteKey (patch)), false, true });
     }
     return result;
@@ -753,18 +899,19 @@ EditorCallbacks YoiBoiProcessor::makeEditorCallbacks()
     c.previewing = [this] { return previewIndicator.load(); };
     c.externalNotesHeld = [this] { return externalNotesIndicator.load(); };
     c.midiActive = [this] { return midiIndicator.load(); };
-    c.outputLevelLeft = [this] { return meterLeft.load(); };
-    c.outputLevelRight = [this] { return meterRight.load(); };
+    c.outputLevelLeft = [this] { return meterLeft.exchange (0.0f, std::memory_order_acq_rel); };
+    c.outputLevelRight = [this] { return meterRight.exchange (0.0f, std::memory_order_acq_rel); };
     c.gesturePhase = [this] { return displayedGesturePhase.load(); };
     c.waveform = [this] { return recentWaveform(); };
     c.fmRatio = [this] { return fmRatio.load (std::memory_order_acquire); };
     c.isFavorite = [this] { const juce::ScopedLock lock (stateMutex); return favorites.end() != std::find (favorites.begin(), favorites.end(), favoriteKey (currentPatch)); };
     c.toggleFavorite = [this] { toggleFavorite(); };
     c.listPresets = [this] { return listPresets(); };
+    c.rescanPresets = [this] { rescanUserPresets(); };
     c.loadPreset = [this] (const juce::String& id) { loadPreset (id); };
     c.savePreset = [this] (const juce::String& name) { return savePreset (name); };
     c.generationFamily = [this] { const juce::ScopedLock lock (stateMutex); return generationFamily; };
-    c.setGenerationFamily = [this] (const juce::String& family) { const juce::ScopedLock lock (stateMutex); generationFamily = family; };
+    c.setGenerationFamily = [this] (const juce::String& family) { const juce::ScopedLock lock (stateMutex); generationFamily = canonicalFamilyName (family); };
     c.soundEngine = [this] { return soundEngine.load (std::memory_order_acquire); };
     c.useLatestSoundEngine = [this]
     {
@@ -844,7 +991,7 @@ void YoiBoiProcessor::setStateInformation (const void* data, int size)
         for (const auto& preset : factoryPresets())
             if (patch.name == preset.name) { patch.presetId = preset.presetId; return; }
         for (const auto& preset : userPresets)
-            if (patch.name == preset.name) { patch.presetId = preset.presetId; return; }
+            if (preset.available && patch.name == preset.patch.name) { patch.presetId = preset.patch.presetId; return; }
         for (std::size_t index = 0; index < legacyFactoryNames.size(); ++index)
             if (patch.name == legacyFactoryNames[index])
             { patch.presetId = "factory:" + juce::String (static_cast<int> (index)); return; }
@@ -863,11 +1010,8 @@ void YoiBoiProcessor::setStateInformation (const void* data, int size)
         for (const auto& parameter : parameterProperties)
             if (id == parameter.id) parameterExclusions.addIfNotAlreadyThere (id);
     }
-    generationFamily = root.getProperty ("generationFamily", "All Families").toString();
-    bool knownFamily = generationFamily == "All Families";
-    for (int family = 0; family < 4; ++family)
-        knownFamily = knownFamily || generationFamily == yoiboi::familyName (static_cast<Family> (family));
-    if (! knownFamily) generationFamily = "All Families";
+    // Case-insensitive: earlier builds stored the editor's "RUBBER" spelling.
+    generationFamily = canonicalFamilyName (root.getProperty ("generationFamily", "All Families").toString());
     history.clear();
     history.push_back (currentPatch);
     historyIndex = 0;
@@ -886,7 +1030,7 @@ void YoiBoiProcessor::setStateInformation (const void* data, int size)
             const auto name = item.getProperty ("name").toString().substring (0, 128);
             const auto migrate = [&] (const Patch& patch) { if (patch.name == name) add (favoriteKey (patch)); };
             for (const auto& patch : factoryPresets()) migrate (patch);
-            for (const auto& patch : userPresets) migrate (patch);
+            for (const auto& preset : userPresets) if (preset.available) migrate (preset.patch);
             for (std::size_t index = 0; index < legacyFactoryNames.size(); ++index)
                 if (name == legacyFactoryNames[index]) add ("factory:" + juce::String (static_cast<int> (index)));
             migrate (currentPatch);
@@ -897,7 +1041,6 @@ void YoiBoiProcessor::setStateInformation (const void* data, int size)
                   && counterText.containsOnly ("0123456789abcdefABCDEF")
                 ? static_cast<std::uint64_t> (counterText.getHexValue64()) : currentPatch.seed;
     manualEditInProgress = false;
-    parameterUndo.clearUndoHistory();
     status = "Session restored";
 }
 } // namespace yoiboi

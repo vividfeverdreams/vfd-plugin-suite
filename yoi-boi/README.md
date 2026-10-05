@@ -44,7 +44,7 @@ The editor removes the previous dark internal margin and places **ZOOM** and **C
 
 Ableton owns its floating plug-in window and native title bar. This build leaves that host frame under Ableton's control. On macOS, the in-shell Close control only closes a recognized floating plug-in window named YOI-BOI; it is disabled when the host window cannot be identified safely. It closes the editor while the instrument continues running.
 
-The standalone app has a borderless device window. Drag its logo area to move it. **ZOOM → Audio / MIDI settings** opens the audio device and MIDI input controls. Closing the standalone window quits that app. The standalone does not automatically save sound variations on exit.
+The standalone app has a borderless device window. Drag its logo area to move it. **ZOOM → Audio / MIDI settings** opens the audio device and MIDI input controls; the app remembers those device choices. Closing the standalone window quits that app. The standalone does not automatically save sounds or sound variations on exit.
 
 ## Install in Ableton Live
 

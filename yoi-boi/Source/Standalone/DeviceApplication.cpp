@@ -1,11 +1,13 @@
 #include <juce_audio_utils/juce_audio_utils.h>
 #include <juce_audio_plugin_client/Standalone/juce_StandaloneFilterWindow.h>
 #include "UI/WindowActions.h"
+#include "Standalone/DeviceSupport.h"
 
 namespace yoiboi
 {
 class DeviceWindow final : public juce::DocumentWindow,
-                           public DeviceWindowActions
+                           public DeviceWindowActions,
+                           private juce::ChangeListener
 {
 public:
     explicit DeviceWindow (juce::StandalonePluginHolder& plugin)
@@ -24,10 +26,14 @@ public:
         }
         centreWithSize (getWidth(), getHeight());
         setVisible (true);
+        // Remember device and MIDI-input choices as soon as they change, not
+        // only at a clean quit.
+        holder.deviceManager.addChangeListener (this);
     }
 
     ~DeviceWindow() override
     {
+        holder.deviceManager.removeChangeListener (this);
         holder.stopPlaying();
         if (editor != nullptr)
         {
@@ -46,12 +52,12 @@ public:
 
     void mouseDown (const juce::MouseEvent& event) override
     {
-        const auto local = event.getEventRelativeTo (editor.get()).position;
-        const auto scale = editor != nullptr ? editor->getWidth() / 1070.0f : 1.0f;
         // The wordmark/blank header is the grab area. Controls keep their own
-        // gestures and the drag never starts from a knob or a tab.
-        dragging = event.mods.isLeftButtonDown() && local.y < 70.0f * scale
-                   && local.x > 45.0f * scale && local.x < 465.0f * scale;
+        // gestures: the drag never starts from ZOOM, CLOSE, a knob or a tab.
+        dragging = editor != nullptr
+                   && startsDeviceWindowDrag (*editor, event.originalComponent,
+                                              event.getEventRelativeTo (editor.get()).position,
+                                              event.mods.isLeftButtonDown());
         if (dragging) dragger.startDraggingComponent (this, event);
     }
 
@@ -62,6 +68,8 @@ public:
     void mouseUp (const juce::MouseEvent&) override { dragging = false; }
 
 private:
+    void changeListenerCallback (juce::ChangeBroadcaster*) override { holder.saveAudioDeviceState(); }
+
     juce::StandalonePluginHolder& holder;
     std::unique_ptr<juce::AudioProcessorEditor> editor;
     juce::ComponentDragger dragger;
@@ -76,8 +84,10 @@ public:
     bool moreThanOneInstanceAllowed() override { return false; }
     void initialise (const juce::String&) override
     {
-        // No automatic sound/preset saving in the standalone app either.
-        holder = std::make_unique<juce::StandalonePluginHolder> (nullptr, false);
+        // Audio/MIDI device choices persist; the sound itself is still never
+        // saved or restored automatically (DeviceOnlySettings drops it).
+        holder = std::make_unique<juce::StandalonePluginHolder> (
+            new DeviceOnlySettings (DeviceOnlySettings::defaultFile()), true);
         window = std::make_unique<DeviceWindow> (*holder);
     }
     void shutdown() override { window.reset(); holder.reset(); }

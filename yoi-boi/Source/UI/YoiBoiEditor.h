@@ -41,6 +41,7 @@ struct EditorCallbacks
     std::function<bool()> isFavorite;
     std::function<void()> toggleFavorite;
     std::function<std::vector<PresetItem>()> listPresets;
+    std::function<void()> rescanPresets; // re-read the shared preset folder
     std::function<void(const juce::String&)> loadPreset;
     std::function<bool(const juce::String&)> savePreset;
     std::function<juce::String()> generationFamily;

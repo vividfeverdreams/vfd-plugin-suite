@@ -95,6 +95,7 @@ if (YOIBOI_BUILD_TESTS)
         Tests/ProcessorTests.cpp
         Tests/EngineCompatibilityTests.cpp
         Tests/EditorInteractionTests.cpp
+        Tests/RegressionTests.cpp
         Source/Dsp/YoiVoice.cpp
         Source/Dsp/Legacy/YoiVoice010.cpp
         Source/Dsp/Legacy/YoiVoice012.cpp
@@ -109,7 +110,8 @@ if (YOIBOI_BUILD_TESTS)
         target_sources(YoiBoiTests PRIVATE Source/UI/WindowActions.cpp)
     endif()
     target_compile_features(YoiBoiTests PRIVATE cxx_std_20)
-    target_compile_definitions(YoiBoiTests PRIVATE JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0 JUCE_UNIT_TESTS=1 JUCE_PLUGINHOST_VST3=1)
+    target_compile_definitions(YoiBoiTests PRIVATE JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0 JUCE_UNIT_TESTS=1 JUCE_PLUGINHOST_VST3=1
+        YOIBOI_VERSION_STRING="${PROJECT_VERSION}")
     target_link_libraries(YoiBoiTests PRIVATE
         YoiBoiAssets
         juce::juce_audio_utils
