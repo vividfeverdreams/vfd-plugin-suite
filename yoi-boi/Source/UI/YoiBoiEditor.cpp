@@ -10,9 +10,10 @@ namespace yoiboi
 namespace
 {
 constexpr int designWidth = 1080, artworkHeight = 720, designHeight = 764;
-// The artwork uses the original mockup coordinates; the actual editor ends at
-// the device shell so the old navy margin and resize grip are gone.
-constexpr int shellX = 5, shellY = 18, shellWidth = 1070, shellHeight = 724;
+// The artwork uses the original mockup coordinates. The editor shows just the device: this rectangle sits on
+// the shell's own edges (Assets/HandheldShell-fullbleed.png, whose corners were tightened to match), so the
+// device meets the host window on every side.
+constexpr int shellX = 12, shellY = 20, shellWidth = 1055, shellHeight = 717;
 constexpr int infoBandTop = 665, infoBandHeight = 44;
 const juce::Colour lavender { 0xffb7a2e5 }, cream { 0xffeee8ff }, ink { 0xff10122e };
 const juce::Colour cobalt { 0xff202b88 }, cyan { 0xff65e8f2 }, lime { 0xffd7f76c };
@@ -730,7 +731,7 @@ class YoiBoiEditor::Impl final : public juce::Component, private juce::Timer, pr
 public:
     using SliderAttachment = juce::AudioProcessorValueTreeState::SliderAttachment;
 
-    Impl(juce::AudioProcessorValueTreeState& s, EditorCallbacks cb) : state(s), callbacks(std::move(cb)), shellArtwork(juce::ImageCache::getFromMemory(BinaryData::HandheldShell_png, BinaryData::HandheldShell_pngSize)), gesture(s), tooltip(this, 650)
+    Impl(juce::AudioProcessorValueTreeState& s, EditorCallbacks cb) : state(s), callbacks(std::move(cb)), shellArtwork(juce::ImageCache::getFromMemory(BinaryData::HandheldShellfullbleed_png, BinaryData::HandheldShellfullbleed_pngSize)), gesture(s), tooltip(this, 650)
     {
         setLookAndFeel(&theme);
         const std::array<juce::String, 3> tabNames { "PLAY", "SHAPE", "LIBRARY" };
@@ -1015,8 +1016,16 @@ public:
         menu.addSectionHeader("DEVICE SIZE");
         auto* editor = findParentComponentOfClass<YoiBoiEditor>();
         const int current = editor != nullptr ? juce::roundToInt(editor->getWidth() * 100.0 / shellWidth) : 100;
+        // Offer only sizes that fit the screen the device is on (150% doesn't fit a 13-14" laptop).
+        const auto* display = editor != nullptr ? juce::Desktop::getInstance().getDisplays().getDisplayForRect(editor->getScreenBounds())
+                                                : juce::Desktop::getInstance().getDisplays().getPrimaryDisplay();
         for (const int percent : { 100, 125, 150 })
-            menu.addItem(percent, juce::String(percent) + "%", true, current == percent);
+        {
+            const bool fits = display == nullptr || percent == 100
+                || (shellWidth * percent / 100 <= display->userArea.getWidth()
+                    && shellHeight * percent / 100 + 60 <= display->userArea.getHeight());
+            menu.addItem(percent, juce::String(percent) + "%", fits || current == percent, current == percent);
+        }
         menu.addSeparator();
         menu.addSectionHeader(juce::String("YOI-BOI ") + versionString);
         const int engine = callbacks.soundEngine ? callbacks.soundEngine() : 3;
@@ -1040,7 +1049,10 @@ public:
                 }
                 else if (result == 100 || result == 125 || result == 150)
                     if (auto* parent = safe->findParentComponentOfClass<YoiBoiEditor>())
+                    {
                         parent->setSize(shellWidth * result / 100, shellHeight * result / 100);
+                        if (safe->callbacks.setEditorZoom) safe->callbacks.setEditorZoom(result);
+                    }
             });
     }
     void beginEdit(const juce::String& name) { if (callbacks.beginEdit) callbacks.beginEdit(name); }
@@ -1102,12 +1114,29 @@ public:
         else slider.setEnabled(false);
     }
 
-    void paint(juce::Graphics& g) override
+    void paintShell(juce::Graphics& g)
     {
-        juce::Path silhouette;
-        silhouette.addRoundedRectangle(static_cast<float>(shellX), static_cast<float>(shellY),
-                                       static_cast<float>(shellWidth), static_cast<float>(shellHeight), 65.0f);
-        g.reduceClipRegion(silhouette);
+        // Build the shell (with its inserted INFO band) once per size and screen density, then blit it. Drawing
+        // four high-quality slices of a 1536 x 1024 image on every 30 Hz frame dominated the editor's cost.
+        const float scale = g.getInternalContext().getPhysicalPixelScaleFactor();
+        const juce::Rectangle<int> area(shellX, shellY, shellWidth, shellHeight);
+        const int w = juce::jmax(1, juce::roundToInt(area.getWidth() * scale));
+        const int h = juce::jmax(1, juce::roundToInt(area.getHeight() * scale));
+        if (shellCache.getWidth() != w || shellCache.getHeight() != h)
+        {
+            shellCache = juce::Image(juce::Image::ARGB, w, h, true);
+            juce::Graphics cache(shellCache);
+            cache.addTransform(juce::AffineTransform::translation(-static_cast<float>(shellX), -static_cast<float>(shellY)).scaled(scale));
+            // A tight corner matching the artwork: the standalone's transparent window shows the desktop there.
+            juce::Path silhouette;
+            silhouette.addRoundedRectangle(10.5f, 19.0f, 1057.6f, 719.0f, 10.0f);
+            cache.reduceClipRegion(silhouette);
+            drawShellSlices(cache);
+        }
+        g.drawImage(shellCache, area.toFloat());
+    }
+    void drawShellSlices(juce::Graphics& g)
+    {
         g.setImageResamplingQuality(juce::Graphics::highResamplingQuality);
         // Retain the original control artwork at its exact coordinates. The new
         // board strip is inserted below the utility panel; the bottom rim moves.
@@ -1130,6 +1159,10 @@ public:
             g.reduceClipRegion(65, infoBandTop, 948, infoBandHeight);
             drawShellSlice(infoBandTop, infoBandHeight, infoBandTop, 20);
         }
+    }
+    void paint(juce::Graphics& g) override
+    {
+        paintShell(g);
 
         for (int i = 0; i < 3; ++i)
         {
@@ -1474,7 +1507,7 @@ public:
 
     juce::AudioProcessorValueTreeState& state;
     EditorCallbacks callbacks;
-    juce::Image shellArtwork;
+    juce::Image shellArtwork, shellCache;
     std::unique_ptr<vfd::InfoButton> infoButton;
     std::unique_ptr<vfd::InfoOverlay> infoOverlay;
     Theme theme;
@@ -1517,13 +1550,16 @@ YoiBoiEditor::YoiBoiEditor(juce::AudioProcessor& ownerProcessor, juce::AudioProc
             if (safe != nullptr)
                 if (auto* window = deviceWindowFor(*safe)) window->showDeviceAudioSettings();
         };
+    int zoom = callbacks.editorZoom ? callbacks.editorZoom() : 100;
+    if (const auto* display = juce::Desktop::getInstance().getDisplays().getPrimaryDisplay())
+        while (zoom > 100 && shellHeight * zoom / 100 + 60 > display->userArea.getHeight()) zoom -= 25;
     impl = std::make_unique<Impl>(state, std::move(callbacks));
     addAndMakeVisible(*impl);
     setOpaque(false);
     setResizable(true, false);
     setResizeLimits(shellWidth, shellHeight, shellWidth * 3 / 2, shellHeight * 3 / 2);
     if (auto* c = getConstrainer()) c->setFixedAspectRatio(static_cast<double>(shellWidth) / shellHeight);
-    setSize(shellWidth, shellHeight);
+    setSize(shellWidth * zoom / 100, shellHeight * zoom / 100);
 }
 
 YoiBoiEditor::~YoiBoiEditor() = default;

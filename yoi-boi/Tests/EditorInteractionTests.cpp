@@ -99,8 +99,8 @@ public:
                 std::vector<float> before;
                 for (auto* parameter : synth.getParameters()) before.push_back(parameter->getValue());
                 expect(!page->isVisible());
-                expectEquals(editor->getWidth(), 1070);
-                expectEquals(editor->getHeight(), 724);
+                expectEquals(editor->getWidth(), 1055);
+                expectEquals(editor->getHeight(), 717);
                 expect(clickControl(*editor, "INFO"));
                 expect(page->isVisible());
                 std::set<juce::String> urls;

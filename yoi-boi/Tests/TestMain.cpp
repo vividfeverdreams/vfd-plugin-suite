@@ -116,7 +116,7 @@ bool renderEditor (const juce::String& path)
     if (auto* tab = findTab(findTab, editor.get(), "PLAY")) tab->onClick();
     for (const float scale : { 1.25f, 1.5f })
     {
-        editor->setSize(juce::roundToInt(1070 * scale), juce::roundToInt(724 * scale));
+        editor->setSize(juce::roundToInt(1055 * scale), juce::roundToInt(717 * scale));
         if (! save(file.getSiblingFile(file.getFileNameWithoutExtension() + "-"
                      + juce::String(juce::roundToInt(scale * 100)) + ".png").getFullPathName())) return false;
     }

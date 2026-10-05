@@ -908,6 +908,13 @@ EditorCallbacks YoiBoiProcessor::makeEditorCallbacks()
     c.toggleFavorite = [this] { toggleFavorite(); };
     c.listPresets = [this] { return listPresets(); };
     c.rescanPresets = [this] { rescanUserPresets(); };
+    c.editorZoom = [this] { return editorZoom.load(); };
+    c.setEditorZoom = [this] (int percent)
+    {
+        if (percent == editorZoom.load() || (percent != 100 && percent != 125 && percent != 150)) return;
+        editorZoom.store (percent);
+        updateHostDisplay (ChangeDetails().withNonParameterStateChanged (true));
+    };
     c.loadPreset = [this] (const juce::String& id) { loadPreset (id); };
     c.savePreset = [this] (const juce::String& name) { return savePreset (name); };
     c.generationFamily = [this] { const juce::ScopedLock lock (stateMutex); return generationFamily; };
@@ -937,6 +944,7 @@ void YoiBoiProcessor::getStateInformation (juce::MemoryBlock& destData)
     root.setProperty ("version", 1, nullptr);
     root.setProperty ("seedCounter", juce::String::toHexString (static_cast<juce::int64> (seedCounter)), nullptr);
     root.setProperty ("generationFamily", generationFamily, nullptr);
+    root.setProperty ("editorZoom", editorZoom.load(), nullptr);
     for (int i = 0; i < 6; ++i) root.setProperty ("lock" + juce::String (i), locks[static_cast<size_t> (i)], nullptr);
     root.addChild (apvts.copyState(), -1, nullptr);
     root.addChild (toValueTree (livePatch()), -1, nullptr);
@@ -1012,6 +1020,8 @@ void YoiBoiProcessor::setStateInformation (const void* data, int size)
     }
     // Case-insensitive: earlier builds stored the editor's "RUBBER" spelling.
     generationFamily = canonicalFamilyName (root.getProperty ("generationFamily", "All Families").toString());
+    const int zoom = static_cast<int> (root.getProperty ("editorZoom", 100));
+    editorZoom.store ((zoom == 125 || zoom == 150) ? zoom : 100);
     history.clear();
     history.push_back (currentPatch);
     historyIndex = 0;

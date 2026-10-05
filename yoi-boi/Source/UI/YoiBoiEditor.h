@@ -46,6 +46,8 @@ struct EditorCallbacks
     std::function<bool(const juce::String&)> savePreset;
     std::function<juce::String()> generationFamily;
     std::function<void(const juce::String&)> setGenerationFamily;
+    std::function<int()> editorZoom;            // saved device size in percent (100, 125 or 150)
+    std::function<void(int)> setEditorZoom;
 };
 
 class YoiBoiEditor final : public juce::AudioProcessorEditor

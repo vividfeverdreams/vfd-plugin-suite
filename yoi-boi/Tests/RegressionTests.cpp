@@ -560,7 +560,7 @@ public:
 
             juce::Component deviceEditor, shell;
             juce::TextButton zoom ("ZOOM");
-            deviceEditor.setSize (1070, 724);
+            deviceEditor.setSize (1055, 717);
             deviceEditor.addAndMakeVisible (shell);
             shell.setBounds (0, 0, 1080, 764);
             shell.addAndMakeVisible (zoom);
@@ -570,7 +570,7 @@ public:
                     "ZOOM/CLOSE clicks must not start a window drag");
             expect (! startsDeviceWindowDrag (deviceEditor, &shell, { 200.0f, 30.0f }, false));
             expect (! startsDeviceWindowDrag (deviceEditor, &shell, { 200.0f, 120.0f }, true));
-            deviceEditor.setSize (1605, 1086);
+            deviceEditor.setSize (1582, 1075);
             expect (startsDeviceWindowDrag (deviceEditor, &shell, { 300.0f, 90.0f }, true));
         }
     }

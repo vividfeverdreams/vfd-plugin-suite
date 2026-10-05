@@ -121,6 +121,7 @@ private:
     std::vector<UserPreset> userPresets;
     std::vector<juce::String> favorites;
     juce::String generationFamily = "All Families";
+    std::atomic<int> editorZoom { 100 }; // device size, saved with the session (not an audio parameter)
     juce::String status;
     std::uint64_t seedCounter = 1;
 

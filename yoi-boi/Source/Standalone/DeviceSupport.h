@@ -68,8 +68,8 @@ inline bool startsDeviceWindowDrag (const juce::Component& editor, const juce::C
 {
     if (! leftButton || clicked == nullptr || editor.getWidth() <= 0) return false;
     const bool onShell = clicked == &editor || clicked->getParentComponent() == &editor;
-    const auto scale = static_cast<float> (editor.getWidth()) / 1070.0f;
-    return onShell && positionInEditor.y < 70.0f * scale
-        && positionInEditor.x > 45.0f * scale && positionInEditor.x < 465.0f * scale;
+    const auto scale = static_cast<float> (editor.getWidth()) / 1055.0f;
+    return onShell && positionInEditor.y < 68.0f * scale
+        && positionInEditor.x > 38.0f * scale && positionInEditor.x < 458.0f * scale;
 }
 } // namespace yoiboi

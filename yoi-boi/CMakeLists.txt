@@ -24,7 +24,7 @@ juce_add_binary_data(YoiBoiAssets SOURCES
     ../shared/VfdLogo.svg
     Assets/ChakraPetch-BoldItalic.ttf
     Assets/ChakraPetch-SemiBold.ttf
-    Assets/HandheldShell.png)
+    Assets/HandheldShell-fullbleed.png)
 
 juce_add_plugin(YoiBoi
     COMPANY_NAME "VIVID FEVER DREAMS"
