@@ -11,6 +11,27 @@
 #include <functional>
 #include <cstring>
 #include <AudioToolbox/AudioToolbox.h>
+#include <atomic>
+#include <cstdlib>
+#include <new>
+
+// Counts heap allocations made while `countAllocations` is set, so the audio
+// path (processBlock, including MIDI throws and note rooms) can be proven allocation-free.
+namespace {
+std::atomic<bool> countAllocations { false };
+std::atomic<int> audioAllocations { 0 };
+}
+void* operator new(std::size_t size)
+{
+    if (countAllocations.load(std::memory_order_relaxed)) audioAllocations.fetch_add(1, std::memory_order_relaxed);
+    if (auto* memory = std::malloc(size == 0 ? 1 : size)) return memory;
+    throw std::bad_alloc();
+}
+void* operator new[](std::size_t size) { return ::operator new(size); }
+void operator delete(void* memory) noexcept { std::free(memory); }
+void operator delete[](void* memory) noexcept { std::free(memory); }
+void operator delete(void* memory, std::size_t) noexcept { std::free(memory); }
+void operator delete[](void* memory, std::size_t) noexcept { std::free(memory); }
 
 namespace {
 void check(bool value, const char* message)
@@ -385,6 +406,34 @@ void runFeatureHostTests(const juce::File* folder)
         p.flushPendingRoomForTesting();
         check(p.getCurrentProgram() == 5 && std::abs(get(p, "size") - throwup::factoryPresets()[5].room.size) < .05f,
               "with Note picks room, the note selects its room");
+        // The processor's own 30 Hz message-thread timer applies a picked room (no flush).
+        midi.clear();
+        midi.addEvent(juce::MidiMessage::noteOn(1, ThrowUpProcessor::firstRoomNote + 12, static_cast<juce::uint8>(90)), 3);
+        processSine(p, audio, midi, clock);
+        check(pumpTimersUntil([&p] { return p.getCurrentProgram() == 12; }, 3000)
+              && std::abs(get(p, "size") - throwup::factoryPresets()[12].room.size) < .05f,
+              "the processor's timer applies a room picked by a MIDI note");
+        // The audio thread never allocates, including MIDI throws and note-picked rooms.
+        juce::MidiBuffer notes;
+        notes.ensureSize(4096);
+        int allocations = 0;
+        for (int b = 0; b < 200; ++b) {
+            notes.clear();
+            if (b % 2 == 0) notes.addEvent(juce::MidiMessage::noteOn(1, ThrowUpProcessor::firstRoomNote + (b / 2) % 90, static_cast<juce::uint8>(100)), b % 200);
+            else notes.addEvent(juce::MidiMessage::noteOff(1, ThrowUpProcessor::firstRoomNote + (b / 2) % 90), 7);
+            for (int c = 0; c < 2; ++c)
+                for (int i = 0; i < 256; ++i)
+                    audio.setSample(c, i, .3f * static_cast<float>(std::sin(2 * juce::MathConstants<double>::pi * 330 * (clock + i) / 48000.0)));
+            clock += 256;
+            audioAllocations.store(0);
+            countAllocations.store(true);
+            p.processBlock(audio, notes);
+            countAllocations.store(false);
+            allocations += audioAllocations.load();
+        }
+        std::cout << "processBlock with MIDI throws and note-picked rooms: " << allocations << " allocations in 200 blocks\n";
+        check(allocations == 0, "the audio thread never allocates, including MIDI note rooms");
+        p.flushPendingRoomForTesting();
     }
     {
         // Optional sidechain for Duck.

@@ -4,7 +4,7 @@
 #include <array>
 #include <atomic>
 
-class ThrowUpProcessor final : public juce::AudioProcessor, private juce::AsyncUpdater
+class ThrowUpProcessor final : public juce::AudioProcessor, private juce::Timer
 {
 public:
     ThrowUpProcessor();
@@ -57,8 +57,8 @@ public:
     void setEditorScale(float scale);
 
     float getTriggerLevel() const { return triggerLevel.load(std::memory_order_relaxed); }
-    // Applies a room picked by a MIDI note now (normally done on the message thread).
-    void flushPendingRoomForTesting() { handleUpdateNowIfNeeded(); }
+    // Applies a room picked by a MIDI note now (normally the 30 Hz message-thread poll does it).
+    void flushPendingRoomForTesting() { applyPendingRoom(); }
     double getHostTempo() const { return hostTempo.load(std::memory_order_relaxed); }
 
     juce::AudioProcessorValueTreeState apvts;
@@ -73,7 +73,10 @@ private:
     throwup::Settings readSettings(int numSamples);
     void process(juce::AudioBuffer<float>&, juce::MidiBuffer&, bool forceBypass);
     void handleMidi(const juce::MidiBuffer&, int numSamples);
-    void handleAsyncUpdate() override;
+    // Real-time-safe hand-off: the audio thread only stores the requested room in
+    // pendingRoom; this message-thread timer (30 Hz) takes it and loads the room.
+    void timerCallback() override { applyPendingRoom(); }
+    void applyPendingRoom();
     void applyParameter(const juce::String& id, float value);
     juce::ValueTree captureSlot() const;
     void applySlot(const juce::ValueTree&);

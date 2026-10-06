@@ -123,11 +123,12 @@ ThrowUpProcessor::ThrowUpProcessor()
     }
     setLatencySamples(0);
     loadFactoryPreset(0);
+    startTimerHz(30);
 }
 
 ThrowUpProcessor::~ThrowUpProcessor()
 {
-    cancelPendingUpdate();
+    stopTimer();
 }
 
 bool ThrowUpProcessor::isBusesLayoutSupported(const BusesLayout& l) const
@@ -273,9 +274,9 @@ void ThrowUpProcessor::handleMidi(const juce::MidiBuffer& midi, int numSamples)
             const int room = note - firstRoomNote;
             if (noteRooms && room >= 0 && room < throwup::legacyPresetStart()) {
                 roomOverride = room;
+                // Atomic stores only: the message-thread timer picks the room up.
                 appliedRoom.store(-1);
                 pendingRoom.store(room);
-                triggerAsyncUpdate();
             }
         } else if (message.isNoteOff()) {
             const int note = message.getNoteNumber();
@@ -316,7 +317,7 @@ void ThrowUpProcessor::process(juce::AudioBuffer<float>& audio, juce::MidiBuffer
     raisePeak(outputLevel, main.getMagnitude(0, numSamples));
 }
 
-void ThrowUpProcessor::handleAsyncUpdate()
+void ThrowUpProcessor::applyPendingRoom()
 {
     const int room = pendingRoom.exchange(-1);
     if (room >= 0) {
