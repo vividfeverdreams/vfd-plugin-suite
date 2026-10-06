@@ -11,17 +11,35 @@ namespace {
 constexpr int shellX = 57, shellY = 73, shellWidth = 1008, shellHeight = 1247;
 constexpr int infoBandTop = 1244, infoBandHeight = 70;
 constexpr int editorHeight = shellHeight + infoBandHeight;
+constexpr int baseWidth = 650;
 constexpr float startAngle = juce::MathConstants<float>::pi * 1.25f;
 constexpr float endAngle = juce::MathConstants<float>::pi * 2.75f;
 const juce::Colour ink { 0xff073d2b }, screenText { 0xffd7ffee }, lime { 0xffc3ff62 };
 const juce::Colour muted { 0xff9bc2b2 }, mint { 0xffd7f4cd }, neon { 0xff69ff9a };
+const juce::Colour screenPanel { 0xff0b3a29 }, screenLine { 0xff398c5b };
 const juce::Rectangle<float> motionSwitchBounds {177, 1160, 168, 58};
 const juce::Rectangle<float> randomBounds {367, 1146, 168, 65};
 const juce::Rectangle<float> locksBounds {550, 1146, 150, 65};
 const juce::Rectangle<float> undoBounds {721, 1126, 86, 42};
 const juce::Rectangle<float> redoBounds {816, 1126, 86, 42};
 const juce::Rectangle<float> bypassBounds {721, 1180, 181, 40};
-const juce::Rectangle<float> vowelSwitchBounds {532, 207, 241, 43};
+// Screen (dark LCD) layout, design coordinates. The screen interior spans x 141..981, y 171..507.
+const juce::Rectangle<float> pageTabs[] { {592, 116, 82, 42}, {674, 116, 82, 42}, {756, 116, 82, 42}, {838, 116, 80, 42} };
+const juce::Rectangle<float> engineSelectorBounds {540, 202, 400, 40};
+const juce::Rectangle<float> motionTabBounds {180, 202, 330, 40};
+const juce::Rectangle<float> folderChipBounds {640, 204, 290, 38};
+const juce::Rectangle<float> lowLatencyBounds {300, 254, 180, 40};
+const juce::Rectangle<float> vowelSwitchBounds {300, 316, 180, 40};
+const juce::Rectangle<float> voiceSetBounds {300, 330, 300, 42};
+const juce::Rectangle<float> mouthVoiceSetBounds {300, 396, 300, 40};
+const juce::Rectangle<float> latestButtonBounds {540, 398, 380, 56};
+const juce::Rectangle<float> originalVowelBounds {300, 406, 170, 40};
+const juce::Rectangle<float> saveFolderPickBounds {728, 357, 112, 40};
+const juce::Rectangle<float> lfoCells[] { {170, 416, 160, 55}, {330, 416, 190, 55}, {520, 416, 180, 55},
+                                          {700, 416, 130, 55}, {830, 416, 121, 55} };
+const juce::Rectangle<float> yoiCells[] { {170, 416, 180, 55}, {350, 416, 140, 55}, {490, 416, 140, 55},
+                                          {630, 416, 170, 55}, {800, 416, 151, 55} };
+const juce::Rectangle<float> envCells[] { {170, 416, 270, 55}, {440, 416, 260, 55}, {700, 416, 251, 55} };
 
 class InvisibleSlider final : public juce::Slider {
 public:
@@ -126,6 +144,26 @@ void drawPadlock(juce::Graphics& g, juce::Rectangle<float> bounds,
     }
 }
 
+juce::String vowelLabel(float position) {
+    const float p = juce::jlimit(0.0f, 4.0f, position);
+    const int nearest = juce::roundToInt(p);
+    if (std::abs(p - static_cast<float>(nearest)) < 0.15f) return vowelName(nearest);
+    const int lower = static_cast<int>(std::floor(p));
+    return juce::String(vowelName(lower)) + "-" + vowelName(juce::jmin(4, lower + 1));
+}
+
+bool isPercentage(const juce::String& id) {
+    return id == "focus" || id == "bite" || id == "drive" || id == "mix" || id == "character"
+        || id == "talk" || id == "yoiAmount" || id == "envAmount";
+}
+
+/** The folder a typed name saves into: one level, no separators, no leading dots (as the processor does). */
+juce::String cleanFolderName(const juce::String& typed) {
+    auto folder = juce::File::createLegalFileName(typed.trim());
+    while (folder.startsWithChar('.')) folder = folder.substring(1).trimStart();
+    return folder;
+}
+
 juce::String formatValue(const juce::String& id, float value) {
     if (std::abs(value) < 0.0001f) value = 0.0f;
     if (id == "shift") return juce::String(value, 1) + " st";
@@ -133,6 +171,11 @@ juce::String formatValue(const juce::String& id, float value) {
     if (id == "output") return juce::String(value, 1) + " dB";
     if (id == "motionDepth") return juce::String(value, 1) + " st";
     if (id == "motionFreeHz") return juce::String(value, 2) + " Hz";
+    if (id == "vowelMorph") return vowelLabel(value);
+    if (id == "envAmount") return (value > 0.0f ? "+" : "") + juce::String(juce::roundToInt(value * 100.0f)) + "%";
+    if (id == "envAttack") return (value < 10.0f ? juce::String(value, 1) : juce::String(juce::roundToInt(value))) + " ms";
+    if (id == "envRelease" || id == "yoiTime") return juce::String(juce::roundToInt(value)) + " ms";
+    if (id == "yoiShift") return (value > 0.0f ? "+" : "") + juce::String(value, 1) + " st";
     return juce::String(juce::roundToInt(value * 100.0f)) + "%";
 }
 
@@ -165,6 +208,22 @@ void drawFavoriteStar(juce::Graphics& g, juce::Point<float> centre,
                                                 juce::PathStrokeType::mitered,
                                                 juce::PathStrokeType::rounded));
 }
+
+const char* engineName(EngineMode mode) {
+    switch (mode) {
+        case EngineMode::talk: return "TALK";
+        case EngineMode::mouth: return "MOUTH";
+        case EngineMode::classic: return "CLASSIC";
+        case EngineMode::original: break;
+    }
+    return "CLASSIC 0.4";
+}
+
+juce::String latencyText(EngineMode mode, bool lowLatency, double sampleRate) {
+    const double rate = sampleRate > 0.0 ? sampleRate : 48000.0;
+    const int samples = ShiftyProcessor::latencyFor(mode, lowLatency, rate);
+    return "LATENCY " + juce::String(juce::roundToInt(1000.0 * samples / rate)) + " MS";
+}
 } // namespace
 
 struct ShiftyEditor::Control {
@@ -188,7 +247,23 @@ struct ShiftyEditor::PresetItem {
     juce::String name;
     int factoryIndex = -1;
     juce::File file;
+    juce::String folder; // factory folder, or "User" / "User/<folder>"
 };
+
+juce::Point<int> ShiftyEditor::sizeFor(double scale) {
+    const int width = juce::roundToInt(baseWidth * scale);
+    return { width, juce::roundToInt(baseWidth * scale * editorHeight / shellWidth) };
+}
+
+std::vector<double> ShiftyEditor::sizesFitting(juce::Rectangle<int> userArea) {
+    std::vector<double> result;
+    for (const double scale : sizeChoices) {
+        const auto size = sizeFor(scale);
+        if (userArea.isEmpty() || (size.x <= userArea.getWidth() && size.y + 60 <= userArea.getHeight()))
+            result.push_back(scale);
+    }
+    return result;
+}
 
 ShiftyEditor::ShiftyEditor(ShiftyProcessor& p)
     : juce::AudioProcessorEditor(p), plugin(p),
@@ -200,6 +275,7 @@ ShiftyEditor::ShiftyEditor(ShiftyProcessor& p)
           BinaryData::ChakraPetchBoldItalic_ttf, BinaryData::ChakraPetchBoldItalic_ttfSize)) {
     setOpaque(true);
     setWantsKeyboardFocus(true);
+    live = plugin.display();
 
     addControl("shift", {196, 606, 310, 285}, {245, 896, 220, 70}, true, true);
     addControl("focus", {576, 575, 144, 142}, {585, 706, 125, 45}, true, true);
@@ -208,13 +284,26 @@ ShiftyEditor::ShiftyEditor(ShiftyProcessor& p)
     addControl("mix", {778, 798, 144, 142}, {790, 927, 125, 45}, true, true);
     addControl("subCut", {296, 1042, 120, 60}, {296, 1043, 125, 62}, false, false);
     addControl("output", {458, 1042, 155, 60}, {462, 1043, 150, 62}, false, false);
-    addControl("motionDepth", {585, 418, 181, 52}, {653, 421, 111, 48}, false, false);
-    addControl("motionFreeHz", {363, 418, 189, 52}, {432, 421, 115, 48}, false, false);
+    // MOTION page, LFO strip
+    addControl("motionDepth", {525, 418, 170, 52}, {592, 421, 103, 48}, false, false);
+    addControl("motionFreeHz", {335, 418, 180, 52}, {398, 421, 117, 48}, false, false);
+    // MOTION page, ENV and YOI strips
+    addControl("envAmount", {175, 418, 260, 52}, {300, 421, 130, 48}, false, false, false);
+    addControl("envAttack", {445, 418, 250, 52}, {560, 421, 130, 48}, false, false, false);
+    addControl("envRelease", {705, 418, 240, 52}, {820, 421, 125, 48}, false, false, false);
+    addControl("yoiAmount", {172, 418, 176, 52}, {258, 421, 88, 48}, false, false, false);
+    addControl("yoiTime", {632, 418, 166, 52}, {694, 421, 102, 48}, false, false, false);
+    addControl("yoiShift", {802, 418, 147, 52}, {866, 421, 83, 48}, false, false, false);
+    // VOICE page
+    addControl("vowelMorph", {300, 248, 300, 50}, {180, 280, 110, 26}, false, false, false);
+    addControl("character", {682, 280, 76, 76}, {670, 384, 100, 26}, true, false, false);
+    addControl("talk", {832, 280, 76, 76}, {820, 384, 100, 26}, true, false, false);
+    control("vowelMorph")->label->setJustificationType(juce::Justification::centredLeft);
 
     addSwitch("subSafe", {181, 1045, 103, 55});
     addSwitch("motionEnable", motionSwitchBounds);
     addSwitch("bypass", bypassBounds);
-    addSwitch("motionSync", {771, 418, 176, 52});
+    addSwitch("motionSync", lfoCells[3]);
     addSwitch("vowel", vowelSwitchBounds);
 
     auto addAction = [this](std::unique_ptr<juce::Button>& button, const char* name,
@@ -231,18 +320,21 @@ ShiftyEditor::ShiftyEditor(ShiftyProcessor& p)
               [this] { plugin.randomizeParameters(); updateValueLabels(); updatePage(); repaint(); });
     addAction(locksButton, "Randomization locks", "Choose which parameters RANDOM keeps unchanged. Locks do not affect manual changes or preset loading.",
               [this] { showLocksMenu(); });
-    addAction(undoButton, "Undo", "Undo the last change or random variation", [this] {
+    addAction(undoButton, "Undo", "Undo the last change, preset, engine change or random variation", [this] {
         plugin.undo(); updateValueLabels(); updatePage(); repaint();
     });
     addAction(redoButton, "Redo", "Redo the last undone change", [this] {
         plugin.redo(); updateValueLabels(); updatePage(); repaint();
     });
+    addAction(latestButton, "Use latest sound",
+              "Switch this sound from the original 0.4 engine to the current CLASSIC engine. Undo returns to the original.",
+              [this] { plugin.useLatestSound(); updatePage(); repaint(); });
 
     for (auto& c : controls) {
         c.slider->onValueChange = [this] { updateValueLabels(); repaint(); };
         c.label->onTextChange = [this, id = c.id, slider = c.slider.get(), label = c.label.get()] {
             float value = static_cast<float>(label->getText().getDoubleValue());
-            if (id == "focus" || id == "bite" || id == "drive" || id == "mix")
+            if (isPercentage(id))
                 value *= 0.01f;
             // A typed value is one complete edit, so it becomes one Undo step.
             auto* parameter = plugin.parameters().getParameter(id);
@@ -260,20 +352,24 @@ ShiftyEditor::ShiftyEditor(ShiftyProcessor& p)
     presetSearch.setTextToShowWhenEmpty("Search presets", muted);
     presetSearch.setColour(juce::TextEditor::backgroundColourId, juce::Colour(0xff073828));
     presetSearch.setColour(juce::TextEditor::textColourId, screenText);
-    presetSearch.setColour(juce::TextEditor::outlineColourId, juce::Colour(0xff398c5b));
+    presetSearch.setColour(juce::TextEditor::outlineColourId, screenLine);
     presetSearch.setColour(juce::TextEditor::focusedOutlineColourId, lime);
     presetSearch.onTextChange = [this] { refreshPresetList(); repaint(); };
     presetSearch.onReturnKey = [this] { loadSelectedPreset(); };
 
-    addAndMakeVisible(presetNameEditor);
-    presetNameEditor.setMultiLine(false);
+    for (auto* editor : { &presetNameEditor, &presetFolderEditor }) {
+        addAndMakeVisible(*editor);
+        editor->setMultiLine(false);
+        editor->setColour(juce::TextEditor::backgroundColourId, juce::Colour(0xff073828));
+        editor->setColour(juce::TextEditor::textColourId, screenText);
+        editor->setColour(juce::TextEditor::outlineColourId, lime);
+        editor->setColour(juce::TextEditor::focusedOutlineColourId, lime);
+        editor->onReturnKey = [this] { finishPresetSave(); };
+        editor->onEscapeKey = [this] { savingPreset = false; updatePage(); repaint(); };
+        editor->onTextChange = [this] { repaint(); };
+    }
     presetNameEditor.setTextToShowWhenEmpty("Preset name", muted);
-    presetNameEditor.setColour(juce::TextEditor::backgroundColourId, juce::Colour(0xff073828));
-    presetNameEditor.setColour(juce::TextEditor::textColourId, screenText);
-    presetNameEditor.setColour(juce::TextEditor::outlineColourId, lime);
-    presetNameEditor.setColour(juce::TextEditor::focusedOutlineColourId, lime);
-    presetNameEditor.onReturnKey = [this] { finishPresetSave(); };
-    presetNameEditor.onEscapeKey = [this] { savingPreset = false; updatePage(); repaint(); };
+    presetFolderEditor.setTextToShowWhenEmpty("Folder (optional)", muted);
 
     juce::PropertiesFile::Options favoriteOptions;
     favoriteOptions.applicationName = "SHIFTY";
@@ -296,16 +392,29 @@ ShiftyEditor::ShiftyEditor(ShiftyProcessor& p)
     updateValueLabels();
     updatePage();
     setResizable(true, false);
-    setResizeLimits(500, 500 * editorHeight / shellWidth, 850, 850 * editorHeight / shellWidth);
+    const auto smallest = sizeFor(0.75), largest = sizeFor(sizeChoices.back());
+    setResizeLimits(smallest.x, smallest.y, largest.x, largest.y);
     getConstrainer()->setFixedAspectRatio(static_cast<double>(shellWidth) / editorHeight);
-    setSize(650, 650 * editorHeight / shellWidth);
+    // Open at the size saved with the project, or the largest standard size that fits the display.
+    juce::Rectangle<int> userArea;
+    if (const auto* display = juce::Desktop::getInstance().getDisplays().getPrimaryDisplay())
+        userArea = display->userBounds.toNearestInt();
+    double scale = juce::jlimit(0.75, sizeChoices.back(), plugin.editorScale());
+    const auto wanted = sizeFor(scale);
+    if (!userArea.isEmpty() && (wanted.x > userArea.getWidth() || wanted.y + 60 > userArea.getHeight())) {
+        const auto fitting = sizesFitting(userArea);
+        scale = fitting.empty() ? sizeChoices.front() : fitting.back();
+    }
+    const auto size = sizeFor(scale);
+    setSize(size.x, size.y);
+    sizeReady = true;
     startTimerHz(30);
 }
 
 ShiftyEditor::~ShiftyEditor() { stopTimer(); }
 
 void ShiftyEditor::addControl(const char* id, juce::Rectangle<float> hit,
-                              juce::Rectangle<float> value, bool rotary, bool darkText) {
+                              juce::Rectangle<float> value, bool rotary, bool darkText, bool lockable) {
     controls.emplace_back();
     auto& c = controls.back();
     c.id = id;
@@ -319,11 +428,20 @@ void ShiftyEditor::addControl(const char* id, juce::Rectangle<float> hit,
     c.slider->setScrollWheelEnabled(false);
     c.slider->setPopupMenuEnabled(false);
     juce::String description = c.id;
-    if (c.id == "shift") description = "Shift: move the sound's own spectral envelope lower or higher while preserving its notes";
-    else if (c.id == "focus") description = "Focus: follow broad spectral shapes or finer formant detail in the source sound";
-    else if (c.id == "bite") description = "Bite: strengthen the contrast of the source formant shift";
-    else if (c.id == "drive") description = "Drive: add harmonics for fuller formant movement on sparse bass sounds";
+    if (c.id == "shift") description = "Shift: move the formants lower (bigger, darker) or higher (smaller, brighter) while keeping the notes";
+    else if (c.id == "focus") description = "Focus: TALK formant width, MOUTH grain length, CLASSIC envelope detail";
+    else if (c.id == "bite") description = "Bite: TALK resonance and drive into the vowels, MOUTH pitch-synchronous buzz, CLASSIC contrast";
+    else if (c.id == "drive") description = "Drive: anti-aliased saturation before the formant engine";
     else if (c.id == "mix") description = "Mix: blend in the formant effect; 100% gives the clearest change";
+    else if (c.id == "vowelMorph") description = "Vowel: morph OO, OH, AH, EH, EE (TALK) or the mouth shape (MOUTH)";
+    else if (c.id == "character") description = "Character macro: more resonance, bite and drive (MOUTH: adds the vowel's mouth shape)";
+    else if (c.id == "talk") description = "Talk macro: more envelope, YOI and Motion movement";
+    else if (c.id == "envAmount") description = "Envelope amount: louder notes open the vowel (TALK) or raise SHIFT (MOUTH, CLASSIC); negative reverses";
+    else if (c.id == "envAttack") description = "Envelope attack";
+    else if (c.id == "envRelease") description = "Envelope release";
+    else if (c.id == "yoiAmount") description = "YOI amount: each new note sweeps the vowel from FROM to TO";
+    else if (c.id == "yoiTime") description = "YOI sweep time";
+    else if (c.id == "yoiShift") description = "YOI shift: formant offset at the start of each sweep, gliding back to zero";
     c.slider->setTooltip(description + ". Drag to adjust, double click to reset, right click for randomization lock.");
     c.slider->onContextMenu = [this, parameterId = c.id, slider = c.slider.get()] {
         showParameterLockMenu(parameterId, slider);
@@ -347,7 +465,7 @@ void ShiftyEditor::addControl(const char* id, juce::Rectangle<float> hit,
     c.label->setEditable(false, true, false);
     c.label->setTooltip(c.id + ": double click to type a value");
     addAndMakeVisible(*c.label);
-    if (rotary) {
+    if (rotary && lockable) {
         c.lockButton = std::make_unique<InvisibleAction>();
         c.lockButton->setName(c.id + " randomization lock");
         c.lockButton->setMouseCursor(juce::MouseCursor::PointingHandCursor);
@@ -372,8 +490,8 @@ void ShiftyEditor::addSwitch(const char* id, juce::Rectangle<float> hit) {
     };
     s.button->setTooltip(s.id == "motionEnable" ? "Turn motion on or off" :
                          s.id == "bypass" ? "Bypass SHIFTY" :
-                         s.id == "motionSync" ? "Sync movement to the host tempo" :
-                         s.id == "vowel" ? "Add optional vowel color to the source formant shift. Off by default and locked out of RANDOM; right click to unlock." :
+                         s.id == "motionSync" ? "Sync movement to the host tempo (it keeps running at the host tempo while the transport is stopped)" :
+                         s.id == "vowel" ? "CLASSIC: add the optional vowel color contour. Locked out of RANDOM by default; right click to unlock." :
                          "Protect the original low end");
     addAndMakeVisible(*s.button);
     s.attachment = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(
@@ -419,20 +537,56 @@ void ShiftyEditor::updateValueLabels() {
         }
 }
 
+void ShiftyEditor::showPageForTesting(Page newPage, MotionTab tab) {
+    page = newPage;
+    motionTab = tab;
+    live = plugin.display();
+    updatePage();
+    repaint();
+}
+
+void ShiftyEditor::selectPresetFilterForTesting(int filter, const juce::String& folder) {
+    presetFilter = static_cast<PresetFilter>(juce::jlimit(0, 2, filter));
+    presetFolderFilter = folder;
+    refreshPresetList();
+    repaint();
+}
+
+int ShiftyEditor::presetCountForTesting() const noexcept { return static_cast<int>(presetItems.size()); }
+
 void ShiftyEditor::updatePage() {
+    const auto engine = plugin.engineMode();
+    const bool original = engine == EngineMode::original;
     const bool onMotion = page == Page::motion;
+    const bool onVoice = page == Page::voice;
     const bool onPresets = page == Page::presets;
+    // The vowel bar sits higher on TALK than on MOUTH (where pitch comes first).
+    if (auto* vowel = control("vowelMorph")) {
+        vowel->hit = engine == EngineMode::mouth ? juce::Rectangle<float>{300, 318, 300, 50}
+                                                  : juce::Rectangle<float>{300, 248, 300, 50};
+        vowel->value = engine == EngineMode::mouth ? juce::Rectangle<float>{180, 346, 110, 26}
+                                                    : juce::Rectangle<float>{180, 280, 110, 26};
+    }
     for (auto& c : controls) {
-        const bool motionControl = c.id == "motionDepth" || c.id == "motionFreeHz";
-        bool visible = !motionControl || onMotion;
-        if (c.id == "motionFreeHz") visible = onMotion && !isOn("motionSync");
+        bool visible = true;
+        if (c.id == "motionDepth") visible = onMotion && motionTab == MotionTab::lfo;
+        else if (c.id == "motionFreeHz") visible = onMotion && motionTab == MotionTab::lfo && !isOn("motionSync");
+        else if (c.id.startsWith("env")) visible = onMotion && motionTab == MotionTab::envelope && !original;
+        else if (c.id.startsWith("yoi")) visible = onMotion && motionTab == MotionTab::yoi && !original;
+        else if (c.id == "vowelMorph") visible = onVoice && (engine == EngineMode::talk || engine == EngineMode::mouth);
+        else if (c.id == "character" || c.id == "talk") visible = onVoice && !original;
         c.slider->setVisible(visible);
         c.label->setVisible(visible);
     }
-    if (auto* sync = controlSwitch("motionSync")) sync->button->setVisible(onMotion);
-    if (auto* vowel = controlSwitch("vowel")) vowel->button->setVisible(page == Page::sound);
+    if (auto* sync = controlSwitch("motionSync")) sync->button->setVisible(onMotion && motionTab == MotionTab::lfo);
+    if (auto* vowel = controlSwitch("vowel")) {
+        vowel->hit = original ? originalVowelBounds : vowelSwitchBounds;
+        vowel->button->setVisible(onVoice && (engine == EngineMode::classic || original));
+    }
+    latestButton->setVisible(onVoice && original);
     presetSearch.setVisible(onPresets && !savingPreset);
     presetNameEditor.setVisible(onPresets && savingPreset);
+    presetFolderEditor.setVisible(onPresets && savingPreset);
     resized();
 }
 
@@ -489,7 +643,8 @@ void ShiftyEditor::resized() {
         c.label->setBounds(scaled(c.value));
         float fontSize = c.id == "shift" ? 46.0f :
                          (c.id == "subCut" || c.id == "output") ? 31.0f : 31.0f;
-        if (c.id == "motionDepth" || c.id == "motionFreeHz") fontSize = 22.0f;
+        if (c.id.startsWith("motion") || c.id.startsWith("env") || c.id.startsWith("yoi")) fontSize = 22.0f;
+        if (c.id == "vowelMorph" || c.id == "character" || c.id == "talk") fontSize = 20.0f;
         c.label->setFont(juce::Font(juce::FontOptions(normalTypeface)
                                          .withHeight(fontSize * scale)));
         if (c.lockButton) c.lockButton->setBounds(scaled(knobLockBounds(c.id)));
@@ -499,12 +654,16 @@ void ShiftyEditor::resized() {
     locksButton->setBounds(scaled(locksBounds));
     undoButton->setBounds(scaled(undoBounds));
     redoButton->setBounds(scaled(redoBounds));
+    latestButton->setBounds(scaled(latestButtonBounds));
     presetSearch.setBounds(scaled({645, 253, 275, 40}));
     presetSearch.setFont(juce::Font(juce::FontOptions(normalTypeface).withHeight(22.0f * scale)));
-    presetNameEditor.setBounds(scaled({300, 333, 540, 49}));
-    presetNameEditor.setFont(juce::Font(juce::FontOptions(normalTypeface).withHeight(28.0f * scale)));
+    presetNameEditor.setBounds(scaled({300, 305, 540, 44}));
+    presetNameEditor.setFont(juce::Font(juce::FontOptions(normalTypeface).withHeight(26.0f * scale)));
+    presetFolderEditor.setBounds(scaled({300, 357, 420, 40}));
+    presetFolderEditor.setFont(juce::Font(juce::FontOptions(normalTypeface).withHeight(22.0f * scale)));
     if (infoButton) infoButton->setBounds(scaled({486, 1249, 152, 60}));
     if (infoOverlay) infoOverlay->setBounds(getLocalBounds());
+    if (sizeReady) plugin.setEditorScale(static_cast<double>(getWidth()) / baseWidth);
 }
 
 void ShiftyEditor::drawText(juce::Graphics& g, const juce::String& str,
@@ -513,6 +672,67 @@ void ShiftyEditor::drawText(juce::Graphics& g, const juce::String& str,
     g.setFont(juce::Font(juce::FontOptions(normalTypeface).withHeight(size)));
     g.setColour(colour);
     g.drawFittedText(str, bounds.toNearestInt(), alignment, 1);
+}
+
+void ShiftyEditor::drawSegments(juce::Graphics& g, juce::Rectangle<float> area, const juce::StringArray& labels,
+                                int selected, float textSize) const {
+    g.setColour(juce::Colour(0xff123f31));
+    g.fillRoundedRectangle(area, area.getHeight() * 0.5f);
+    g.setColour(screenLine);
+    g.drawRoundedRectangle(area, area.getHeight() * 0.5f, 1.4f);
+    const float width = area.getWidth() / static_cast<float>(labels.size());
+    for (int i = 0; i < labels.size(); ++i) {
+        const auto cell = juce::Rectangle<float>(area.getX() + width * static_cast<float>(i), area.getY(), width, area.getHeight());
+        if (i == selected) {
+            g.setColour(lime.withAlpha(0.88f));
+            g.fillRoundedRectangle(cell.reduced(3.0f), (area.getHeight() - 6.0f) * 0.5f);
+        }
+        drawText(g, labels[i], cell, textSize, i == selected ? ink : screenText);
+    }
+}
+
+void ShiftyEditor::drawVowelBar(juce::Graphics& g, juce::Rectangle<float> track, float value,
+                                float liveValue, bool showLive) const {
+    g.setColour(juce::Colour(0xff123f31));
+    g.fillRoundedRectangle(track, track.getHeight() * 0.5f);
+    g.setColour(screenLine);
+    g.drawRoundedRectangle(track, track.getHeight() * 0.5f, 1.4f);
+    const auto xAt = [&track](float v) { return track.getX() + 14.0f + (track.getWidth() - 28.0f) * juce::jlimit(0.0f, 4.0f, v) / 4.0f; };
+    for (int v = 0; v <= 4; ++v) {
+        const float x = xAt(static_cast<float>(v));
+        g.setColour(muted.withAlpha(0.6f));
+        g.drawVerticalLine(juce::roundToInt(x), track.getY() + 6.0f, track.getBottom() - 6.0f);
+        drawText(g, vowelName(v), {x - 24.0f, track.getBottom() + 2.0f, 48.0f, 22.0f}, 17.0f,
+                 juce::roundToInt(value) == v ? lime : muted);
+    }
+    g.setColour(lime.withAlpha(0.35f));
+    g.fillRoundedRectangle(juce::Rectangle<float>(track.getX() + 3.0f, track.getY() + 3.0f,
+                                                  xAt(value) - track.getX() - 3.0f, track.getHeight() - 6.0f),
+                           (track.getHeight() - 6.0f) * 0.5f);
+    if (showLive) {
+        g.setColour(neon);
+        g.fillEllipse(xAt(liveValue) - 5.0f, track.getCentreY() - 5.0f, 10.0f, 10.0f);
+    }
+    g.setColour(lime);
+    g.fillEllipse(xAt(value) - 12.0f, track.getCentreY() - 12.0f, 24.0f, 24.0f);
+    g.setColour(ink);
+    g.drawEllipse(xAt(value) - 12.0f, track.getCentreY() - 12.0f, 24.0f, 24.0f, 2.0f);
+}
+
+void ShiftyEditor::drawCell(juce::Graphics& g, juce::Rectangle<float> area, const juce::String& label,
+                            const juce::String& value, bool active) const {
+    if (label.isNotEmpty())
+        drawText(g, label, area.withTrimmedLeft(8.0f).withWidth(area.getWidth() * 0.45f), 19.0f,
+                 active ? screenText : muted, juce::Justification::centredLeft);
+    if (value.isNotEmpty())
+        drawText(g, value, area.withTrimmedLeft(area.getWidth() * 0.42f).withTrimmedRight(6.0f), 21.0f,
+                 active ? lime : muted, juce::Justification::centred);
+}
+
+void ShiftyEditor::drawEngineNote(juce::Graphics& g, const juce::String& text) const {
+    g.setFont(juce::Font(juce::FontOptions(normalTypeface).withHeight(20.0f)));
+    g.setColour(muted);
+    g.drawFittedText(text, juce::Rectangle<int>(186, 262, 750, 120), juce::Justification::centred, 4);
 }
 
 void ShiftyEditor::paint(juce::Graphics& g) {
@@ -525,6 +745,7 @@ void ShiftyEditor::paint(juce::Graphics& g) {
                                           0.0f, sy, -shellY * sy));
     drawHeader(g);
     if (page == Page::sound) drawSoundScreen(g);
+    else if (page == Page::voice) drawVoiceScreen(g);
     else if (page == Page::motion) drawMotionScreen(g);
     else drawPresetsScreen(g);
     drawControlPanel(g);
@@ -532,17 +753,14 @@ void ShiftyEditor::paint(juce::Graphics& g) {
 }
 
 void ShiftyEditor::drawHeader(juce::Graphics& g) {
-    const char* labels[] = {"SOUND", "MOTION", "PRESETS"};
-    const juce::Rectangle<float> tabs[] = {{594, 116, 107, 42},
-                                          {701, 116, 107, 42},
-                                          {808, 116, 107, 42}};
-    for (int i = 0; i < 3; ++i) {
+    const char* labels[] = {"SOUND", "VOICE", "MOTION", "PRESETS"};
+    for (int i = 0; i < 4; ++i) {
         const bool selected = static_cast<int>(page) == i;
         if (selected) {
             g.setColour(lime.withAlpha(0.86f));
-            g.fillRoundedRectangle(tabs[i].reduced(2), 9.0f);
+            g.fillRoundedRectangle(pageTabs[i].reduced(2), 9.0f);
         }
-        drawText(g, labels[i], tabs[i], 18.0f, selected ? ink : screenText);
+        drawText(g, labels[i], pageTabs[i], 16.5f, selected ? ink : screenText);
     }
     g.setColour(lime.withAlpha(0.9f));
     g.fillEllipse(932.0f, 126.0f, 22.0f, 22.0f);
@@ -550,37 +768,29 @@ void ShiftyEditor::drawHeader(juce::Graphics& g) {
 
 void ShiftyEditor::drawSoundScreen(juce::Graphics& g) {
     const auto name = plugin.currentPresetName();
-    g.setFont(juce::Font(juce::FontOptions(displayTypeface).withHeight(34.0f)));
+    const auto engine = plugin.engineMode();
+    g.setFont(juce::Font(juce::FontOptions(displayTypeface).withHeight(32.0f)));
     g.setColour(screenText);
-    g.drawFittedText(name, juce::Rectangle<int>(195, 204, 260, 42), juce::Justification::centredLeft, 1);
-    drawFavoriteStar(g, {474.0f, 225.0f}, 20.0f, favorites.contains(name), screenText);
-    // Keep the optional color beside the spectrum legend, below the main tabs.
-    const bool vowelOn = isOn("vowel");
-    drawText(g, "VOWEL", {532, 211, 91, 34}, 20.0f, muted);
-    const juce::Rectangle<float> track {631, 209, 140, 39};
-    g.setColour(vowelOn ? juce::Colour(0xff215d32) : juce::Colour(0xff123f31));
-    g.fillRoundedRectangle(track, 19.5f);
-    g.setColour(vowelOn ? lime : muted);
-    g.drawRoundedRectangle(track, 19.5f, 1.5f);
-    const float thumbX = vowelOn ? track.getRight() - 36.0f : track.getX() + 4.0f;
-    g.setColour(vowelOn ? lime : muted);
-    g.fillEllipse(thumbX, 213.0f, 31.0f, 31.0f);
-    drawText(g, vowelOn ? "ON" : "OFF",
-             vowelOn ? juce::Rectangle<float>(643, 211, 87, 34)
-                     : juce::Rectangle<float>(673, 211, 85, 34),
-             21.0f, vowelOn ? lime : screenText);
-    if (auto* vowel = controlSwitch("vowel")) {
-        if (vowel->button->hasKeyboardFocus(true)) {
-            g.setColour(lime);
-            g.drawRoundedRectangle(vowelSwitchBounds.expanded(2), 8.0f, 1.8f);
-        }
+    g.drawFittedText(name, juce::Rectangle<int>(184, 202, 272, 42), juce::Justification::centredLeft, 1);
+    drawFavoriteStar(g, {482.0f, 223.0f}, 18.0f, isFavorite(plugin.currentPresetFolder(), plugin.currentPresetName()), screenText);
+
+    if (engine == EngineMode::original) {
+        // The ORIGINAL SOUND badge, with its upgrade key.
+        const auto badge = engineSelectorBounds;
+        g.setColour(juce::Colour(0xff215d32));
+        g.fillRoundedRectangle(badge, 20.0f);
+        g.setColour(lime);
+        g.drawRoundedRectangle(badge, 20.0f, 1.6f);
+        drawText(g, "ORIGINAL SOUND", badge.withWidth(214.0f), 19.0f, lime);
+        const juce::Rectangle<float> key {badge.getX() + 220.0f, badge.getY() + 4.0f, badge.getWidth() - 224.0f, badge.getHeight() - 8.0f};
+        g.setGradientFill(juce::ColourGradient(mint.brighter(0.1f), key.getX(), key.getY(), mint.darker(0.12f),
+                                               key.getX(), key.getBottom(), false));
+        g.fillRoundedRectangle(key, 16.0f);
+        drawText(g, "USE LATEST", key, 17.0f, ink);
+    } else {
+        drawSegments(g, engineSelectorBounds, {"TALK", "MOUTH", "CLASSIC"},
+                     engine == EngineMode::talk ? 0 : engine == EngineMode::mouth ? 1 : 2, 19.0f);
     }
-    g.setColour(neon);
-    g.fillRoundedRectangle(797.0f, 217.0f, 43.0f, 4.0f, 2.0f);
-    g.setColour(muted);
-    g.fillRoundedRectangle(797.0f, 240.0f, 43.0f, 4.0f, 2.0f);
-    drawText(g, "SHIFTED", {846, 207, 104, 25}, 18.0f, screenText);
-    drawText(g, "INPUT", {846, 231, 104, 25}, 18.0f, screenText);
 
     const juce::Rectangle<float> graph {230.0f, 257.0f, 700.0f, 184.0f};
     g.setColour(juce::Colour(0xff236944).withAlpha(0.48f));
@@ -593,27 +803,29 @@ void ShiftyEditor::drawSoundScreen(juce::Graphics& g) {
         g.drawHorizontalLine(juce::roundToInt(y), graph.getX(), graph.getRight());
     }
 
+    // The analyzer's x axis: point i sits at 20 Hz * (nyquist / 20 Hz)^(i / 63).
+    const double rate = plugin.getSampleRate() > 0.0 ? plugin.getSampleRate() : 48000.0;
+    const auto xForHz = [&graph, rate](float hz) {
+        return graph.getX() + graph.getWidth() * std::log(juce::jmax(20.0f, hz) / 20.0f)
+                              / std::log(static_cast<float>(rate * 0.5) / 20.0f);
+    };
     const float cut = juce::jlimit(60.0f, 200.0f, valueOf("subCut"));
-    const float cutX = graph.getX() + graph.getWidth()
-        * std::log(cut / 40.0f) / std::log(20000.0f / 40.0f);
+    const float cutX = xForHz(cut);
     if (isOn("subSafe")) {
         g.setColour(lime.withAlpha(0.07f));
         g.fillRect(juce::Rectangle<float>(graph.getX(), graph.getY(), cutX - graph.getX(), graph.getHeight()));
         g.setColour(lime.withAlpha(0.65f));
         g.drawVerticalLine(juce::roundToInt(cutX), graph.getY(), graph.getBottom());
     }
-
-    auto drawSpectrum = [&](const std::array<float, 64>& spectrum, juce::Colour colour,
-                            float thickness) {
+    const auto yForDb = [&graph](float db) {
+        return graph.getBottom() - (juce::jlimit(-72.0f, 0.0f, db) + 72.0f) / 72.0f * graph.getHeight();
+    };
+    auto drawSpectrum = [&](const std::array<float, 64>& spectrum, juce::Colour colour, float thickness) {
         juce::Path path;
         for (size_t i = 0; i < spectrum.size(); ++i) {
             const float x = graph.getX() + graph.getWidth() * static_cast<float>(i) / 63.0f;
             const float magnitude = juce::jlimit(0.0f, 1.0f, spectrum[i]);
-            const float relativeDb = magnitude > 0.0f
-                ? juce::jlimit(-72.0f, 0.0f, 20.0f * std::log10(magnitude))
-                : -72.0f;
-            const float y = graph.getBottom()
-                - (relativeDb + 72.0f) / 72.0f * graph.getHeight();
+            const float y = yForDb(magnitude > 0.0f ? 20.0f * std::log10(magnitude) : -72.0f);
             if (i == 0) path.startNewSubPath(x, y);
             else path.lineTo(x, y);
         }
@@ -621,28 +833,231 @@ void ShiftyEditor::drawSoundScreen(juce::Graphics& g) {
         g.strokePath(path, juce::PathStrokeType(thickness, juce::PathStrokeType::curved,
                                                 juce::PathStrokeType::rounded));
     };
-    drawSpectrum(inputSpectrum, muted, 2.4f);
-    drawSpectrum(outputSpectrum, neon, 3.1f);
+
+    // Engine curves under the analyzer: TALK's resonance curve; CLASSIC's
+    // detected (dotted) and relocated (solid) source envelope.
+    juce::String status;
+    if (engine == EngineMode::talk) {
+        juce::Path fill, line;
+        float peak = 1.0e-6f;
+        std::array<float, displayPoints> response {};
+        for (int i = 0; i < displayPoints; ++i) {
+            response[static_cast<size_t>(i)] = TalkEngine::responseMagnitude(live.talk, displayFrequency(i, rate));
+            peak = juce::jmax(peak, response[static_cast<size_t>(i)]);
+        }
+        fill.startNewSubPath(graph.getX(), graph.getBottom());
+        for (int i = 0; i < displayPoints; ++i) {
+            const float x = graph.getX() + graph.getWidth() * static_cast<float>(i) / 63.0f;
+            const float y = yForDb(20.0f * std::log10(response[static_cast<size_t>(i)] / peak + 1.0e-6f) * 1.2f);
+            fill.lineTo(x, y);
+            if (i == 0) line.startNewSubPath(x, y);
+            else line.lineTo(x, y);
+        }
+        fill.lineTo(graph.getRight(), graph.getBottom());
+        fill.closeSubPath();
+        g.setColour(lime.withAlpha(0.16f));
+        g.fillPath(fill);
+        g.setColour(lime.withAlpha(0.75f));
+        g.strokePath(line, juce::PathStrokeType(2.2f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+        for (size_t k = 0; k < 2; ++k) {
+            const float x = xForHz(live.talk.frequency[k]);
+            g.setColour(lime.withAlpha(0.6f));
+            g.drawVerticalLine(juce::roundToInt(x), graph.getY() + 4.0f, graph.getBottom());
+            drawText(g, "F" + juce::String(static_cast<int>(k) + 1), {x - 18.0f, graph.getY() + 2.0f, 36.0f, 18.0f}, 14.0f, lime);
+        }
+        status = "TALK  " + vowelLabel(live.morph) + "  " + juce::String(live.shift, 1) + " ST";
+    } else if (engine == EngineMode::mouth) {
+        status = live.pitch > 0.0f
+            ? "MOUTH  " + juce::String(live.pitch, 1) + " HZ  LOCK " + juce::String(juce::roundToInt(live.confidence * 100.0f)) + "%  "
+                + juce::String(live.shift, 1) + " ST"
+            : "MOUTH  NO PITCH  " + juce::String(live.shift, 1) + " ST";
+    } else {
+        if (live.envelopeValid) {
+            juce::Path detected, moved;
+            for (int i = 0; i < displayPoints; ++i) {
+                const float x = graph.getX() + graph.getWidth() * static_cast<float>(i) / 63.0f;
+                const float yd = yForDb(live.detected[static_cast<size_t>(i)] - 6.0f);
+                const float ym = yForDb(live.moved[static_cast<size_t>(i)] - 6.0f);
+                if (i == 0) { detected.startNewSubPath(x, yd); moved.startNewSubPath(x, ym); }
+                else { detected.lineTo(x, yd); moved.lineTo(x, ym); }
+            }
+            juce::Path dashed;
+            const float dashes[] = {6.0f, 6.0f};
+            juce::PathStrokeType(2.0f).createDashedStroke(dashed, detected, dashes, 2);
+            g.setColour(muted.withAlpha(0.9f));
+            g.fillPath(dashed);
+            g.setColour(lime);
+            g.strokePath(moved, juce::PathStrokeType(2.6f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+        }
+        status = juce::String(engine == EngineMode::original ? "ORIGINAL 0.4" : "CLASSIC") + "  ENVELOPE  "
+               + juce::String(live.shift, 1) + " ST";
+    }
+    drawSpectrum(inputSpectrum, muted, 2.0f);
+    drawSpectrum(outputSpectrum, neon, 2.6f);
     g.setColour(screenText.withAlpha(0.85f));
     g.drawLine(graph.getX(), graph.getBottom(), graph.getRight(), graph.getBottom(), 1.8f);
+    drawText(g, status, {graph.getRight() - 420.0f, graph.getY() + 4.0f, 414.0f, 22.0f}, 16.0f,
+             screenText.withAlpha(0.9f), juce::Justification::centredRight);
     drawText(g, "0", {175, 246, 43, 28}, 22.0f, screenText);
     drawText(g, "-24", {166, 300, 57, 28}, 22.0f, screenText);
     drawText(g, "-48", {166, 351, 57, 28}, 22.0f, screenText);
     drawText(g, "-72", {166, 404, 57, 28}, 22.0f, screenText);
     drawText(g, "dB", {170, 431, 53, 27}, 21.0f, screenText);
-    drawText(g, "100", {266, 449, 77, 30}, 21.0f, screenText);
-    drawText(g, "1k", {537, 449, 77, 30}, 21.0f, screenText);
-    drawText(g, "10k", {805, 449, 77, 30}, 21.0f, screenText);
+    drawText(g, "100", {xForHz(100.0f) - 38.0f, 449, 77, 30}, 21.0f, screenText);
+    drawText(g, "1k", {xForHz(1000.0f) - 38.0f, 449, 77, 30}, 21.0f, screenText);
+    drawText(g, "10k", {xForHz(10000.0f) - 38.0f, 449, 77, 30}, 21.0f, screenText);
+}
+
+void ShiftyEditor::drawScreenKnob(juce::Graphics& g, const char* id, const char* label,
+                                  juce::Point<float> centre, float radius) {
+    const auto* c = control(id);
+    if (!c) return;
+    const float lo = static_cast<float>(c->slider->getMinimum());
+    const float hi = static_cast<float>(c->slider->getMaximum());
+    const float fraction = hi > lo ? juce::jlimit(0.0f, 1.0f, (static_cast<float>(c->slider->getValue()) - lo) / (hi - lo)) : 0.0f;
+    juce::Path track, arc;
+    track.addCentredArc(centre.x, centre.y, radius, radius, 0.0f, startAngle, endAngle, true);
+    g.setColour(juce::Colour(0xff1d5a3c));
+    g.strokePath(track, juce::PathStrokeType(6.0f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+    const float angle = startAngle + fraction * (endAngle - startAngle);
+    if (fraction > 0.001f) {
+        arc.addCentredArc(centre.x, centre.y, radius, radius, 0.0f, startAngle, angle, true);
+        g.setColour(lime);
+        g.strokePath(arc, juce::PathStrokeType(6.0f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+    }
+    g.setColour(juce::Colour(0xff123f31));
+    g.fillEllipse(centre.x - radius + 9.0f, centre.y - radius + 9.0f, 2.0f * (radius - 9.0f), 2.0f * (radius - 9.0f));
+    g.setColour(screenLine);
+    g.drawEllipse(centre.x - radius + 9.0f, centre.y - radius + 9.0f, 2.0f * (radius - 9.0f), 2.0f * (radius - 9.0f), 1.4f);
+    g.setColour(screenText);
+    g.drawLine(centre.x + std::sin(angle) * radius * 0.2f, centre.y - std::cos(angle) * radius * 0.2f,
+               centre.x + std::sin(angle) * (radius - 13.0f), centre.y - std::cos(angle) * (radius - 13.0f), 4.0f);
+    drawText(g, label, {centre.x - 70.0f, centre.y + radius + 4.0f, 140.0f, 24.0f}, 18.0f, screenText);
+    if (c->slider->hasKeyboardFocus(true)) {
+        g.setColour(lime);
+        g.drawEllipse(centre.x - radius - 6.0f, centre.y - radius - 6.0f, 2.0f * (radius + 6.0f), 2.0f * (radius + 6.0f), 1.6f);
+    }
+}
+
+void ShiftyEditor::drawVoiceScreen(juce::Graphics& g) {
+    const auto engine = plugin.engineMode();
+    const bool lowLatency = plugin.classicLowLatency();
+    g.setFont(juce::Font(juce::FontOptions(displayTypeface).withHeight(32.0f)));
+    g.setColour(screenText);
+    g.drawFittedText("VOICE", juce::Rectangle<int>(184, 202, 200, 42), juce::Justification::centredLeft, 1);
+    drawText(g, juce::String(engineName(engine)) + "   " + latencyText(engine, lowLatency, plugin.getSampleRate()),
+             {500, 204, 440, 38}, 19.0f, lime, juce::Justification::centredRight);
+
+    const auto drawToggle = [&](juce::Rectangle<float> track, bool on) {
+        g.setColour(on ? juce::Colour(0xff215d32) : juce::Colour(0xff123f31));
+        g.fillRoundedRectangle(track, track.getHeight() * 0.5f);
+        g.setColour(on ? lime : muted);
+        g.drawRoundedRectangle(track, track.getHeight() * 0.5f, 1.5f);
+        const float thumb = track.getHeight() - 8.0f;
+        g.fillEllipse(on ? track.getRight() - thumb - 4.0f : track.getX() + 4.0f, track.getY() + 4.0f, thumb, thumb);
+        drawText(g, on ? "ON" : "OFF", on ? track.withTrimmedRight(thumb + 6.0f) : track.withTrimmedLeft(thumb + 6.0f),
+                 19.0f, on ? lime : screenText);
+    };
+    if (engine == EngineMode::original) {
+        drawText(g, "ORIGINAL SOUND PRESERVED", {186, 258, 750, 34}, 26.0f, lime);
+        g.setFont(juce::Font(juce::FontOptions(normalTypeface).withHeight(19.0f)));
+        g.setColour(screenText);
+        g.drawFittedText("This sound was made with SHIFTY 0.4 and plays exactly as it did, latency included. "
+                         "CHARACTER, TALK, ENV, YOI and the vowel morph need the latest engine. UNDO switches back.",
+                         juce::Rectangle<int>(196, 300, 730, 70), juce::Justification::centred, 3);
+        drawText(g, "VOWEL COLOR", {184, originalVowelBounds.getY(), 116, originalVowelBounds.getHeight()}, 18.0f,
+                 screenText, juce::Justification::centredLeft);
+        drawToggle(originalVowelBounds, isOn("vowel"));
+        const auto key = latestButtonBounds;
+        g.setColour(ink.withAlpha(0.7f));
+        g.fillRoundedRectangle(key.translated(0, 3.0f), 14.0f);
+        g.setGradientFill(juce::ColourGradient(lime.brighter(latestButton->isMouseOver() ? 0.2f : 0.05f), key.getX(), key.getY(),
+                                               lime.darker(0.1f), key.getX(), key.getBottom(), false));
+        g.fillRoundedRectangle(key, 14.0f);
+        g.setColour(ink.withAlpha(0.85f));
+        g.drawRoundedRectangle(key, 14.0f, 2.2f);
+        drawText(g, "USE LATEST SOUND", key, 22.0f, ink);
+        if (latestButton->hasKeyboardFocus(true)) {
+            g.setColour(lime);
+            g.drawRoundedRectangle(key.expanded(4), 16.0f, 1.8f);
+        }
+        return;
+    }
+
+    // Left column: engine controls. Right column: CHARACTER and TALK macros.
+    if (engine == EngineMode::talk || engine == EngineMode::mouth) {
+        const bool talk = engine == EngineMode::talk;
+        const float barY = talk ? 262.0f : 332.0f;
+        drawText(g, talk ? "VOWEL" : "SHAPE", {184, barY - 12.0f, 110, 30}, 21.0f, screenText, juce::Justification::centredLeft);
+        drawVowelBar(g, {310, barY, 280, 22}, valueOf("vowelMorph"), live.morph, talk);
+        const auto voiceArea = talk ? voiceSetBounds : mouthVoiceSetBounds;
+        drawText(g, "VOICE", {184, voiceArea.getY(), 110, voiceArea.getHeight()}, 21.0f, screenText, juce::Justification::centredLeft);
+        drawSegments(g, voiceArea, {"HUMAN", "GROWL", "WOW"}, juce::roundToInt(valueOf("voiceSet")), 18.0f);
+        if (talk) {
+            g.setFont(juce::Font(juce::FontOptions(normalTypeface).withHeight(17.0f)));
+            g.setColour(muted);
+            g.drawFittedText("SHIFT scales the vowel. FOCUS sets its width, BITE its resonance.",
+                             juce::Rectangle<int>(186, 394, 420, 56), juce::Justification::centredLeft, 2);
+        } else {
+            drawText(g, "PITCH", {184, 250, 110, 30}, 21.0f, screenText, juce::Justification::centredLeft);
+            g.setFont(juce::Font(juce::FontOptions(displayTypeface).withHeight(36.0f)));
+            g.setColour(live.pitch > 0.0f ? lime : muted);
+            g.drawFittedText(live.pitch > 0.0f ? juce::String(live.pitch, 1) + " Hz" : juce::String("--"),
+                             juce::Rectangle<int>(300, 244, 170, 44), juce::Justification::centredLeft, 1);
+            drawText(g, "LOCK " + juce::String(juce::roundToInt(live.confidence * 100.0f)) + "%",
+                     {470, 252, 130, 30}, 19.0f, muted, juce::Justification::centredRight);
+            g.setFont(juce::Font(juce::FontOptions(normalTypeface).withHeight(17.0f)));
+            g.setColour(muted);
+            g.drawFittedText("CHARACTER adds this mouth shape; SHIFT resizes it.",
+                             juce::Rectangle<int>(186, 448, 420, 30), juce::Justification::centredLeft, 1);
+        }
+    } else {
+        // CLASSIC
+        drawText(g, "LOW LATENCY", {184, lowLatencyBounds.getY(), 116, lowLatencyBounds.getHeight()}, 18.0f,
+                 screenText, juce::Justification::centredLeft);
+        drawToggle(lowLatencyBounds, lowLatency);
+        drawText(g, lowLatency ? "21 ms" : "43 ms", {490, lowLatencyBounds.getY(), 110, lowLatencyBounds.getHeight()},
+                 19.0f, muted, juce::Justification::centredLeft);
+        drawText(g, "VOWEL COLOR", {184, vowelSwitchBounds.getY(), 116, vowelSwitchBounds.getHeight()}, 18.0f,
+                 screenText, juce::Justification::centredLeft);
+        drawToggle(vowelSwitchBounds, isOn("vowel"));
+        g.setFont(juce::Font(juce::FontOptions(normalTypeface).withHeight(17.0f)));
+        g.setColour(muted);
+        g.drawFittedText("CLASSIC moves the source's own envelope. Plain saws have little to move: "
+                         "use DRIVE, VOWEL COLOR, or TALK.",
+                         juce::Rectangle<int>(186, 376, 420, 80), juce::Justification::centredLeft, 3);
+    }
+    drawScreenKnob(g, "character", "CHARACTER", {720.0f, 318.0f}, 38.0f);
+    drawScreenKnob(g, "talk", "TALK", {870.0f, 318.0f}, 38.0f);
+    g.setColour(screenLine.withAlpha(0.7f));
+    g.drawVerticalLine(625, 262.0f, 470.0f);
 }
 
 void ShiftyEditor::drawMotionScreen(juce::Graphics& g) {
-    const auto name = plugin.currentPresetName();
-    g.setFont(juce::Font(juce::FontOptions(displayTypeface).withHeight(34.0f)));
-    g.setColour(screenText);
-    g.drawFittedText(name, juce::Rectangle<int>(195, 204, 260, 42), juce::Justification::centredLeft, 1);
-    drawText(g, "SHIFT MOVEMENT", {756, 209, 183, 31}, 19.0f, screenText,
+    const auto engine = plugin.engineMode();
+    drawSegments(g, motionTabBounds, {"LFO", "ENV", "YOI"}, static_cast<int>(motionTab), 19.0f);
+    juce::String headline;
+    if (motionTab == MotionTab::lfo) {
+        const int target = engine == EngineMode::talk ? juce::roundToInt(valueOf("motionTarget")) : 0;
+        headline = isOn("motionEnable") ? (target == 0 ? "LFO MOVES SHIFT" : target == 1 ? "LFO MOVES THE VOWEL" : "LFO MOVES SHIFT + VOWEL")
+                                        : "MOTION IS OFF";
+    } else if (motionTab == MotionTab::envelope) {
+        headline = engine == EngineMode::talk ? "LEVEL MOVES THE VOWEL" : "LEVEL MOVES SHIFT";
+    } else {
+        headline = "EACH NOTE STARTS A SWEEP";
+    }
+    drawText(g, headline, {520, 204, 420, 38}, 19.0f, isOn("motionEnable") || motionTab != MotionTab::lfo ? lime : muted,
              juce::Justification::centredRight);
 
+    if (motionTab == MotionTab::lfo) drawLfoTab(g);
+    else if (engine == EngineMode::original)
+        drawEngineNote(g, "ENV and YOI need the latest engine.\nVOICE > USE LATEST SOUND switches this original 0.4 sound; UNDO switches back.");
+    else if (motionTab == MotionTab::envelope) drawEnvelopeTab(g);
+    else drawYoiTab(g);
+}
+
+void ShiftyEditor::drawLfoTab(juce::Graphics& g) {
+    const auto engine = plugin.engineMode();
     const juce::Rectangle<float> graph {237.0f, 255.0f, 691.0f, 117.0f};
     g.setColour(juce::Colour(0xff246d47).withAlpha(0.5f));
     for (int i = 0; i <= 20; ++i)
@@ -662,9 +1077,21 @@ void ShiftyEditor::drawMotionScreen(juce::Graphics& g) {
         if (i == 0) curve.startNewSubPath(x, y);
         else curve.lineTo(x, y);
     }
-    g.setColour(isOn("motionEnable") ? neon : muted);
+    const bool on = isOn("motionEnable");
+    g.setColour(on ? neon : muted);
     g.strokePath(curve, juce::PathStrokeType(3.0f, juce::PathStrokeType::curved,
                                             juce::PathStrokeType::rounded));
+    if (on && live.motionRunning) {
+        // Live position on both drawn cycles.
+        for (int cycle = 0; cycle < 2; ++cycle) {
+            const float x = graph.getX() + graph.getWidth() * (live.lfoPhase + static_cast<float>(cycle)) / 2.0f;
+            const float y = graph.getCentreY() - live.lfoValue * depth / 12.0f * graph.getHeight() * 0.48f;
+            g.setColour(lime.withAlpha(0.35f));
+            g.drawVerticalLine(juce::roundToInt(x), graph.getY(), graph.getBottom());
+            g.setColour(lime);
+            g.fillEllipse(x - 7.0f, y - 7.0f, 14.0f, 14.0f);
+        }
+    }
     drawText(g, "+12", {166, 244, 64, 28}, 19.0f, screenText);
     drawText(g, "0", {195, 302, 35, 28}, 19.0f, screenText);
     drawText(g, "-12", {166, 360, 64, 28}, 19.0f, screenText);
@@ -673,33 +1100,152 @@ void ShiftyEditor::drawMotionScreen(juce::Graphics& g) {
 
     g.setColour(juce::Colour(0xff39a65b).withAlpha(0.9f));
     g.drawRoundedRectangle(juce::Rectangle<float>(170, 416, 781, 55), 6.0f, 1.0f);
-    for (int x : {360, 552, 772}) g.drawVerticalLine(x, 424.0f, 465.0f);
+    for (int i = 1; i < 5; ++i) g.drawVerticalLine(juce::roundToInt(lfoCells[i].getX()), 424.0f, 465.0f);
     static const char* shapeNames[] = {"SINE", "TRIANGLE", "RAMP UP", "RAMP DOWN"};
-    drawText(g, shapeNames[shape], {178, 420, 178, 46}, 23.0f, screenText);
+    drawText(g, shapeNames[shape], lfoCells[0].reduced(4.0f, 4.0f), 21.0f, screenText);
     if (isOn("motionSync")) {
         static const char* rateNames[] = {"1/16", "1/8", "1/4", "1/2", "1 BAR"};
         const int rate = juce::jlimit(0, 4, juce::roundToInt(valueOf("motionRate")));
-        drawText(g, juce::String("RATE ") + rateNames[rate], {364, 420, 186, 46},
-                 22.0f, screenText);
+        drawText(g, juce::String("RATE ") + rateNames[rate], lfoCells[1].reduced(4.0f, 4.0f), 21.0f, screenText);
     } else {
-        drawText(g, "RATE", {365, 420, 69, 46}, 21.0f, screenText);
+        drawText(g, "RATE", {336, 420, 60, 46}, 20.0f, screenText);
     }
-    drawText(g, "DEPTH", {557, 420, 91, 46}, 21.0f, screenText);
-    drawText(g, isOn("motionSync") ? "SYNC ON" : "SYNC OFF", {776, 420, 173, 46},
-             22.0f, isOn("motionSync") ? lime : screenText);
+    drawText(g, "DEPTH", {524, 420, 68, 46}, 20.0f, screenText);
+    drawText(g, isOn("motionSync") ? "SYNC ON" : "SYNC OFF", lfoCells[3].reduced(4.0f, 4.0f), 20.0f,
+             isOn("motionSync") ? lime : screenText);
+    if (engine == EngineMode::talk) {
+        static const char* targets[] = {"SHIFT", "VOWEL", "BOTH"};
+        drawText(g, targets[juce::jlimit(0, 2, juce::roundToInt(valueOf("motionTarget")))],
+                 lfoCells[4].reduced(4.0f, 4.0f), 20.0f, lime);
+    } else {
+        drawText(g, "SHIFT", lfoCells[4].reduced(4.0f, 4.0f), 20.0f, muted);
+    }
+}
+
+void ShiftyEditor::drawEnvelopeTab(juce::Graphics& g) {
+    const auto engine = plugin.engineMode();
+    const float amount = valueOf("envAmount");
+    // Meters: input level (follower) and what it moves.
+    const juce::Rectangle<float> levelTrack {300, 270, 600, 26}, moveTrack {300, 330, 600, 26};
+    drawText(g, "LEVEL", {184, 266, 110, 34}, 20.0f, screenText, juce::Justification::centredLeft);
+    drawText(g, engine == EngineMode::talk ? "VOWEL" : "SHIFT", {184, 326, 110, 34}, 20.0f, screenText,
+             juce::Justification::centredLeft);
+    for (const auto& track : { levelTrack, moveTrack }) {
+        g.setColour(juce::Colour(0xff123f31));
+        g.fillRoundedRectangle(track, 13.0f);
+        g.setColour(screenLine);
+        g.drawRoundedRectangle(track, 13.0f, 1.4f);
+    }
+    g.setColour(neon);
+    g.fillRoundedRectangle(levelTrack.withWidth(juce::jmax(26.0f, levelTrack.getWidth() * live.envelope)).reduced(3.0f), 10.0f);
+    if (engine == EngineMode::talk) {
+        const float x = moveTrack.getX() + 13.0f + (moveTrack.getWidth() - 26.0f) * juce::jlimit(0.0f, 4.0f, live.morph) / 4.0f;
+        g.setColour(lime);
+        g.fillEllipse(x - 11.0f, moveTrack.getCentreY() - 11.0f, 22.0f, 22.0f);
+        for (int v = 0; v <= 4; ++v)
+            drawText(g, vowelName(v), {moveTrack.getX() + 13.0f + (moveTrack.getWidth() - 26.0f) * v / 4.0f - 24.0f,
+                                       moveTrack.getBottom() + 2.0f, 48.0f, 22.0f}, 16.0f, muted);
+    } else {
+        const float x = moveTrack.getCentreX() + moveTrack.getWidth() * 0.5f * juce::jlimit(-12.0f, 12.0f, live.shift) / 12.0f;
+        g.setColour(lime);
+        g.fillEllipse(x - 11.0f, moveTrack.getCentreY() - 11.0f, 22.0f, 22.0f);
+        drawText(g, "-12", {moveTrack.getX() - 6.0f, moveTrack.getBottom() + 2.0f, 50.0f, 22.0f}, 16.0f, muted);
+        drawText(g, "+12", {moveTrack.getRight() - 44.0f, moveTrack.getBottom() + 2.0f, 50.0f, 22.0f}, 16.0f, muted);
+    }
+    g.setColour(juce::Colour(0xff39a65b).withAlpha(0.9f));
+    g.drawRoundedRectangle(juce::Rectangle<float>(170, 416, 781, 55), 6.0f, 1.0f);
+    for (int i = 1; i < 3; ++i) g.drawVerticalLine(juce::roundToInt(envCells[i].getX()), 424.0f, 465.0f);
+    drawText(g, "AMOUNT", {180, 420, 115, 46}, 20.0f, std::abs(amount) > 0.001f ? screenText : muted);
+    drawText(g, "ATTACK", {450, 420, 105, 46}, 20.0f, screenText);
+    drawText(g, "RELEASE", {710, 420, 108, 46}, 20.0f, screenText);
+}
+
+void ShiftyEditor::drawYoiTab(juce::Graphics& g) {
+    const float from = valueOf("yoiFrom"), to = valueOf("yoiTo"), amount = valueOf("yoiAmount");
+    // The sweep: FROM vowel -> TO vowel, eased, with the live position.
+    const juce::Rectangle<float> area {300, 258, 560, 120};
+    const auto boxFor = [](float x) { return juce::Rectangle<float>(x - 40.0f, 288.0f, 80.0f, 60.0f); };
+    for (const auto& [x, value, label] : { std::tuple<float, float, const char*>{area.getX(), from, "FROM"},
+                                           std::tuple<float, float, const char*>{area.getRight(), to, "TO"} }) {
+        const auto box = boxFor(x);
+        g.setColour(juce::Colour(0xff123f31));
+        g.fillRoundedRectangle(box, 12.0f);
+        g.setColour(amount > 0.001f ? lime : muted);
+        g.drawRoundedRectangle(box, 12.0f, 1.8f);
+        drawText(g, vowelLabel(value), box, 26.0f, amount > 0.001f ? lime : muted);
+        drawText(g, label, {box.getX(), box.getBottom() + 2.0f, box.getWidth(), 22.0f}, 16.0f, muted);
+    }
+    juce::Path sweep;
+    const float x0 = area.getX() + 44.0f, x1 = area.getRight() - 44.0f;
+    for (int i = 0; i <= 64; ++i) {
+        const float t = static_cast<float>(i) / 64.0f;
+        const float eased = 1.0f - (1.0f - t) * (1.0f - t);
+        const float x = x0 + (x1 - x0) * t;
+        const float y = 348.0f - 60.0f * eased;
+        if (i == 0) sweep.startNewSubPath(x, y);
+        else sweep.lineTo(x, y);
+    }
+    g.setColour(amount > 0.001f ? neon : muted);
+    g.strokePath(sweep, juce::PathStrokeType(3.0f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+    if (amount > 0.001f && live.yoi < 0.999f) {
+        // live.yoi is the eased position; invert the ease for the dot's x.
+        const float t = 1.0f - std::sqrt(juce::jmax(0.0f, 1.0f - live.yoi));
+        g.setColour(lime);
+        g.fillEllipse(x0 + (x1 - x0) * t - 8.0f, 348.0f - 60.0f * live.yoi - 8.0f, 16.0f, 16.0f);
+    }
+    drawText(g, "ON EVERY NEW NOTE", {area.getX() + 60.0f, 350.0f, area.getWidth() - 120.0f, 26.0f}, 16.0f, muted);
+
+    g.setColour(juce::Colour(0xff39a65b).withAlpha(0.9f));
+    g.drawRoundedRectangle(juce::Rectangle<float>(170, 416, 781, 55), 6.0f, 1.0f);
+    for (int i = 1; i < 5; ++i) g.drawVerticalLine(juce::roundToInt(yoiCells[i].getX()), 424.0f, 465.0f);
+    drawText(g, "AMOUNT", {176, 420, 84, 46}, 18.0f, screenText);
+    drawCell(g, yoiCells[1], "FROM", vowelLabel(from), true);
+    drawCell(g, yoiCells[2], "TO", vowelLabel(to), true);
+    drawText(g, "TIME", {636, 420, 58, 46}, 18.0f, screenText);
+    drawText(g, "SHIFT", {806, 420, 60, 46}, 18.0f, screenText);
+}
+
+bool ShiftyEditor::isFavorite(const juce::String& folder, const juce::String& name) const {
+    const bool legacyName = folder.isEmpty() || folder == "Classic" || folder == "User";
+    return favorites.contains(folder + "/" + name) || (legacyName && favorites.contains(name));
+}
+
+void ShiftyEditor::toggleFavorite(const juce::String& folder, const juce::String& name) {
+    if (isFavorite(folder, name)) {
+        favorites.removeString(folder + "/" + name);
+        if (folder.isEmpty() || folder == "Classic" || folder == "User") favorites.removeString(name);
+    } else {
+        favorites.add(folder.isEmpty() ? name : folder + "/" + name);
+    }
+    if (favoritesFile != nullptr) {
+        favoritesFile->setValue("favorites", favorites.joinIntoString("\n"));
+        favoritesFile->saveIfNeeded();
+    }
 }
 
 void ShiftyEditor::drawPresetsScreen(juce::Graphics& g) {
     drawText(g, "PRESETS", {192, 201, 215, 45}, 35.0f, screenText,
              juce::Justification::centredLeft);
     if (savingPreset) {
+        const juce::Rectangle<float> panel {242, 262, 637, 196};
         g.setColour(juce::Colour(0xff032a1e).withAlpha(0.96f));
-        g.fillRoundedRectangle(juce::Rectangle<float>(242, 273, 637, 167), 12.0f);
+        g.fillRoundedRectangle(panel, 12.0f);
         g.setColour(lime);
-        g.drawRoundedRectangle(juce::Rectangle<float>(242, 273, 637, 167), 12.0f, 1.5f);
-        drawText(g, "SAVE USER PRESET", {277, 288, 554, 36}, 25.0f, screenText);
-        drawText(g, "Press Return to save  ·  Esc to cancel", {282, 388, 548, 34},
-                 19.0f, muted);
+        g.drawRoundedRectangle(panel, 12.0f, 1.5f);
+        drawText(g, "SAVE USER PRESET", {277, 268, 554, 32}, 23.0f, screenText);
+        g.setColour(juce::Colour(0xff123f31));
+        g.fillRoundedRectangle(saveFolderPickBounds, 8.0f);
+        g.setColour(screenLine);
+        g.drawRoundedRectangle(saveFolderPickBounds, 8.0f, 1.4f);
+        drawText(g, "FOLDERS", saveFolderPickBounds, 17.0f, screenText);
+        const auto name = juce::File::createLegalFileName(presetNameEditor.getText().trim());
+        const auto folder = cleanFolderName(presetFolderEditor.getText());
+        const auto target = (folder.isEmpty() ? plugin.userPresetDirectory() : plugin.userPresetDirectory().getChildFile(folder))
+                                .getChildFile(name + ".shifty");
+        const bool replaces = name.isNotEmpty() && target.existsAsFile();
+        drawText(g, juce::String::fromUTF8(replaces ? "Return replaces your preset of this name  \xc2\xb7  Esc cancels"
+                                                    : "Return saves  \xc2\xb7  Esc cancels  \xc2\xb7  folder is optional"),
+                 {262, 404, 597, 30}, 18.0f, replaces ? juce::Colour(0xffff8f67) : muted);
         return;
     }
     const char* filters[] = {"FACTORY", "USER", "FAV"};
@@ -714,25 +1260,37 @@ void ShiftyEditor::drawPresetsScreen(juce::Graphics& g) {
         }
         drawText(g, filters[i], areas[i], 21.0f, screenText);
     }
+    // Folder chip
+    g.setColour(juce::Colour(0xff123f31));
+    g.fillRoundedRectangle(folderChipBounds, 19.0f);
+    g.setColour(presetFolderFilter.isEmpty() ? screenLine : lime);
+    g.drawRoundedRectangle(folderChipBounds, 19.0f, 1.4f);
+    drawText(g, (presetFolderFilter.isEmpty() ? juce::String("ALL FOLDERS") : presetFolderFilter.toUpperCase()) + juce::String::fromUTF8("  \xe2\x96\xbe"),
+             folderChipBounds, 19.0f, presetFolderFilter.isEmpty() ? screenText : lime);
+
     for (int row = 0; row < 4; ++row) {
         const int index = firstPreset + row;
         if (index >= static_cast<int>(presetItems.size())) break;
+        const auto& item = presetItems[static_cast<size_t>(index)];
         const juce::Rectangle<float> area {183.0f, 302.0f + row * 35.0f, 749.0f, 34.0f};
         if (selectedPreset == index) {
             g.setColour(lime.withAlpha(0.18f));
             g.fillRoundedRectangle(area, 5.0f);
         }
-        drawText(g, presetItems[static_cast<size_t>(index)].name,
-                 area.reduced(15.0f, 0.0f), 22.0f,
-                 selectedPreset == index ? lime : screenText,
-                 juce::Justification::centredLeft);
-        if (favorites.contains(presetItems[static_cast<size_t>(index)].name))
-            drawFavoriteStar(g, {899.0f, area.getCentreY()}, 11.0f, true, lime);
+        drawText(g, item.name, area.reduced(15.0f, 0.0f).withTrimmedRight(220.0f), 22.0f,
+                 selectedPreset == index ? lime : screenText, juce::Justification::centredLeft);
+        drawText(g, item.folder.toUpperCase(), {area.getRight() - 250.0f, area.getY(), 210.0f, area.getHeight()}, 16.0f,
+                 muted, juce::Justification::centredRight);
+        if (isFavorite(item.folder, item.name))
+            drawFavoriteStar(g, {914.0f, area.getCentreY()}, 10.0f, true, lime);
     }
     g.setColour(lime.withAlpha(0.7f));
     g.drawHorizontalLine(442, 185.0f, 932.0f);
-    drawText(g, juce::String(presetItems.size()) + " presets", {193, 446, 230, 34},
-             18.0f, muted, juce::Justification::centredLeft);
+    const int total = static_cast<int>(presetItems.size());
+    juce::String count = juce::String(total) + " presets";
+    if (total > 4)
+        count << "  " << (firstPreset + 1) << "-" << juce::jmin(total, firstPreset + 4);
+    drawText(g, count, {193, 446, 300, 34}, 18.0f, muted, juce::Justification::centredLeft);
     drawText(g, "SAVE AS", {797, 443, 129, 35}, 20.0f, lime);
 }
 
@@ -908,36 +1466,58 @@ void ShiftyEditor::timerCallback() {
     for (int channel = 0; channel < 2; ++channel)
         meterPeaks[static_cast<size_t>(channel)] = std::max(
             plugin.outputPeak(channel), meterPeaks[static_cast<size_t>(channel)] * 0.86f);
+    const auto previousEngine = live.engine;
+    live = plugin.display();
+    live.engine = plugin.engineMode();
     updateValueLabels();
+    bool needsPageUpdate = live.engine != previousEngine;
     if (page == Page::motion)
         if (auto* freeRate = control("motionFreeHz"))
-            if (freeRate->slider->isVisible() == isOn("motionSync")) updatePage();
+            if (motionTab == MotionTab::lfo && freeRate->slider->isVisible() == isOn("motionSync")) needsPageUpdate = true;
+    if (needsPageUpdate) updatePage();
     repaint();
 }
 
 void ShiftyEditor::refreshPresetList() {
     presetItems.clear();
     const auto query = presetSearch.getText().trim();
-    const auto factory = ShiftyProcessor::factoryPresetNames();
+    const auto matches = [&query](const juce::String& name) { return query.isEmpty() || name.containsIgnoreCase(query); };
+    const auto favoriteItem = [this](const PresetItem& item) { return isFavorite(item.folder, item.name); };
     if (presetFilter != PresetFilter::user) {
-        for (int i = 0; i < factory.size(); ++i) {
-            const auto name = factory[i];
-            if ((presetFilter == PresetFilter::favorites && !favorites.contains(name)) ||
-                (!query.isEmpty() && !name.containsIgnoreCase(query))) continue;
-            presetItems.push_back({name, i, {}});
+        const auto& bank = ShiftyProcessor::factoryPresets();
+        for (size_t i = 0; i < bank.size(); ++i) {
+            PresetItem item { bank[i].name, static_cast<int>(i), {}, bank[i].folder };
+            if (!matches(item.name)) continue;
+            if (presetFolderFilter.isNotEmpty() && item.folder != presetFolderFilter) continue;
+            if (presetFilter == PresetFilter::favorites && !favoriteItem(item)) continue;
+            presetItems.push_back(item);
         }
     }
     if (presetFilter != PresetFilter::factory) {
-        const auto files = plugin.userPresetFiles();
-        for (const auto& file : files) {
-            const auto name = file.getFileNameWithoutExtension();
-            if ((presetFilter == PresetFilter::favorites && !favorites.contains(name)) ||
-                (!query.isEmpty() && !name.containsIgnoreCase(query))) continue;
-            presetItems.push_back({name, -1, file});
+        const auto root = plugin.userPresetDirectory();
+        for (const auto& file : plugin.userPresetFiles()) {
+            const auto parent = file.getParentDirectory();
+            PresetItem item { file.getFileNameWithoutExtension(), -1, file,
+                              parent == root ? juce::String("User") : "User/" + parent.getFileName() };
+            if (!matches(item.name)) continue;
+            if (presetFolderFilter.isNotEmpty() && item.folder != presetFolderFilter
+                && item.folder != "User/" + presetFolderFilter) continue;
+            if (presetFilter == PresetFilter::favorites && !favoriteItem(item)) continue;
+            presetItems.push_back(item);
         }
     }
     selectedPreset = presetItems.empty() ? -1 : 0;
     firstPreset = 0;
+    // Start on the sound that is loaded, when it is in the list.
+    const auto currentFolder = plugin.currentPresetFolder(), currentName = plugin.currentPresetName();
+    for (int i = 0; i < static_cast<int>(presetItems.size()); ++i) {
+        const auto& item = presetItems[static_cast<size_t>(i)];
+        if (item.folder == currentFolder && item.name == currentName) {
+            selectedPreset = i;
+            firstPreset = juce::jlimit(0, std::max(0, static_cast<int>(presetItems.size()) - 4), i - 1);
+            break;
+        }
+    }
 }
 
 void ShiftyEditor::loadSelectedPreset() {
@@ -946,12 +1526,16 @@ void ShiftyEditor::loadSelectedPreset() {
     if (item.factoryIndex >= 0) plugin.loadFactoryPreset(item.factoryIndex);
     else plugin.loadUserPreset(item.file);
     updateValueLabels();
+    updatePage();
     repaint();
 }
 
 void ShiftyEditor::beginPresetSave() {
     savingPreset = true;
     presetNameEditor.setText(plugin.currentPresetName(), juce::dontSendNotification);
+    const auto folder = plugin.currentPresetFolder();
+    presetFolderEditor.setText(folder.startsWith("User/") ? folder.fromFirstOccurrenceOf("User/", false, false) : juce::String(),
+                               juce::dontSendNotification);
     updatePage();
     presetNameEditor.grabKeyboardFocus();
     presetNameEditor.selectAll();
@@ -961,12 +1545,16 @@ void ShiftyEditor::beginPresetSave() {
 void ShiftyEditor::finishPresetSave() {
     const auto name = presetNameEditor.getText().trim();
     if (name.isEmpty()) return;
-    plugin.saveUserPreset(name);
+    const auto folder = cleanFolderName(presetFolderEditor.getText());
+    plugin.saveUserPreset(name, folder);
     savingPreset = false;
     presetFilter = PresetFilter::user;
+    presetFolderFilter = folder;
+    presetSearch.setText({}, juce::dontSendNotification);
     refreshPresetList();
+    const auto legal = juce::File::createLegalFileName(name);
     for (int i = 0; i < static_cast<int>(presetItems.size()); ++i)
-        if (presetItems[static_cast<size_t>(i)].name == name) {
+        if (presetItems[static_cast<size_t>(i)].file.getFileNameWithoutExtension() == legal) {
             selectedPreset = i;
             firstPreset = std::max(0, i - 3);
             break;
@@ -1006,6 +1594,102 @@ void ShiftyEditor::showRateMenu() {
                 !safe->plugin.isParameterLocked("motionRate"));
             else if (result > 0) safe->setParameter("motionRate", result - 1.0f);
             safe->repaint();
+        });
+}
+
+void ShiftyEditor::showTargetMenu() {
+    juce::PopupMenu menu;
+    const char* names[] = {"Shift (formant size)", "Vowel", "Shift and vowel"};
+    for (int i = 0; i < 3; ++i)
+        menu.addItem(i + 1, names[i], true, juce::roundToInt(valueOf("motionTarget")) == i);
+    menu.addSeparator();
+    menu.addItem(100, "Lock for randomization", true, plugin.isParameterLocked("motionTarget"));
+    menu.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(this),
+        [safe = juce::Component::SafePointer<ShiftyEditor>(this)](int result) {
+            if (safe == nullptr) return;
+            if (result == 100) safe->plugin.setParameterLocked("motionTarget", !safe->plugin.isParameterLocked("motionTarget"));
+            else if (result > 0) safe->setParameter("motionTarget", result - 1.0f);
+            safe->repaint();
+        });
+}
+
+void ShiftyEditor::showVowelMenu(const char* id) {
+    juce::PopupMenu menu;
+    for (int i = 0; i < 5; ++i)
+        menu.addItem(i + 1, vowelName(i), true, juce::roundToInt(valueOf(id)) == i);
+    menu.addSeparator();
+    menu.addItem(100, "Lock for randomization", true, plugin.isParameterLocked(id));
+    menu.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(this),
+        [safe = juce::Component::SafePointer<ShiftyEditor>(this), parameterId = juce::String(id)](int result) {
+            if (safe == nullptr) return;
+            if (result == 100) safe->plugin.setParameterLocked(parameterId, !safe->plugin.isParameterLocked(parameterId));
+            else if (result > 0) safe->setParameter(parameterId.toRawUTF8(), result - 1.0f);
+            safe->repaint();
+        });
+}
+
+void ShiftyEditor::showFolderMenu() {
+    juce::PopupMenu menu;
+    juce::StringArray folders;
+    if (presetFilter != PresetFilter::user)
+        folders.addArray(factoryFolders());
+    if (presetFilter != PresetFilter::factory)
+        for (const auto& folder : plugin.userPresetFolders()) folders.add(folder);
+    menu.addItem(1, "All folders", true, presetFolderFilter.isEmpty());
+    for (int i = 0; i < folders.size(); ++i)
+        menu.addItem(i + 2, folders[i], true, presetFolderFilter == folders[i]);
+    menu.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(this),
+        [safe = juce::Component::SafePointer<ShiftyEditor>(this), folders](int result) {
+            if (safe == nullptr || result <= 0) return;
+            safe->presetFolderFilter = result == 1 ? juce::String() : folders[result - 2];
+            safe->refreshPresetList();
+            safe->repaint();
+        });
+}
+
+void ShiftyEditor::showSaveFolderMenu() {
+    juce::PopupMenu menu;
+    const auto folders = plugin.userPresetFolders();
+    menu.addItem(1, "No folder (top level)");
+    for (int i = 0; i < folders.size(); ++i) menu.addItem(i + 2, folders[i]);
+    menu.addSeparator();
+    menu.addItem(1000, "New folder: type its name in the folder field", false, false);
+    menu.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(this),
+        [safe = juce::Component::SafePointer<ShiftyEditor>(this), folders](int result) {
+            if (safe == nullptr || result <= 0 || result >= 1000) return;
+            safe->presetFolderEditor.setText(result == 1 ? juce::String() : folders[result - 2], juce::dontSendNotification);
+            safe->repaint();
+        });
+}
+
+juce::PopupMenu ShiftyEditor::createSizeMenu() const {
+    juce::PopupMenu menu;
+    juce::Rectangle<int> userArea;
+    const auto& displays = juce::Desktop::getInstance().getDisplays();
+    if (const auto* display = isShowing() ? displays.getDisplayForRect(getScreenBounds()) : displays.getPrimaryDisplay())
+        userArea = display->userBounds.toNearestInt();
+    const auto fitting = sizesFitting(userArea);
+    menu.addSectionHeader("Size");
+    for (size_t i = 0; i < sizeChoices.size(); ++i) {
+        const double scale = sizeChoices[i];
+        const bool fits = std::find(fitting.begin(), fitting.end(), scale) != fitting.end();
+        const bool current = std::abs(getWidth() - sizeFor(scale).x) <= 1;
+        menu.addItem(static_cast<int>(i) + 1, juce::String(juce::roundToInt(scale * 100.0)) + "%", fits, current);
+    }
+    return menu;
+}
+
+void ShiftyEditor::applyScale(double scale) {
+    const auto size = sizeFor(scale);
+    setSize(size.x, size.y);
+    plugin.setEditorScale(scale);
+}
+
+void ShiftyEditor::showSizeMenu() {
+    createSizeMenu().showMenuAsync(juce::PopupMenu::Options().withTargetComponent(this),
+        [safe = juce::Component::SafePointer<ShiftyEditor>(this)](int result) {
+            if (safe == nullptr || result <= 0) return;
+            safe->applyScale(sizeChoices[static_cast<size_t>(result - 1)]);
         });
 }
 
@@ -1050,41 +1734,93 @@ void ShiftyEditor::showLocksMenu() {
 }
 
 void ShiftyEditor::mouseDown(const juce::MouseEvent& e) {
+    // Right click on the shell (anywhere a control does not claim it): editor size.
+    if (e.mods.isPopupMenu()) {
+        showSizeMenu();
+        return;
+    }
     const auto p = designPoint(e.position);
-    if (p.y >= 115.0f && p.y <= 161.0f) {
-        if (p.x >= 594.0f && p.x < 701.0f) page = Page::sound;
-        else if (p.x >= 701.0f && p.x < 808.0f) page = Page::motion;
-        else if (p.x >= 808.0f && p.x < 916.0f) page = Page::presets;
+    if (p.y >= 115.0f && p.y <= 161.0f && p.x >= pageTabs[0].getX() && p.x < pageTabs[3].getRight()) {
+        for (int i = 0; i < 4; ++i)
+            if (pageTabs[i].contains(p.x, juce::jlimit(pageTabs[i].getY(), pageTabs[i].getBottom() - 1.0f, p.y)))
+                page = static_cast<Page>(i);
         updatePage();
         repaint();
         return;
     }
-    if (page == Page::sound && p.x >= 445.0f && p.x <= 500.0f &&
-        p.y >= 201.0f && p.y <= 250.0f) {
-        const auto name = plugin.currentPresetName();
-        if (favorites.contains(name)) favorites.removeString(name);
-        else favorites.add(name);
-        if (favoritesFile != nullptr) {
-            favoritesFile->setValue("favorites", favorites.joinIntoString("\n"));
-            favoritesFile->saveIfNeeded();
+    const auto engine = plugin.engineMode();
+    if (page == Page::sound) {
+        if (p.x >= 462.0f && p.x <= 504.0f && p.y >= 200.0f && p.y <= 248.0f) {
+            toggleFavorite(plugin.currentPresetFolder(), plugin.currentPresetName());
+            repaint();
+            return;
         }
-        repaint();
-        return;
+        if (engineSelectorBounds.contains(p)) {
+            if (engine == EngineMode::original) {
+                if (p.x >= engineSelectorBounds.getX() + 220.0f) plugin.useLatestSound();
+            } else {
+                const int segment = juce::jlimit(0, 2, static_cast<int>((p.x - engineSelectorBounds.getX()) / (engineSelectorBounds.getWidth() / 3.0f)));
+                plugin.setEngine(segment == 0 ? EngineMode::talk : segment == 1 ? EngineMode::mouth : EngineMode::classic,
+                                 plugin.classicLowLatency());
+            }
+            updatePage();
+            repaint();
+            return;
+        }
     }
-    if (page == Page::motion && p.y >= 416.0f && p.y <= 471.0f) {
-        if (p.x >= 170.0f && p.x < 360.0f) showShapeMenu();
-        else if (p.x >= 360.0f && p.x < 552.0f && isOn("motionSync")) showRateMenu();
-        return;
+    if (page == Page::voice) {
+        const auto voiceArea = engine == EngineMode::mouth ? mouthVoiceSetBounds : voiceSetBounds;
+        if ((engine == EngineMode::talk || engine == EngineMode::mouth) && voiceArea.contains(p)) {
+            setParameter("voiceSet", static_cast<float>(juce::jlimit(0, 2, static_cast<int>((p.x - voiceArea.getX()) / (voiceArea.getWidth() / 3.0f)))));
+            repaint();
+            return;
+        }
+        if (engine == EngineMode::classic && lowLatencyBounds.contains(p)) {
+            plugin.setEngine(EngineMode::classic, !plugin.classicLowLatency());
+            repaint();
+            return;
+        }
     }
-    if (page == Page::presets && !savingPreset) {
-        if (p.y >= 251.0f && p.y < 294.0f && p.x >= 185.0f && p.x < 578.0f) {
+    if (page == Page::motion) {
+        if (motionTabBounds.contains(p)) {
+            motionTab = static_cast<MotionTab>(juce::jlimit(0, 2, static_cast<int>((p.x - motionTabBounds.getX()) / (motionTabBounds.getWidth() / 3.0f))));
+            updatePage();
+            repaint();
+            return;
+        }
+        if (motionTab == MotionTab::lfo) {
+            if (lfoCells[0].contains(p)) showShapeMenu();
+            else if (lfoCells[1].contains(p) && isOn("motionSync")) showRateMenu();
+            else if (lfoCells[4].contains(p) && engine == EngineMode::talk) showTargetMenu();
+            return;
+        }
+        if (motionTab == MotionTab::yoi && engine != EngineMode::original) {
+            if (yoiCells[1].contains(p)) showVowelMenu("yoiFrom");
+            else if (yoiCells[2].contains(p)) showVowelMenu("yoiTo");
+            return;
+        }
+    }
+    if (page == Page::presets) {
+        if (savingPreset) {
+            if (saveFolderPickBounds.contains(p)) showSaveFolderMenu();
+            return;
+        }
+        if (folderChipBounds.contains(p)) {
+            showFolderMenu();
+        } else if (p.y >= 251.0f && p.y < 294.0f && p.x >= 185.0f && p.x < 578.0f) {
             presetFilter = p.x < 333.0f ? PresetFilter::factory :
                            p.x < 460.0f ? PresetFilter::user : PresetFilter::favorites;
+            presetFolderFilter = {};
             refreshPresetList();
             repaint();
         } else if (p.y >= 302.0f && p.y < 442.0f && p.x >= 183.0f && p.x < 933.0f) {
             const int index = firstPreset + static_cast<int>((p.y - 302.0f) / 35.0f);
             if (index >= 0 && index < static_cast<int>(presetItems.size())) {
+                if (p.x >= 895.0f) {
+                    // The star column toggles a favorite.
+                    const auto& item = presetItems[static_cast<size_t>(index)];
+                    toggleFavorite(item.folder, item.name);
+                }
                 selectedPreset = index;
                 repaint();
             }
@@ -1095,9 +1831,9 @@ void ShiftyEditor::mouseDown(const juce::MouseEvent& e) {
 }
 
 void ShiftyEditor::mouseDoubleClick(const juce::MouseEvent& e) {
-    if (page != Page::presets) return;
+    if (page != Page::presets || savingPreset) return;
     const auto p = designPoint(e.position);
-    if (p.y >= 302.0f && p.y < 442.0f && p.x >= 183.0f && p.x < 933.0f) {
+    if (p.y >= 302.0f && p.y < 442.0f && p.x >= 183.0f && p.x < 895.0f) {
         const int index = firstPreset + static_cast<int>((p.y - 302.0f) / 35.0f);
         if (index >= 0 && index < static_cast<int>(presetItems.size())) {
             selectedPreset = index;

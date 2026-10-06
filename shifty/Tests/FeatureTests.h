@@ -16,11 +16,15 @@
 namespace shifty::tests {
 
 namespace {
-constexpr std::array<const char*, 16> expectedParameterIds {{
+// The 16 controls of 0.4.2 in their original order, then the 13 added in 0.5.0 (append-only).
+constexpr std::array<const char*, 29> expectedParameterIds {{
     "shift", "focus", "bite", "drive", "mix", "subSafe", "subCut", "output",
     "motionEnable", "motionShape", "motionRate", "motionDepth", "motionSync",
-    "motionFreeHz", "bypass", "vowel"
+    "motionFreeHz", "bypass", "vowel",
+    "vowelMorph", "voiceSet", "character", "talk", "envAmount", "envAttack", "envRelease",
+    "yoiAmount", "yoiFrom", "yoiTo", "yoiTime", "yoiShift", "motionTarget"
 }};
+constexpr size_t legacyParameterCount = 16; // parameters that existed in 0.4.2
 using Values = std::array<float, expectedParameterIds.size()>;
 using Locks = std::array<bool, expectedParameterIds.size()>;
 
@@ -101,11 +105,23 @@ void setActual(ShiftyProcessor& processor, const char* id, float actual)
     parameter->setValueNotifyingHost(parameter->convertTo0to1(actual));
 }
 
+/** New instances open on a TALK preset with macros and envelope movement. Tests of the
+    Motion LFO itself switch those extra movements off. */
+void neutraliseMovement(ShiftyProcessor& processor)
+{
+    setActual(processor, "character", 0.0f);
+    setActual(processor, "talk", 0.0f);
+    setActual(processor, "envAmount", 0.0f);
+    setActual(processor, "yoiAmount", 0.0f);
+    setActual(processor, "yoiShift", 0.0f);
+}
+
 void setPattern(ShiftyProcessor& processor, bool alternate)
 {
     for (size_t i = 0; i < expectedParameterIds.size(); ++i) {
-        const auto normalized = alternate ? 0.93f - static_cast<float>(i) * 0.043f
-                                         : 0.07f + static_cast<float>(i) * 0.041f;
+        const auto step = static_cast<float>(i);
+        const auto normalized = alternate ? 0.97f - std::fmod(0.04f + step * 0.043f, 0.94f)
+                                         : 0.03f + std::fmod(0.04f + step * 0.041f, 0.94f);
         setNormalized(processor, expectedParameterIds[i], normalized);
     }
     // APVTS flushes its parameter values to the state tree here. This models
@@ -141,9 +157,12 @@ juce::MemoryBlock legacySessionOf(ShiftyProcessor& processor)
     legacy.setProperty("schemaVersion", 1, nullptr);
     legacy.setProperty("engineVersion", 1, nullptr);
     legacy.setProperty("presetName", processor.currentPresetName(), nullptr);
+    // Only the fifteen controls that v0.1 had: no vowel color, no 0.5.0 controls, no engine.
     for (const auto& child : current)
-        if (child.hasProperty("id") && child["id"].toString() != "vowel")
-            legacy.addChild(child.createCopy(), -1, nullptr);
+        if (child.hasProperty("id"))
+            for (size_t i = 0; i + 1 < legacyParameterCount; ++i)
+                if (child["id"].toString() == expectedParameterIds[i])
+                    legacy.addChild(child.createCopy(), -1, nullptr);
 
     juce::MemoryBlock result;
     if (auto xml = legacy.createXml())
@@ -156,7 +175,7 @@ void checkRandomLocksAndRanges(Checks& checks)
     ShiftyProcessor processor;
     const auto eligible = ShiftyProcessor::randomizableParameterIds();
     checks.require(eligible.size() == static_cast<int>(expectedParameterIds.size()),
-                   "all 16 parameters are listed for randomization");
+                   "all 29 parameters are listed for randomization");
     for (const auto* id : expectedParameterIds) {
         checks.require(eligible.contains(id), juce::String("randomization includes ") + id);
         checks.require(processor.isParameterLocked(id)
@@ -306,14 +325,20 @@ void checkPersistenceAndPresets(Checks& checks)
     checks.require(valuesOf(restored) == originalValues, "host session restores every parameter");
     checks.require(locksOf(restored) == originalLocks, "host session restores custom parameter locks");
     checks.require(restored.currentPresetName() == source.currentPresetName(), "host session restores preset name");
+    checks.require(restored.engineMode() == EngineMode::talk, "host session restores the engine");
 
     const auto legacy = legacySessionOf(source);
+    // v0.1 states: their fifteen controls exactly, vowel color off, 0.5.0 controls at their defaults.
     auto legacyValues = originalValues;
-    legacyValues.back() = 0.0f;
+    legacyValues[legacyParameterCount - 1] = 0.0f;
+    for (size_t i = legacyParameterCount; i < expectedParameterIds.size(); ++i)
+        legacyValues[i] = source.parameters().getParameter(expectedParameterIds[i])->getDefaultValue();
     setAllLocks(restored, true);
     restored.setStateInformation(legacy.getData(), static_cast<int>(legacy.getSize()));
     reportValueDifferences(restored, legacyValues, "legacy roundtrip");
     checks.require(valuesOf(restored) == legacyValues, "v0.1 session retains its original settings and disables optional vowel color");
+    checks.require(restored.engineMode() == EngineMode::original && restored.getLatencySamples() > 0,
+                   "a session without an engine (0.4.2 and older) loads on the original 0.4.2 sound");
     const ShiftyProcessor fresh;
     checks.require(locksOf(restored) == locksOf(fresh), "v0.1 session receives the default lock choices");
 
@@ -342,28 +367,39 @@ void checkPersistenceAndPresets(Checks& checks)
                    "invalid user preset leaves sound and locks intact");
 
     const auto names = ShiftyProcessor::factoryPresetNames();
-    checks.require(names.size() == 24, "factory bank has doubled from 12 to 24 presets");
-    auto uniqueNames = names;
-    uniqueNames.removeDuplicates(false);
-    checks.require(uniqueNames.size() == names.size(), "factory preset names are unique");
-    std::set<Values> factorySounds;
+    const auto& bank = ShiftyProcessor::factoryPresets();
+    int classicCount = 0;
+    for (const auto& preset : bank) classicCount += preset.folder == "Classic" ? 1 : 0;
+    checks.require(names.size() >= 84 && classicCount == 24,
+                   "factory bank: 60+ new presets plus the 24 originals in Classic (" + juce::String(names.size()) + ")");
+    juce::StringArray keys;
+    for (const auto& preset : bank) keys.add(preset.folder + "/" + preset.name);
+    auto uniqueKeys = keys;
+    uniqueKeys.removeDuplicates(false);
+    checks.require(uniqueKeys.size() == keys.size(), "factory preset folder/name pairs are unique");
+    std::set<std::pair<Values, int>> factorySounds;
     for (int index = 0; index < names.size(); ++index) {
+        const auto& preset = bank[static_cast<size_t>(index)];
         setPattern(recipient, false);
         recipient.loadFactoryPreset(index);
-        checks.require(recipient.parameters().getRawParameterValue("vowel")->load() == 0.0f,
-                       "factory preset starts with source formants only: " + names[index]);
+        if (preset.folder == "Classic")
+            checks.require(recipient.parameters().getRawParameterValue("vowel")->load() == 0.0f
+                               && recipient.engineMode() == EngineMode::original,
+                           "Classic original keeps source formants only and the 0.4.2 sound: " + names[index]);
+        checks.require(recipient.engineMode() == preset.engine, "factory preset sets its engine: " + keys[index]);
         const auto first = valuesOf(recipient);
-        checks.require(recipient.currentPresetName() == names[index], "factory name matches index " + juce::String(index));
+        checks.require(recipient.currentPresetName() == names[index] && recipient.currentPresetFolder() == preset.folder,
+                       "factory name and folder match index " + juce::String(index));
         checks.require(locksOf(recipient) == recipientLocks, "factory preset preserves parameter locks");
         setPattern(recipient, true);
         recipient.loadFactoryPreset(index);
         checks.require(valuesOf(recipient) == first, "factory preset fully specifies its sound: " + names[index]);
         checks.require(locksOf(recipient) == recipientLocks, "factory reload preserves parameter locks");
         checkLegalValues(checks, recipient, names[index]);
-        factorySounds.insert(first);
+        factorySounds.insert({ first, static_cast<int>(recipient.engineMode()) * 2 + (recipient.classicLowLatency() ? 1 : 0) });
     }
-    checks.require(factorySounds.size() == static_cast<size_t>(names.size()), "all 24 factory sounds have distinct settings");
-    checks.section("session persistence, old sessions, user presets, and all 24 deterministic factory presets");
+    checks.require(factorySounds.size() == static_cast<size_t>(names.size()), "all factory sounds have distinct settings");
+    checks.section("session persistence, old sessions, user presets, and every deterministic factory preset");
 }
 
 class PlayingHost final : public juce::AudioPlayHead {
@@ -440,13 +476,15 @@ void checkFactoryAudio(Checks& checks)
     checks.section("mid-bass audio through all factory presets at 48 and 96 kHz with moving host transport");
 }
 
-std::vector<float> renderFreeMotion(int blockSize)
+std::vector<float> renderFreeMotion(int blockSize, EngineMode engine)
 {
     constexpr double sampleRate = 48000.0;
     constexpr int samples = 32768;
     constexpr double tau = juce::MathConstants<double>::twoPi;
     ShiftyProcessor processor;
-    processor.loadFactoryPreset(0);
+    processor.loadFactoryPreset(ShiftyProcessor::factoryPresetIndex("Classic", "Rubber Throat"));
+    processor.setEngine(engine, false);
+    setActual(processor, "motionTarget", 2.0f); // TALK: move SHIFT and the vowel
     setActual(processor, "motionEnable", 1.0f);
     setActual(processor, "motionSync", 0.0f);
     setActual(processor, "motionFreeHz", 20.0f);
@@ -478,9 +516,12 @@ std::vector<float> renderFreeMotion(int blockSize)
 
 void checkMotionBlockIndependence(Checks& checks)
 {
-    const auto smallBlocks = renderFreeMotion(64);
+  for (const auto engine : { EngineMode::original, EngineMode::classic, EngineMode::talk, EngineMode::mouth }) {
+    const char* engineLabel = engine == EngineMode::original ? "original" : engine == EngineMode::classic ? "CLASSIC"
+                            : engine == EngineMode::talk ? "TALK" : "MOUTH";
+    const auto smallBlocks = renderFreeMotion(64, engine);
     for (const int otherBlockSize : {257, 2048}) {
-        const auto otherBlocks = renderFreeMotion(otherBlockSize);
+        const auto otherBlocks = renderFreeMotion(otherBlockSize, engine);
         double error = 0.0;
         float worst = 0.0f;
         for (size_t i = 0; i < smallBlocks.size(); ++i) {
@@ -490,12 +531,13 @@ void checkMotionBlockIndependence(Checks& checks)
         }
         const auto rms = std::sqrt(error / static_cast<double>(smallBlocks.size()));
         checks.require(std::isfinite(rms) && rms < 1.0e-5 && worst < 3.0e-4f,
-                       "20 Hz free Motion is independent of host block size 64 vs "
+                       juce::String(engineLabel) + ": 20 Hz free Motion is independent of host block size 64 vs "
                            + juce::String(otherBlockSize) + " (RMS "
                            + juce::String(rms, 9) + ", max " + juce::String(worst, 9) + ")");
-        std::cout << "20 Hz Motion, 64 vs " << otherBlockSize << " sample host blocks: RMS difference "
+        std::cout << engineLabel << ", 20 Hz Motion, 64 vs " << otherBlockSize << " sample host blocks: RMS difference "
                   << rms << ", largest difference " << worst << ".\n";
     }
+  }
 }
 
 void checkOutputSmoothing(Checks& checks)
@@ -571,27 +613,18 @@ void prepareForTest(ShiftyProcessor& processor, double sampleRate, int blockSize
     processor.prepareToPlay(sampleRate, blockSize);
 }
 
-void checkHostBypass(Checks& checks)
+void checkHostBypassFor(Checks& checks, EngineMode engine, bool lowLatency, const char* label)
 {
     ShiftyProcessor processor;
-    // The parameter list stays exactly as in 0.4.2: SHIFTY does not claim the
-    // host bypass, so the VST3 wrapper keeps adding its own "Bypass".
-    checks.require(processor.getBypassParameter() == nullptr, "host bypass parameter is still the wrapper's own");
-    const auto& parameters = processor.getParameters();
-    checks.require(parameters.size() == static_cast<int>(expectedParameterIds.size()), "parameter count unchanged");
-    for (int i = 0; i < parameters.size(); ++i) {
-        const auto* ranged = dynamic_cast<const juce::RangedAudioParameter*>(parameters[i]);
-        checks.require(ranged != nullptr && ranged->getParameterID() == expectedParameterIds[static_cast<size_t>(i)]
-                           && parameters[i]->getVersionHint() == 1,
-                       juce::String("parameter order and ID unchanged at index ") + juce::String(i));
-    }
-
+    if (engine == EngineMode::original)
+        processor.loadFactoryPreset(ShiftyProcessor::factoryPresetIndex("Classic", "Rubber Throat"));
+    else
+        processor.setEngine(engine, lowLatency);
     constexpr double sampleRate = 48000.0;
     constexpr int block = 256;
     prepareForTest(processor, sampleRate, block);
     const int latency = processor.getLatencySamples();
     juce::MidiBuffer midi;
-    int cursor = 0;
     auto run = [&](bool hostBypassed, int samples, auto&& input) {
         std::vector<float> result;
         for (int done = 0; done < samples;) {
@@ -604,7 +637,6 @@ void checkHostBypass(Checks& checks)
             else processor.processBlock(audio, midi);
             result.insert(result.end(), audio.getReadPointer(0), audio.getReadPointer(0) + count);
             done += count;
-            cursor += count;
         }
         return result;
     };
@@ -623,18 +655,41 @@ void checkHostBypass(Checks& checks)
             strayDuringBypass = juce::jmax(strayDuringBypass, std::abs(bypassed[i]));
     const float impulseOut = bypassed[static_cast<size_t>(impulseAt + latency)];
     checks.require(std::abs(impulseOut - 1.0f) < 1.0e-5f && strayDuringBypass < 1.0e-5f,
-                   "host-bypassed impulse leaves at exactly the reported latency ("
+                   juce::String(label) + ": host-bypassed impulse leaves at exactly the reported latency ("
                        + juce::String(impulseOut, 6) + " at +" + juce::String(latency)
                        + ", stray " + juce::String(strayDuringBypass, 8) + ")");
-    run(true, 3 * latency, silence);
-    const auto resumed = run(false, 3 * latency, silence);
+    const int settle = juce::jmax(4096, 3 * latency);
+    run(true, settle, silence);
+    const auto resumed = run(false, settle, silence);
     float stale = 0.0f;
     for (const auto sample : resumed) stale = juce::jmax(stale, std::abs(sample));
-    checks.require(stale < 1.0e-6f, "no stale pre-bypass audio after leaving host bypass (peak "
+    checks.require(stale < 1.0e-6f, juce::String(label) + ": no stale pre-bypass audio after leaving host bypass (peak "
                                         + juce::String(stale, 9) + ")");
-    std::cout << "Host bypass: impulse " << impulseOut << " at the reported " << latency
+    std::cout << "Host bypass, " << label << ": impulse " << impulseOut << " at the reported " << latency
               << "-sample latency, stray " << strayDuringBypass << ", after re-enable peak " << stale << ".\n";
-    checks.section("host bypass keeps the latency-aligned dry path, the engine running and the 0.4.2 parameter list");
+}
+
+void checkHostBypass(Checks& checks)
+{
+    ShiftyProcessor processor;
+    // SHIFTY does not claim the host bypass, so the VST3 wrapper keeps adding its own "Bypass".
+    // The 16 controls of 0.4.2 keep their order, IDs and version hint; the 0.5.0 controls follow them.
+    checks.require(processor.getBypassParameter() == nullptr, "host bypass parameter is still the wrapper's own");
+    const auto& parameters = processor.getParameters();
+    checks.require(parameters.size() == static_cast<int>(expectedParameterIds.size()), "29 parameters, append-only");
+    for (int i = 0; i < juce::jmin(parameters.size(), static_cast<int>(expectedParameterIds.size())); ++i) {
+        const auto* ranged = dynamic_cast<const juce::RangedAudioParameter*>(parameters[i]);
+        const int expectedHint = static_cast<size_t>(i) < legacyParameterCount ? 1 : 2;
+        checks.require(ranged != nullptr && ranged->getParameterID() == expectedParameterIds[static_cast<size_t>(i)]
+                           && parameters[i]->getVersionHint() == expectedHint,
+                       juce::String("parameter order, ID and version hint at index ") + juce::String(i));
+    }
+    checkHostBypassFor(checks, EngineMode::talk, false, "TALK");
+    checkHostBypassFor(checks, EngineMode::mouth, false, "MOUTH");
+    checkHostBypassFor(checks, EngineMode::classic, false, "CLASSIC");
+    checkHostBypassFor(checks, EngineMode::classic, true, "CLASSIC low latency");
+    checkHostBypassFor(checks, EngineMode::original, false, "original 0.4.2 sound");
+    checks.section("host bypass keeps the latency-aligned dry path on every engine, and the parameter list is append-only");
 }
 
 std::vector<float> renderMotionOffsets(ShiftyProcessor& processor, TestHost* host, double sampleRate,
@@ -666,6 +721,7 @@ void checkStoppedTransportMotion(Checks& checks)
     constexpr int block = 64;
     for (const bool withHost : {true, false}) {
         ShiftyProcessor processor;
+        neutraliseMovement(processor);
         setActual(processor, "motionEnable", 1.0f);
         setActual(processor, "motionSync", 1.0f);
         setActual(processor, "motionRate", 2.0f);  // 1/4
@@ -714,6 +770,7 @@ void checkTimeSignatureSync(Checks& checks)
     constexpr double sampleRate = 48000.0;
     constexpr int block = 64;
     ShiftyProcessor processor;
+    neutraliseMovement(processor);
     setActual(processor, "motionEnable", 1.0f);
     setActual(processor, "motionSync", 1.0f);
     setActual(processor, "motionRate", 4.0f);  // 1 Bar
@@ -756,6 +813,8 @@ std::vector<float> renderResonantMotion(double lfoHz, float depth, float bite, d
     constexpr int period = 872; // 55.05 Hz with a whole-sample period
     const double f0 = sampleRate / period;
     ShiftyProcessor processor;
+    processor.setEngine(EngineMode::classic, false); // the 0.4.3 Motion fix concerns CLASSIC
+    neutraliseMovement(processor);
     setActual(processor, "shift", -6.0f);
     setActual(processor, "focus", 0.7f);
     setActual(processor, "bite", bite);

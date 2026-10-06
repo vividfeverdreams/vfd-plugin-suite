@@ -1,43 +1,197 @@
-# SHIFTY 0.4.0 validation
+# SHIFTY 0.5.0 validation
 
-Validated on Apple Silicon, macOS 14.5, on 2026-09-26.
+Validated on Apple Silicon, macOS 14.5, on 2026-10-05. Release build, arm64, JUCE 9.0.2.
 
-## Source-formant behavior
+## Summary
 
-All **22 source-formant checks pass**. The suite measures whether the input's own resonance envelope moves by the requested frequency ratio. It does not reward adding a stock vowel contour or require a large change on a featureless input.
+| Check | Result |
+| --- | --- |
+| DSP tests (`ShiftyDspTests`, 44.1/48/96 kHz) | Pass |
+| Source-formant tests (`ShiftyImpactTests`, CLASSIC engine) | 22/22 pass |
+| Feature tests (`--feature-tests`), 0.4 regression set plus 0.5.0 set | Pass |
+| **0.4.2 compatibility** (`--compat`, against the shipped 0.4.2 VST3) | Pass. 26 states × 3 signals, worst difference 2.46 × 10⁻⁶, same latency |
+| Factory preset audit (`--preset-audit`) | Pass. 114 presets, no clipping, no near-silent change on raw saws |
+| Hosted VST3: latency per engine and parameter list (`--host-latency`) | Pass |
+| pluginval, strictness 5, VST3 | SUCCESS |
+| Audio Unit, hosted in process from the build folder (`--au`) | Pass |
+| pluginval / auval on the AU | **Not run**: needs the AU installed (see below) |
+| Editor snapshots (default, Motion on, Vowel on, INFO, 21-image gallery) | Pass |
 
-Twelve cases cover three independently defined resonance pairs on 80, 110 and 165 Hz carriers, each shifted −6/+6 semitones at 48 and 96 kHz. Vowel is OFF, Bite and Drive are zero, Mix is 100%, and Sub Safe is off to isolate envelope accuracy. Separate tests cover sub protection.
+## Existing projects (0.4.2 compatibility)
 
-| Input resonances (Hz) | Carrier (Hz) | Shift requested (st) | Fitted shift (st) | Target correlation | Measured output peaks (Hz) |
-| --- | ---: | ---: | ---: | ---: | --- |
-| 730 / 2070 | 80 | -6 | -5.75 | 0.992 | 535 / 1470 |
-| 730 / 2070 | 80 | +6 | +6.00 | 0.992 | 1031 / 2954 |
-| 970 / 2890 | 110 | -6 | -5.75 | 0.996 | 701 / 2016 |
-| 970 / 2890 | 110 | +6 | +6.00 | 0.996 | 1378 / 4094 |
-| 1270 / 3670 | 165 | -6 | -6.00 | 0.983 | 900 / 2586 |
-| 1270 / 3670 | 165 | +6 | +6.25 | 0.987 | 1803 / 5302 |
+The test loads SHIFTY 0.4.2 from the released installer payload and SHIFTY 0.5.0 as real VST3 plug-ins in the same host. It saves a state in 0.4.2, opens it in 0.5.0, and renders three test sounds through both: a 55 Hz saw, an FM growl and a Reese. The states are the 24 factory presets, plus Vowel Color with Sub Safe off and −3 dB Output, plus internal bypass.
 
-The fitted displacement is searched in quarter-semitone increments; every tested case is within one such increment of the request. Target correlations range from 0.983 to 0.996. Harmonic pitch remains on the input grid. These are controlled test results, not a guarantee of exact tracking for every recording.
+- Every state opens on the **original 0.4.2 sound**, at 0.4.2's latency (2,048 samples at 48 kHz).
+- It renders within 2.46 × 10⁻⁶ of 0.4.2 (worst sample, all 78 renders). The tolerance is 1 × 10⁻⁵. The remaining difference comes from the faster FFT.
+- The same states loaded straight into SHIFTY's processor give the same result.
 
-Four flat-carrier checks produce 0.23–0.25 dB of centered harmonic-gain spread, showing that the default mode does not impose the previous fixed vowel pattern. Two checks confirm that switching Vowel on adds a distinct optional color. Four checks verify neutral Shift=0/Drive=0 with Vowel both off and on.
+```
+PASS 0.4.2 Rubber Throat                          max |difference| 7.3e-07, relative RMS 6.62e-07, latency 2048 hosted / 2048 in-process (0.4.2: 2048), ORIGINAL SOUND
+PASS internal bypass                              max |difference| 2.98e-08, relative RMS 6.84e-09, latency 2048 hosted / 2048 in-process (0.4.2: 2048), ORIGINAL SOUND
+0.4.2 compatibility passed: 26 states x 3 signals, worst |difference| 2.46e-06
+```
 
-The first run exposed a real misplaced upper resonance on the 165 Hz carrier. An adaptive peak-based initialization corrected the envelope estimate. All original thresholds were retained.
+The feature tests also check the following:
+- Old states without an engine load on the original sound, with their values and locks intact.
+- The 13 new controls take their defaults and Vowel Color stays off.
+- **USE LATEST SOUND** switches to CLASSIC without changing any control or the latency, and is one UNDO step.
+- The 24 originals in the Classic folder use the original sound.
 
-## Regression checks
+## Engines and latency
 
-- DSP checks pass at 44.1, 48 and 96 kHz: neutral and dry nulls, silence, pitch, pure and mixed sub preservation, stereo isolation, linked stereo ratios, and finite automation at extreme settings.
-- All 24 factory presets explicitly recall Vowel off and produce finite audible audio. All 16 randomizable parameters respect locks; Vowel stays off through Random with default locks. Undo/Redo and state persistence pass.
-- Legacy fifteen-parameter host states retain their original settings and lock bits, insert Vowel off and lock it. Loading old state into an already-colored instance does not inherit Vowel on. User presets continue to preserve local lock choices.
-- Motion at 20 Hz remains sample-identical across host buffers of 64, 257 and 2048 samples. Output changes retain their smoothing ramp.
-- The final VST3 passes pluginval strictness level 5, including audio, automation, state, editor and mono/stereo bus tests. Prepared latency is unchanged: 2,048 samples at 48 kHz and 4,096 at 96 kHz.
-- Native OFF/ON editor snapshots confirm a legible secondary Vowel switch in the SOUND header; device corners remain transparent.
-- Callback timing during the source tests stayed below 9% of one realtime thread on this machine, including the 96 kHz stereo cases. This includes measurement overhead and is informational; it is not a worst-case audio deadline guarantee.
-- Installer build and extracted-archive integrity/signature checks pass. All 40 installer checks pass, including the installer self-detection regression. SHIFTY's bundle and VST3 class identities remain unchanged and separate from YOI-BOI.
+Hosted VST3, latency set through saved states, as a DAW restores them:
 
-## Scope and listening examples
+```
+Hosted VST3 latency, TALK: 48 kHz 0, 96 kHz 0 samples.
+Hosted VST3 latency, MOUTH: 48 kHz 1024, 96 kHz 2048 samples.
+Hosted VST3 latency, CLASSIC: 48 kHz 2048, 96 kHz 4096 samples.
+Hosted VST3 latency, CLASSIC low latency: 48 kHz 1024, 96 kHz 2048 samples.
+Hosted VST3 latency, CLASSIC original 0.4.2 sound: 48 kHz 2048, 96 kHz 4096 samples.
+Hosted VST3 latency of a new instance (TALK) before prepare: 0.
+```
 
-Audio comparisons are synthetic fixtures, latency aligned and RMS matched. The short preview plays dry → −6 semitones → +6 semitones, with Vowel off throughout. Generic saw, square, Reese and FM examples are also included without a forced large-change threshold.
+The engine is not a host parameter. The feature tests check that:
+- an engine change sets the latency at once and notifies the host;
+- UNDO and REDO restore engine and latency;
+- 50 RANDOM presses with every lock open never change the engine;
+- a session restores its engine.
 
-The update is packaged for installation; this task did not replace the installed plug-in. Earlier parameter values load, but revised processing changes their audio. Retain the earlier release when exact old audio recall is needed.
+The parameter list is append-only: 0.4.2's 16 controls in their original order with version hint 1, then the 13 new ones with version hint 2, then the VST3 wrapper's Bypass.
 
-An actual Ableton session and listening review on the user's own material remain to be done. The app and plug-in are signed locally with an ad hoc identity and are not Apple notarized.
+Host bypass passes the input at exactly the reported latency on every engine, with no leftover audio on return:
+
+```
+Host bypass, TALK: impulse 1 at the reported 0-sample latency, stray 0, after re-enable peak 4.47512e-22.
+Host bypass, MOUTH: impulse 1 at the reported 1024-sample latency, stray 0, after re-enable peak 2.00119e-32.
+Host bypass, CLASSIC: impulse 1 at the reported 2048-sample latency, stray 4.5307e-14, after re-enable peak 0.
+Host bypass, CLASSIC low latency: impulse 1 at the reported 1024-sample latency, stray 1.31726e-13, after re-enable peak 0.
+Host bypass, original 0.4.2 sound: impulse 1 at the reported 2048-sample latency, stray 1.21407e-16, after re-enable peak 0.
+```
+
+## How much each engine changes a raw saw
+
+The hardest case for 0.4 was a plain 55 Hz sawtooth, which has no resonances to move. "Spread" is the standard deviation of the per-harmonic level change (dB); "centroid" is the shift in spectral centre of mass, in semitones. Default FOCUS 0.55, BITE 0.35, CHARACTER 0.
+
+| Engine | Saw, SHIFT −6 | Saw, SHIFT +6 | FM growl, SHIFT −6 | FM growl, SHIFT +6 |
+| --- | --- | --- | --- | --- |
+| CLASSIC | 0.10 dB | 0.12 dB | 6.91 dB | 6.11 dB |
+| **TALK** | **5.44 dB** (centroid −3.5 st) | **5.42 dB** (+7.0 st) | 5.14 dB | 7.18 dB |
+| MOUTH | 1.03 dB | 0.72 dB | 6.58 dB | 8.01 dB |
+
+- CLASSIC and MOUTH follow the source, so they change a raw saw little. That is expected and documented. MOUTH presets use CHARACTER, which adds a mouth shape.
+- TALK changes any source.
+- DSP test (48 kHz): TALK moves the spectral centre −4.7 / +5.0 st at SHIFT −6 / +6. Its five vowels differ by 5.1 dB (OO–EE, third-octave shape) and at least 2.6 dB for the closest pair.
+
+```
+TALK 48000 Hz: latency 0, saw centroid 411.026 Hz; SHIFT -6/0/+6 centroid 399.702 / 524.623 / 699.858 Hz (-4.70827, +4.98937 st); vowel shape distance OO-EE 5.10788 dB, closest pair 2.63563 dB; extremes peak 1.07004, silence 0; 40 Hz sub -0.0847852 dB; block 37 vs 1024 with vowel modulation max 0
+MOUTH 48000 Hz: latency 1024, tracked 92.0023 Hz (confidence 0.993336); pitch in 92, out 92 / 92 / 92 Hz; centroid -3.85419 / +6.93405 st at SHIFT -6/+6; noise peak 0.736293, confidence 0.342387
+```
+
+TALK also passes these checks:
+- extreme settings stay bounded;
+- silence stays silent;
+- Sub Safe passes 40 Hz within 0.1 dB;
+- per-sample vowel modulation is identical at host buffers of 37 and 1,024.
+
+MOUTH also passes these checks:
+- it keeps the played pitch at ±6 st;
+- it tracks a 92 Hz bass to 0.003 Hz;
+- on noise it stays bounded and reports low confidence.
+
+## CLASSIC fixes
+
+```
+CLASSIC 41.2 Hz resonant saw at +6 st, warble (median harmonic level std): original 0.4.2 1.0331 dB (latency 2048), latest 0.291336 dB (2048), low latency 0.227928 dB (1024); low latency SHIFT +6 moves the centroid +10.2115 st
+Motion at 9.4 Hz: 94.6985% of 0.5 Hz modulation depth; 0.804829% windows >3 dB below the slow-sweep minimum, deepest -11.8402 dB.
+```
+
+- The low-note warble (notes below G1) drops from 1.03 dB to 0.29 dB (0.23 dB in LOW LATENCY).
+- Fast Motion keeps 95% of its depth at 9.4 Hz (0.4.2: about 49%).
+- Level compensation no longer bumps on note starts or SHIFT jumps. This was checked in 0.4.3 and re-run here.
+
+## DRIVE
+
+```
+DRIVE (ADAA): aliasing at full drive, 4.1 kHz sine -22.8752 -> -33.0957 dB, 7.3 kHz sine -16.7035 -> -36.327 dB re fundamental; 55 Hz difference to the 0.4.2 curve 0.336496%; zero drive transparent yes
+```
+
+## Movement (LFO, ENV, YOI)
+
+```
+ENV follower: -6 dBFS -> 0.985336, -48 dBFS -> 0; YOI: 4 onsets in 4 notes, sweep at 100 ms 0.500095, at 202 ms 1
+```
+
+- The YOI test plays four notes after 100 ms gaps, alternating −8 and −14 dBFS, with a 6 Hz tremolo inside each note. It catches every note start and never re-triggers on the tremolo.
+- Through the whole plug-in:
+  - ENV opens or closes the TALK vowel and raises SHIFT on MOUTH and CLASSIC.
+  - YOI starts each note near FROM and arrives at TO after its time.
+  - The original sound ignores ENV and YOI.
+- The LFO is sample-identical at host buffers of 64, 257 and 2,048 on all four engines.
+- Synced Motion runs at the host tempo with the transport stopped: within 4 × 10⁻⁷ st, at 140 BPM and at the 120 BPM fallback.
+- 1 Bar follows a 3/4 bar.
+
+## Presets
+
+All 114 factory presets were rendered on three sounds: a raw 55 Hz saw, a 110 Hz FM growl and a 55 Hz Reese. Each input has an RMS of about −15 dBFS and peaks at or below 0.6.
+
+- **Pass rule:** no output peak reaches 0 dBFS, and on the raw saw every new preset makes an audible change (spread ≥ 1 dB or centroid ≥ 1 st).
+- **Classic folder:** some of the 24 originals change a raw saw very little. That is how 0.4.2 sounded, so they are kept as they were and marked rather than failed.
+- **Fixes made during the audit:**
+  - Four presets peaked just over 0 dBFS on the FM growl: Talking Metal, Basement Growl, Plasma Throat and Tar Pit. They now have 2–3 dB less output.
+  - Big Mouth and Giant Jaw changed a raw saw too little. They now use a stronger CHARACTER mouth shape.
+- **Level change** (output RMS minus input RMS) stays within −2.7 to +2.6 dB across all presets and sounds.
+- Every preset recalls the same values and engine whatever was loaded before. Folder and name pairs are unique.
+
+## User presets and window size
+
+- **User presets.** Tests run in a temporary folder and never touch the real preset folders.
+  - Presets save into a chosen subfolder, creating it if needed. Folders are listed, and presets in every folder are found.
+  - A folder preset reloads with its name, folder and engine.
+  - Existing files keep their bytes and modification time.
+  - Folder names such as `..`, `../../outside` and `.hidden` cannot leave the preset folder or hide in it.
+- **Window size.** 100% is 650 × 849.
+  - A 2560 × 1440 screen offers all four sizes, 1920 × 1080 offers 90% and 100%, and 1440 × 900 offers only 90%.
+  - The size is saved with the project as non-parameter state, and the host is told when it changes.
+  - Old projects open at 100%.
+
+## Audio Unit
+
+The AU has type `aufx`, subtype `Shf1`, manufacturer `Yoib`, bundle ID `com.yoiboi.shifty` and version 0.5.0 (JUCE defaults, no custom codes).
+
+macOS only lists Audio Units that are installed, so pluginval and `auval` cannot open the AU from the build folder (pluginval: "No types found"). Instead, `--au` registers the component's factory for that one test process and hosts it through JUCE's AU host. Nothing is installed.
+
+```
+AU found in process: VIVID FEVER DREAMS / SHIFTY 0.5.0 (AudioUnit:Effects/aufx,Shf1,Yoib)
+AU latency, TALK: 0 samples at 48 kHz.
+AU latency, MOUTH: 1024 samples at 48 kHz.
+AU latency, CLASSIC: 2048 samples at 48 kHz.
+AU latency, CLASSIC low latency: 1024 samples at 48 kHz.
+AU latency, original 0.4.2 sound: 2048 samples at 48 kHz.
+AU audio vs in-process SHIFTY (TALK, 1 s saw): max |difference| 0, energy 4865.58, finite.
+AU editor: 650 x 849.
+AU in-process validation passed.
+```
+
+**To do after installing:** `auval -v aufx Shf1 Yoib` and pluginval on the installed component.
+
+## CPU
+
+Thread CPU time, stereo, 48 kHz, 64-sample buffers, 10 s, per engine:
+
+| Engine | Average | 99th-percentile callback (budget 1,333 µs) |
+| --- | --- | --- |
+| TALK | 1.4% | 27 µs |
+| MOUTH | 1.9% | 86 µs |
+| CLASSIC | 3.4% | 376 µs |
+| CLASSIC LOW LATENCY | 3.6% | 216 µs |
+| Original 0.4.2 sound | 2.1% | 233 µs |
+
+CLASSIC's zero-padded analysis costs more than the original mode but spreads its work over smaller frames. These figures are informational, not a worst-case guarantee.
+
+## Not yet done
+
+- A real session in Ableton Live and Logic Pro: scan, save and reopen, automation, freeze and export.
+- `auval` and pluginval on an installed AU.
+- Listening on the user's own material.
+
+The plug-ins are signed ad hoc and are not notarized.
