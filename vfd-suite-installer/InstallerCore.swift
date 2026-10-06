@@ -148,7 +148,7 @@ enum SuiteCatalog {
         PluginDefinition(name: "YOI-BOI", bundleIdentifier: "com.yoiboi.synth", version: "0.2.0",
                          audioUnit: AudioUnitIdentity(type: "aumu", subtype: "YB01", manufacturer: "YBoi")),
         PluginDefinition(name: "THROW-UP", bundleIdentifier: "com.yoiboi.throwup", version: "0.2.0",
-                         audioUnit: AudioUnitIdentity(type: "aufx", subtype: "Thr1", manufacturer: "Yoib")),
+                         audioUnit: AudioUnitIdentity(type: "aumf", subtype: "Thr1", manufacturer: "Yoib")), // MIDI-controlled effect: Logic sends MIDI throws only to aumf
         PluginDefinition(name: "BACK-SCRATCH", bundleIdentifier: "com.yoiboi.backscratch", version: "0.11.0",
                          audioUnit: AudioUnitIdentity(type: "aufx", subtype: "Bsc1", manufacturer: "Yoib")),
         PluginDefinition(name: "SHIFTY", bundleIdentifier: "com.yoiboi.shifty", version: "0.5.0",

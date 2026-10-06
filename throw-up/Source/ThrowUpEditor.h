@@ -1,6 +1,7 @@
 #pragma once
 #include "ThrowUpProcessor.h"
 #include <juce_gui_extra/juce_gui_extra.h>
+#include <array>
 #include <memory>
 #include <vector>
 
@@ -13,15 +14,39 @@ public:
     ~ThrowUpEditor() override;
     void paint (juce::Graphics&) override;
     void resized() override;
+    void mouseDown (const juce::MouseEvent&) override;
+
+    // Pages of the top display: room tone, THROW trigger, space effects, mix.
+    enum class Page { room = 0, trigger, space, mix };
+    void showPage (Page);
+    Page getPage() const noexcept { return page; }
+
+    // Right-click on the enclosure opens the size menu. Sizes that do not fit
+    // the display (width <= user area width, height + 60 <= user area height)
+    // are disabled. The chosen size is saved with the project.
+    static constexpr std::array<float, 4> menuScales { 0.9f, 1.0f, 1.25f, 1.5f };
+    static bool scaleFits (float scale, juce::Rectangle<int> userArea);
+    static float initialScale (float saved, juce::Rectangle<int> userArea);
+    juce::PopupMenu createSizeMenu (juce::Rectangle<int> userArea);
+    void applyScale (float scale);
+
+    // The preset menu is rebuilt each time it opens, so new user presets appear.
+    void rebuildPresetMenu();
+    void openSaveDialog();
 
 private:
     struct Control;
     class Skin;
+    class PresetBox;
+    class KeyButton;
     void timerCallback() override;
     void addControl (const char* id, const char* title, const char* tooltip,
                      juce::Rectangle<float> hit, juce::Rectangle<float> value,
-                     bool physical = false, bool large = false);
+                     bool physical = false, bool large = false, int controlPage = -1);
+    void addPageControl (const char* id, const char* title, const char* tooltip, Page controlPage, int slot);
+    juce::String valueText (const juce::String& id, double value) const;
     void updatePresetDisplay();
+    void updateKeys();
     void stepPreset (int direction);
     void drawScreen (juce::Graphics&);
     void drawKnob (juce::Graphics&, Control&);
@@ -37,7 +62,7 @@ private:
     juce::Typeface::Ptr normalTypeface, titleTypeface;
     std::unique_ptr<Skin> skin;
     std::vector<std::unique_ptr<Control>> controls;
-    juce::ComboBox presets;
+    std::unique_ptr<PresetBox> presets;
     juce::TextButton previous { "<" }, next { ">" }, bypass { "BYPASS" };
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> bypassAttachment;
     std::unique_ptr<vfd::InfoButton> infoButton;
@@ -47,5 +72,15 @@ private:
     int inputClipHold = 0, outputClipHold = 0;
     int visiblePreset = -1;
     bool modified = false;
+    // 0.2.0 controls.
+    Page page = Page::room;
+    std::array<juce::TextButton, 4> pageTabs;
+    juce::TextButton saveKey { "SAVE" }, slotA { "A" }, slotB { "B" }, noteRoomsKey { "NOTE ROOMS" }, soundKey { "USE LATEST SOUND" };
+    std::unique_ptr<KeyButton> throwKey, freezeKey, safeKey, sendKey;
+    std::vector<std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment>> keyAttachments;
+    std::vector<juce::File> userPresetFiles;
+    juce::Component::SafePointer<juce::AlertWindow> dialog; // closed with the editor
+    void showDialog (juce::AlertWindow*, std::function<void (int)> onResult);
+    bool sizeReady = false;
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (ThrowUpEditor)
 };

@@ -186,7 +186,7 @@ final class InstallerEngine {
     static let identifier = "com.yoiboi.throwup"
     static let executable = "THROW-UP"
     /// JUCE derives these from IS_SYNTH, PLUGIN_CODE and PLUGIN_MANUFACTURER_CODE in the plug-in's CMakeLists.txt.
-    static let audioUnit = AudioUnitIdentity(type: "aufx", subtype: "Thr1", manufacturer: "Yoib")
+    static let audioUnit = AudioUnitIdentity(type: "aumf", subtype: "Thr1", manufacturer: "Yoib") // MIDI-controlled effect (MIDI throws in Logic)
     /// Shared with the Vivid Fever Dreams Suite installer, so the two never change the plug-in folders at the same time.
     static let suiteLockName = ".vfd-suite-installer.lock"
     static let suiteTransactionPrefix = ".vfd-suite-transaction-"

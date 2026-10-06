@@ -2,7 +2,7 @@
 
 One native installer for YOI-BOI 0.2.0, THROW-UP 0.2.0, BACK-SCRATCH 0.11.0, SHIFTY 0.5.0, and ENERGY HARVESTER 0.4.0, each as a **VST3** and an **Audio Unit**.
 
-All five report **VIVID FEVER DREAMS** as their creator/vendor. Plug-in names, bundle identifiers, and VST3 component/controller identities remain compatible with earlier releases. The Audio Units register under these codes (type/subtype/manufacturer): YOI-BOI `aumu/YB01/YBoi`, THROW-UP `aufx/Thr1/Yoib`, BACK-SCRATCH `aufx/Bsc1/Yoib`, SHIFTY `aufx/Shf1/Yoib`, ENERGY HARVESTER `aufx/Enh1/Yoib`.
+All five report **VIVID FEVER DREAMS** as their creator/vendor. Plug-in names, bundle identifiers, and VST3 component/controller identities remain compatible with earlier releases. The Audio Units register under these codes (type/subtype/manufacturer): YOI-BOI `aumu/YB01/YBoi`, THROW-UP `aumf/Thr1/Yoib` (a MIDI-controlled effect, so MIDI throws work in Logic), BACK-SCRATCH `aufx/Bsc1/Yoib`, SHIFTY `aufx/Shf1/Yoib`, ENERGY HARVESTER `aufx/Enh1/Yoib`.
 
 Requires **macOS 12 or later on Apple Silicon**. This package does not provide Intel or AAX builds. The installer and included plug-ins are ad-hoc signed and are not Apple notarized, so macOS asks you to approve the installer once (System Settings → Privacy & Security → Open Anyway). Developer ID signing and notarization will follow once the developer enrollment is in place.
 

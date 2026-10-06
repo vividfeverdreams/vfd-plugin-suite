@@ -119,10 +119,18 @@ Audio render (const Audio& original, throwup::Settings settings)
     engine.setSettings (settings);
     engine.prepare (sampleRate, 256);
     auto result = original;
+    double swellPhase = settings.swellPhase;
     for (std::size_t begin = 0; begin < result.left.size(); begin += 256)
     {
         float* channels[] { result.left.data() + begin, result.right.data() + begin };
         const auto count = std::min<std::size_t> (256, result.left.size() - begin);
+        if (settings.swell)
+        {
+            // As the host would: the swell cycle position at each block start.
+            settings.swellPhase = swellPhase - std::floor (swellPhase);
+            engine.setSettings (settings);
+            swellPhase += settings.swellPhaseStep * static_cast<double> (count);
+        }
         engine.process (channels, 2, static_cast<int> (count));
     }
     return result;
@@ -203,6 +211,58 @@ void writeWav (const std::filesystem::path& path, const Audio& audio)
 }
 } // namespace
 
+// Hot, real-level riddim sources (peak -0.5 dBFS) for the headroom report.
+Audio hotSource (int kind)
+{
+    Audio audio (static_cast<std::size_t> (sampleRate * duration));
+    double phaseA = 0, phaseB = 0;
+    for (std::size_t i = 0; i < static_cast<std::size_t> (sampleRate * sustainEnd); ++i)
+    {
+        const double time = i / sampleRate;
+        double value;
+        if (kind == 0)
+        {
+            const double m = std::sin (2 * pi * 3.0 * time);
+            value = std::clamp (2.5 * std::sin (2 * pi * 110 * time + 4.0 * (1 + m) * std::sin (2 * pi * 220 * time)), -1.0, 1.0);
+        }
+        else
+        {
+            phaseA += 55.3 / sampleRate; phaseB += 54.7 / sampleRate;
+            phaseA -= std::floor (phaseA); phaseB -= std::floor (phaseB);
+            value = std::tanh (1.5 * ((2 * phaseA - 1) + (2 * phaseB - 1)));
+        }
+        audio.left[i] = audio.right[i] = static_cast<float> (value * 0.944);
+        audio.active[i] = true;
+    }
+    return audio;
+}
+
+struct Floors { double active, best, first, post; };
+
+// Product-level audibility floors at full THROW, expressed relative to dry
+// active RMS rather than any internal gain constant. Longer rooms intentionally
+// take more time to develop; strongly band-limited creative effects need a
+// wider allowance. Short rooms must be clearly audible while the note plays,
+// not pass by integrating a long tail. The 0.1.5 groups keep their 0.1.5 floors.
+Floors floorsFor (const std::string& group)
+{
+    if (group == "Small") return { -6, -6, -12, -13 };
+    if (group == "Medium") return { -13, -6, -17, -9 };
+    if (group == "Large") return { -18, -9, -24, -11 };
+    if (group == "Huge") return { -22, -10, -32, -14 };
+    if (group == "Creative") return { -23, -15, -26, -18 };
+    if (group == "Synced Throws") return { -13, -6, -17, -9 };
+    if (group == "Freeze Pads" || group == "Shimmer") return { -22, -10, -32, -14 };
+    if (group == "Send FX") return { -18, -9, -24, -11 };
+    // Heavily ducked by design: quiet under the note, loud in the gap after it.
+    if (group == "Sidechain Pumps") return { -30, -9, -36, -18 };
+    // A swell is silent at the start of its cycle and cuts at the grid line, so
+    // its first-arrival window is not a meaningful test; it must still reach a
+    // strong level within the bar.
+    if (group == "Swells") return { -40, -9, -200, -40 };
+    throw std::runtime_error ("No audit floors for preset group " + group);
+}
+
 int main (int argc, char** argv)
 {
     try
@@ -224,21 +284,14 @@ int main (int argc, char** argv)
         csv << "preset,group,source,mode,low_cut_hz,high_cut_hz,duck,size,decay_seconds,dry_active_dbfs,"
                "wet_active_vs_dry_db,wet_best_100ms_vs_dry_db,wet_best_window_start_seconds,"
                "wet_first_100ms_vs_dry_db,wet_first_250ms_post_note_vs_dry_db,"
-               "wet_next_750ms_post_note_vs_dry_db,wet_peak_dbfs,mixed_peak_dbfs,dry_peak_dbfs\n";
+               "wet_next_750ms_post_note_vs_dry_db,wet_peak_dbfs,mixed_peak_dbfs,dry_peak_dbfs,bank\n";
         csv << std::fixed << std::setprecision (4);
         constexpr std::array<const char*, 3> names { "harmonic", "reese", "stabs" };
-        // Product-level audibility floors at full THROW, expressed relative to
-        // dry active RMS rather than any internal gain constant. Longer rooms
-        // intentionally take more time to develop; strongly band-limited
-        // creative effects need a wider allowance. Short rooms must be clearly
-        // audible while the note plays, not pass by integrating a long tail.
-        constexpr std::array<double, 5> activeFloor { -6, -13, -18, -22, -23 };
-        constexpr std::array<double, 5> bestWindowFloor { -6, -6, -9, -10, -15 };
-        constexpr std::array<double, 5> firstWindowFloor { -12, -17, -24, -32, -26 };
-        constexpr std::array<double, 5> postNoteFloor { -13, -9, -11, -14, -18 };
-        std::size_t failures = 0;
-        double maximumWetPeak = 0, maximumMixedPeak = 0;
+        // Synced rooms are audited at a typical dubstep tempo.
+        constexpr double auditTempo = 140.0;
         const auto& presets = throwup::factoryPresets();
+        struct Section { std::size_t pairs = 0, failures = 0; double wetPeak = 0, mixedPeak = 0; };
+        Section legacy, latest;
         for (int kind = 0; kind < 3; ++kind)
         {
             const auto original = signal (kind);
@@ -246,7 +299,8 @@ int main (int argc, char** argv)
             for (std::size_t index = 0; index < presets.size(); ++index)
             {
                 const auto& preset = presets[index];
-                auto settings = preset.settings;
+                auto& section = preset.legacy ? legacy : latest;
+                auto settings = throwup::settingsFor (preset.room, auditTempo, sampleRate);
                 if (mode.find ("no-duck") != std::string::npos) settings.duck = 0;
                 if (mode.find ("open-filters") != std::string::npos)
                 {
@@ -269,17 +323,18 @@ int main (int argc, char** argv)
                 const double firstDb = db (rms (wet, firstArrival, firstArrival + 0.1) / dry);
                 const double postDb = db (rms (wet, original.lastNoteEnd, original.lastNoteEnd + 0.25) / dry);
                 const double wetPeak = peak (wet), mixedPeak = peak (rendered);
-                maximumWetPeak = std::max (maximumWetPeak, wetPeak);
-                maximumMixedPeak = std::max (maximumMixedPeak, mixedPeak);
+                section.wetPeak = std::max (section.wetPeak, wetPeak);
+                section.mixedPeak = std::max (section.mixedPeak, mixedPeak);
+                ++section.pairs;
                 if (verify)
                 {
-                    const auto group = index / 10;
-                    if (activeDb < activeFloor[group] || bestDb < bestWindowFloor[group]
-                        || firstDb < firstWindowFloor[group] || postDb < postNoteFloor[group])
+                    const auto floors = floorsFor (preset.group);
+                    if (activeDb < floors.active || bestDb < floors.best
+                        || firstDb < floors.first || postDb < floors.post)
                     {
-                        if (++failures <= 12)
-                            std::cerr << "INAUDIBLE " << preset.name << " / " << names[kind]
-                                      << ": active " << activeDb << ", best 100 ms " << bestDb
+                        if (++section.failures <= 24)
+                            std::cerr << "INAUDIBLE " << (preset.legacy ? "0.1.5 " : "") << preset.group << " / " << preset.name
+                                      << " / " << names[kind] << ": active " << activeDb << ", best 100 ms " << bestDb
                                       << ", first 100 ms " << firstDb << ", post-note 250 ms " << postDb << " dB vs dry\n";
                     }
                     // Finite is checked by peak(); peaks above unity are valid
@@ -293,24 +348,51 @@ int main (int argc, char** argv)
                     << activeDb << ',' << bestDb << ',' << best.second << ','
                     << firstDb << ',' << postDb << ','
                     << db (rms (wet, original.lastNoteEnd + 0.25, original.lastNoteEnd + 1.0) / dry) << ','
-                    << db (wetPeak) << ',' << db (mixedPeak) << ',' << db (peak (original)) << '\n';
+                    << db (wetPeak) << ',' << db (mixedPeak) << ',' << db (peak (original)) << ','
+                    << (preset.legacy ? "0.1.5" : "latest") << '\n';
                 if (! wavDirectory.empty() && index % 10 == 0)
                 {
-                    const auto stem = std::string (preset.group) + "-" + names[kind];
+                    const auto stem = std::string (preset.legacy ? "legacy-" : "") + preset.group + "-" + names[kind];
                     writeWav (wavDirectory / (stem + "-wet.wav"), wet);
                     writeWav (wavDirectory / (stem + "-mixed.wav"), rendered);
                 }
             }
         }
-        std::cout << "Audited 50 presets x 3 mid-bass sources at 100% THROW; mode=" << mode
+        // Hot-source headroom report for the latest bank (informational, plus a
+        // hard check that Safe clip really holds the output at 0 dBFS).
+        double hotPeak = 0, hotSafePeak = 0;
+        std::string hotWorst;
+        for (int kind = 0; kind < 2; ++kind)
+        {
+            const auto hot = hotSource (kind);
+            for (const auto& preset : presets)
+            {
+                if (preset.legacy) continue;
+                auto settings = throwup::settingsFor (preset.room, auditTempo, sampleRate);
+                const double p = peak (render (hot, settings));
+                if (p > hotPeak) { hotPeak = p; hotWorst = preset.name; }
+                settings.safeClip = true;
+                hotSafePeak = std::max (hotSafePeak, peak (render (hot, settings)));
+            }
+        }
+        if (verify && hotSafePeak > 1.0)
+            throw std::runtime_error ("Safe clip let a hot source exceed 0 dBFS");
+        std::cout << "Audited " << presets.size() << " presets x 3 mid-bass sources at 100% THROW; mode=" << mode
                   << ", dry active RMS=" << db (dryRmsTarget) << " dBFS; CSV=" << argv[1] << '\n';
-        std::cout << "Maximum wet peak " << db (maximumWetPeak) << " dBFS; maximum parallel-output peak "
-                  << db (maximumMixedPeak) << " dBFS (floating-point headroom).\n";
+        std::cout << "0.1.5 bank (Legacy 0.1.5 folder): Maximum wet peak " << db (legacy.wetPeak)
+                  << " dBFS; maximum parallel-output peak " << db (legacy.mixedPeak) << " dBFS (floating-point headroom).\n";
+        std::cout << "Latest bank: Maximum wet peak " << db (latest.wetPeak)
+                  << " dBFS; maximum parallel-output peak " << db (latest.mixedPeak) << " dBFS.\n";
+        std::cout << "Latest bank on hot riddim sources (peak -0.5 dBFS): combined peak " << db (hotPeak)
+                  << " dBFS (" << hotWorst << "); with Safe clip " << db (hotSafePeak) << " dBFS.\n";
         if (verify)
         {
-            std::cout << (failures == 0 ? "PASS" : "FAIL") << ": " << (150 - failures)
-                      << "/150 preset/source pairs meet active, strongest 100 ms, first-arrival, and post-note audibility floors.\n";
-            if (failures != 0) return 1;
+            const bool pass = legacy.failures == 0 && latest.failures == 0;
+            std::cout << (legacy.failures == 0 ? "PASS" : "FAIL") << ": " << (legacy.pairs - legacy.failures) << '/' << legacy.pairs
+                      << " 0.1.5 preset/source pairs meet active, strongest 100 ms, first-arrival, and post-note audibility floors.\n";
+            std::cout << (latest.failures == 0 ? "PASS" : "FAIL") << ": " << (latest.pairs - latest.failures) << '/' << latest.pairs
+                      << " latest preset/source pairs meet their folder's audibility floors.\n";
+            if (! pass) return 1;
         }
         return 0;
     }

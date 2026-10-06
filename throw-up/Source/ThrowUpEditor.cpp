@@ -13,22 +13,19 @@ namespace {
 constexpr int shellX = 46, shellY = 28, shellWidth = 1030, shellHeight = 1335;
 // The physical INFO key on the lower board strip, in artwork coordinates.
 const juce::Rectangle<float> infoKeyBounds { 486.1f, 1222.4f, 153.9f, 60.9f };
+// Molded keys on the same strip, either side of INFO.
+const juce::Rectangle<float> throwKeyBounds { 190.0f, 1222.4f, 140.0f, 60.9f };
+const juce::Rectangle<float> freezeKeyBounds { 340.0f, 1222.4f, 136.0f, 60.9f };
+const juce::Rectangle<float> safeKeyBounds { 650.0f, 1222.4f, 96.0f, 60.9f };
+const juce::Rectangle<float> sendKeyBounds { 754.0f, 1222.4f, 96.0f, 60.9f };
 constexpr float startAngle = juce::MathConstants<float>::pi * 1.25f;
 constexpr float endAngle = juce::MathConstants<float>::pi * 2.75f;
 const juce::Colour cream { 0xffffeed3 }, amber { 0xffffca70 }, orange { 0xffff9d43 };
 const juce::Colour muted { 0xffd6b28f }, panel { 0xff291209 }, ink { 0xff55240d };
 const juce::Rectangle<float> bypassBounds { 186, 1113, 178, 56 };
-
-juce::String valueText (const juce::String& id, double value)
-{
-    if (id == "decay") return juce::String (value, 2) + " s";
-    if (id == "predelay") return juce::String (value, 1) + " ms";
-    if (id == "lowCut" || id == "highCut")
-        return value >= 1000.0 ? juce::String (value / 1000.0, 2) + " kHz"
-                               : juce::String (juce::roundToInt (value)) + " Hz";
-    if (id == "output") return juce::String (value, 1) + " dB";
-    return juce::String (juce::roundToInt (value)) + "%";
-}
+constexpr int baseWidth = 660;
+constexpr int userItemBase = 1000;
+const std::array<const char*, 4> pageNames { "ROOM", "THROW", "SPACE", "MIX" };
 
 juce::Image loadShell()
 {
@@ -36,6 +33,11 @@ juce::Image loadShell()
     if (const auto* data = BinaryData::getNamedResource ("DeviceShellfullbleed_png", size))
         return juce::ImageCache::getFromMemory (data, size);
     return {};
+}
+
+juce::String milliseconds (double value)
+{
+    return value >= 1000.0 ? juce::String (value / 1000.0, 2) + " s" : juce::String (juce::roundToInt (value)) + " ms";
 }
 }
 
@@ -56,6 +58,14 @@ public:
         setColour (juce::TextEditor::textColourId, cream);
         setColour (juce::TextEditor::highlightColourId, amber.withAlpha (0.4f));
         setColour (juce::TextEditor::focusedOutlineColourId, amber);
+        setColour (juce::TextEditor::outlineColourId, amber.withAlpha (.5f));
+        setColour (juce::AlertWindow::backgroundColourId, panel);
+        setColour (juce::AlertWindow::textColourId, cream);
+        setColour (juce::AlertWindow::outlineColourId, amber);
+        setColour (juce::ComboBox::backgroundColourId, panel);
+        setColour (juce::ComboBox::textColourId, cream);
+        setColour (juce::ComboBox::outlineColourId, amber.withAlpha (.5f));
+        setColour (juce::ComboBox::arrowColourId, amber);
     }
     juce::Font font (float height, bool display = false) const
     {
@@ -66,6 +76,9 @@ public:
         return font ((float) box.getHeight() * .68f, true);
     }
     juce::Font getPopupMenuFont() override { return font (17.0f); }
+    juce::Font getAlertWindowMessageFont() override { return font (16.0f); }
+    juce::Font getAlertWindowTitleFont() override { return font (20.0f, true); }
+    juce::Font getTextButtonFont (juce::TextButton&, int height) override { return font ((float) height * .6f); }
     void positionComboBoxText (juce::ComboBox& box, juce::Label& label) override
     {
         const int margin = juce::roundToInt ((float) box.getHeight() * .1f);
@@ -105,10 +118,24 @@ public:
             g.fillEllipse (x, r.getY() + 3.5f, diameter, diameter);
             return;
         }
-        g.setColour (down ? orange.withAlpha (.28f) : panel.withAlpha (over ? .8f : .45f));
+        if (button.getProperties()["tab"]) {
+            // Display page tabs: a lit underline marks the open page.
+            if (button.getToggleState()) {
+                g.setColour (amber.withAlpha (.16f));
+                g.fillRoundedRectangle (r, 3.0f);
+                g.setColour (amber);
+                g.fillRoundedRectangle (r.getX() + 4.0f, r.getBottom() - 3.0f, r.getWidth() - 8.0f, 2.5f, 1.2f);
+            } else if (over) {
+                g.setColour (amber.withAlpha (.08f));
+                g.fillRoundedRectangle (r, 3.0f);
+            }
+            return;
+        }
+        const bool lit = button.getToggleState();
+        g.setColour (down ? orange.withAlpha (.28f) : lit ? amber.withAlpha (.24f) : panel.withAlpha (over ? .8f : .45f));
         g.fillRoundedRectangle (r, r.getHeight() * .2f);
-        g.setColour (amber.withAlpha (over || button.hasKeyboardFocus (true) ? .8f : .2f));
-        g.drawRoundedRectangle (r, r.getHeight() * .2f, 1.0f);
+        g.setColour (amber.withAlpha (lit || over || button.hasKeyboardFocus (true) ? .85f : .25f));
+        g.drawRoundedRectangle (r, r.getHeight() * .2f, lit ? 1.5f : 1.0f);
     }
     void drawButtonText (juce::Graphics& g, juce::TextButton& button, bool, bool) override
     {
@@ -119,12 +146,78 @@ public:
             if (button.getToggleState()) r.removeFromRight (thumbWidth);
             else r.removeFromLeft (thumbWidth);
         }
-        g.setFont (font ((float) button.getHeight() * (isBypass ? .43f : .78f)));
-        g.setColour (cream);
-        g.drawText (button.getButtonText(), r, juce::Justification::centred);
+        const bool tab = button.getProperties()["tab"];
+        const float scale = isBypass ? .43f : tab ? .7f : button.getProperties()["small"] ? .56f : .78f;
+        g.setFont (font ((float) button.getHeight() * scale));
+        g.setColour (tab ? (button.getToggleState() ? amber : muted) : button.getToggleState() ? amber : cream);
+        g.drawText (button.getButtonText(), r.reduced (2.0f, 0.0f), juce::Justification::centred);
     }
 private:
     juce::Typeface::Ptr typeface, displayTypeface;
+};
+
+// The preset display: rebuilt each time it opens so new user presets appear.
+class ThrowUpEditor::PresetBox final : public juce::ComboBox
+{
+public:
+    std::function<void()> beforePopup;
+    void showPopup() override
+    {
+        if (beforePopup) beforePopup();
+        juce::ComboBox::showPopup();
+    }
+};
+
+// A cream molded key on the lower board strip, matching the INFO key, with a status LED.
+class ThrowUpEditor::KeyButton final : public juce::Button
+{
+public:
+    KeyButton (const juce::String& name, juce::Typeface::Ptr face) : juce::Button (name), typeface (face)
+    {
+        setMouseCursor (juce::MouseCursor::PointingHandCursor);
+        setWantsKeyboardFocus (true);
+    }
+    std::function<bool()> ledLit;          // overrides the toggle state for the LED
+    std::function<void (bool)> onPress;     // momentary keys: called on press and release
+    void paintButton (juce::Graphics& g, bool over, bool down) override
+    {
+        auto r = getLocalBounds().toFloat().reduced (2.0f);
+        const float radius = r.getHeight() * .32f;
+        g.setColour (juce::Colours::black.withAlpha (.35f));
+        g.fillRoundedRectangle (r.translated (0.0f, 2.0f), radius);
+        const bool pressed = down || pressedNow;
+        g.setGradientFill ({ pressed ? juce::Colour (0xffe9d2b2) : cream, r.getX(), r.getY(),
+                             pressed ? juce::Colour (0xffc9a77c) : juce::Colour (0xffd8b98e), r.getX(), r.getBottom(), false });
+        g.fillRoundedRectangle (r, radius);
+        g.setColour (ink.withAlpha (over || hasKeyboardFocus (true) ? .95f : .6f));
+        g.drawRoundedRectangle (r, radius, 1.6f);
+        const bool lit = ledLit ? ledLit() : getToggleState();
+        const float led = r.getHeight() * .2f;
+        const juce::Rectangle<float> ledBounds { r.getX() + r.getHeight() * .32f, r.getCentreY() - led * .5f, led, led };
+        if (lit) {
+            g.setColour (orange.withAlpha (.45f));
+            g.fillEllipse (ledBounds.expanded (led * .45f));
+        }
+        g.setColour (lit ? juce::Colour (0xffff6a2a) : ink.withAlpha (.35f));
+        g.fillEllipse (ledBounds);
+        g.setColour (ink);
+        g.setFont (juce::Font (juce::FontOptions (typeface).withHeight (r.getHeight() * .36f)));
+        g.drawText (getButtonText(), r.withTrimmedLeft (ledBounds.getRight() - r.getX() + 4.0f).withTrimmedRight (6.0f),
+                    juce::Justification::centred, false);
+    }
+    void mouseDown (const juce::MouseEvent& e) override
+    {
+        juce::Button::mouseDown (e);
+        if (onPress && ! pressedNow) { pressedNow = true; onPress (true); repaint(); }
+    }
+    void mouseUp (const juce::MouseEvent& e) override
+    {
+        juce::Button::mouseUp (e);
+        if (onPress && pressedNow) { pressedNow = false; onPress (false); repaint(); }
+    }
+private:
+    juce::Typeface::Ptr typeface;
+    bool pressedNow = false;
 };
 
 struct ThrowUpEditor::Control
@@ -132,6 +225,7 @@ struct ThrowUpEditor::Control
     juce::String id, title;
     juce::Rectangle<float> hit, readout;
     bool physical = false, large = false;
+    int page = -1; // -1: always visible (plate knobs, Output)
     struct FineSlider final : juce::Slider {
         int normalSensitivity = 180;
         void paint (juce::Graphics&) override {}
@@ -195,58 +289,71 @@ ThrowUpEditor::ThrowUpEditor (ThrowUpProcessor& p)
 {
     setLookAndFeel (skin.get());
     setOpaque (true);
-    addControl ("mix", "THROW", "Adds pure reverb over your original bass. Dry stays at full level. 0% adds no reverb; 100% adds the full wet return. Automate THROW in your DAW.",
+    addControl ("mix", "THROW", "Adds pure reverb over your original bass. Dry stays at full level. 0% adds no reverb; 100% adds the full wet return. Automate THROW in your DAW, or use the THROW! key, MIDI or Auto-catch.",
                 { 400, 616, 320, 320 }, { 445, 947, 230, 51 }, true, true);
     addControl ("size", "SIZE", "Changes the dimensions and spacing of the reverb room.",
                 { 214, 567, 140, 140 }, { 194, 731, 180, 42 }, true);
     addControl ("decay", "DECAY", "Sets how long the reverb tail decays, in seconds.",
                 { 770, 567, 140, 140 }, { 750, 731, 180, 42 }, true);
-    addControl ("predelay", "PRE-DELAY", "Adds space between the dry hit and the reverb, in milliseconds.",
+    addControl ("predelay", "PRE-DELAY", "Adds space between the dry hit and the reverb, in milliseconds. SPACE page: lock it to the host tempo.",
                 { 214, 846, 140, 140 }, { 194, 993, 180, 33 }, true);
     addControl ("diffusion", "DIFFUSION", "From scattered reflections to a dense, smooth tail.",
                 { 769, 846, 140, 140 }, { 749, 993, 180, 33 }, true);
-    addControl ("lowCut", "LOW CUT", "High-pass filter for the reverb only. Raise it to keep the sub range clean.",
-                { 188, 274, 222, 69 }, { 278, 274, 132, 34 });
-    addControl ("highCut", "HIGH CUT", "Low-pass filter for the reverb only. Lower it to darken the tail.",
-                { 448, 274, 222, 69 }, { 538, 274, 132, 34 });
-    addControl ("width", "WIDTH", "Stereo spread of the wet tail. 0% is mono, 100% is natural, 150% is extra wide.",
-                { 708, 274, 222, 69 }, { 798, 274, 132, 34 });
-    addControl ("grit", "GRIT", "Adds saturation and roughness to the reverb path.",
-                { 448, 362, 222, 69 }, { 538, 362, 132, 34 });
-    addControl ("motion", "MOTION", "Adds gentle pitch movement inside the reverb tail. Throw timing stays under your DAW automation.",
-                { 188, 362, 222, 69 }, { 278, 362, 132, 34 });
-    addControl ("duck", "DUCK", "Pulls the wet tail down while the input plays, then lets it bloom into the gaps.",
-                { 708, 362, 222, 69 }, { 798, 362, 132, 34 });
+    // ROOM page.
+    addPageControl ("lowCut", "LOW CUT", "High-pass filter for the reverb only. With the latest sound the tail is 3 dB down at this frequency.", Page::room, 0);
+    addPageControl ("highCut", "HIGH CUT", "Low-pass filter for the reverb only. Lower it to darken the tail.", Page::room, 1);
+    addPageControl ("width", "WIDTH", "Stereo spread of the wet tail. 0% is mono, 100% is natural, 150% is extra wide.", Page::room, 2);
+    addPageControl ("motion", "MOTION", "Adds gentle pitch movement inside the reverb tail.", Page::room, 3);
+    addPageControl ("grit", "GRIT", "Saturates the reverb. With the latest sound, Grit sets a soft ceiling on the wet return: it gets dirtier, not louder.", Page::room, 4);
+    addPageControl ("duck", "DUCK", "Pulls the wet tail down while the input (or the sidechain) plays, then lets it bloom into the gaps.", Page::room, 5);
+    // THROW page.
+    addPageControl ("trigger", "MODE", "Manual: THROW knob, automation and the THROW! key. MIDI: notes open the throw (velocity sets the level). Auto-catch: a throw opens when an input phrase ends.", Page::trigger, 0);
+    addPageControl ("throwAmount", "AMOUNT", "THROW level reached by the THROW! key, MIDI velocity 127 and Auto-catch.", Page::trigger, 1);
+    addPageControl ("throwAttack", "ATTACK", "Time for a triggered throw to rise to full.", Page::trigger, 2);
+    addPageControl ("throwRelease", "RELEASE", "Time for a triggered throw to fall back to the THROW knob setting.", Page::trigger, 3);
+    addPageControl ("releaseSync", "SYNC", "Locks the release to the host tempo instead of milliseconds.", Page::trigger, 4);
+    addPageControl ("catchLevel", "CATCH", "Auto-catch threshold: a phrase louder than this that then stops for 60 ms opens a throw.", Page::trigger, 5);
+    // SPACE page.
+    addPageControl ("predelaySync", "PRE SYNC", "Locks the pre-delay to the host tempo (ms uses the PRE-DELAY knob).", Page::space, 0);
+    addPageControl ("predelayFeel", "FEEL", "Straight, dotted or triplet synced pre-delay.", Page::space, 1);
+    addPageControl ("swell", "SWELL", "A reverse-style swell: the reverb rises through each cycle and cuts on the grid line, into the drop.", Page::space, 2);
+    addPageControl ("shimmer", "SHIMMER", "Feeds part of the tail through a pitch shifter, so the reverb climbs or falls in pitch.", Page::space, 3);
+    addPageControl ("shimmerPitch", "PITCH", "Shimmer interval: an octave or a fourth down, a fifth or an octave up.", Page::space, 4);
+    // MIX page.
+    addPageControl ("returnTrim", "RETURN", "Trims the wet return only (the dry is untouched). Use it to tame loud throws.", Page::mix, 0);
+    addPageControl ("duckSource", "DUCK SRC", "What Duck listens to: the dry input, or the external sidechain input (route a kick or snare to it in your DAW).", Page::mix, 1);
+    addPageControl ("duckRelease", "DUCK REL", "How fast the tail returns after the ducking source stops.", Page::mix, 2);
+    addPageControl ("duckThreshold", "DUCK THR", "Latest sound: the level above which Duck reaches its full depth.", Page::mix, 3);
     addControl ("output", "OUTPUT", "Sets final output level in dB.",
                 { 395, 1112, 150, 58 }, { 395, 1112, 150, 58 });
 
-    const auto& bank = throwup::factoryPresets();
-    for (int group = 0; group < 5; ++group) {
-        juce::PopupMenu submenu;
-        for (int item = 0; item < 10; ++item) {
-            const int index = group * 10 + item;
-            juce::PopupMenu::Item entry (bank[(size_t) index].name);
-            entry.setID (index + 1);
-            // ComboBox only reports a changed ID. The item action also runs
-            // when the current room is chosen again, which reverts its edits.
-            entry.setAction ([safe = juce::Component::SafePointer<ThrowUpEditor> (this), index] {
-                if (safe == nullptr) return;
-                safe->pluginProcessor.loadFactoryPreset (index);
-                safe->updatePresetDisplay();
-                safe->repaint();
-            });
-            submenu.addItem (std::move (entry));
-        }
-        presets.getRootMenu()->addSubMenu (bank[(size_t) group * 10].group, submenu);
+    // Display page tabs.
+    for (size_t i = 0; i < pageTabs.size(); ++i) {
+        auto& tab = pageTabs[i];
+        tab.setButtonText (pageNames[i]);
+        tab.setName (juce::String ("Page ") + pageNames[i]);
+        tab.getProperties().set ("tab", true);
+        tab.setMouseCursor (juce::MouseCursor::PointingHandCursor);
+        tab.onClick = [this, i] { showPage (static_cast<Page> (i)); };
+        addAndMakeVisible (tab);
     }
-    presets.setName ("Factory presets");
-    presets.setColour (juce::ComboBox::textColourId, cream);
-    presets.setTooltip ("50 factory presets: 10 each in Small, Medium, Large, Huge, and Creative. Loading a preset preserves THROW, Output, and Bypass.");
-    presets.onChange = [this] {
-        if (presets.getSelectedId() > 0) pluginProcessor.loadFactoryPreset (presets.getSelectedId() - 1);
+    pageTabs[0].setTooltip ("Room tone: filters, width, motion, grit and duck.");
+    pageTabs[1].setTooltip ("THROW trigger: MIDI notes, Auto-catch, attack and release.");
+    pageTabs[2].setTooltip ("Space effects: synced pre-delay, swell and shimmer.");
+    pageTabs[3].setTooltip ("Mix: return trim, duck source and the sound version.");
+
+    presets = std::make_unique<PresetBox>();
+    presets->setName ("Factory presets");
+    presets->setColour (juce::ComboBox::textColourId, cream);
+    presets->setTooltip ("Factory rooms by folder, the original 0.1.5 bank, and your saved presets. Loading a preset preserves THROW, Output, Bypass and the performance keys.");
+    presets->beforePopup = [this] { rebuildPresetMenu(); };
+    presets->onChange = [this] {
+        const int id = presets->getSelectedId();
+        if (id > 0 && id <= pluginProcessor.getNumPrograms()) pluginProcessor.loadFactoryPreset (id - 1);
         updatePresetDisplay(); repaint();
     };
-    addAndMakeVisible (presets);
+    addAndMakeVisible (*presets);
+    rebuildPresetMenu();
     previous.setName ("Previous preset"); next.setName ("Next preset"); bypass.setName ("Bypass");
     previous.setTooltip ("Previous factory preset. THROW and Output stay where you set them.");
     next.setTooltip ("Next factory preset. THROW and Output stay where you set them.");
@@ -255,10 +362,78 @@ ThrowUpEditor::ThrowUpEditor (ThrowUpProcessor& p)
     bypass.setClickingTogglesState (true);
     bypass.setTooltip ("Bypass the effect. The dry input passes through unchanged.");
     bypassAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (pluginProcessor.apvts, "bypass", bypass);
-    for (auto* button : { &previous, &next, &bypass }) {
+    saveKey.setName ("Save preset");
+    saveKey.setTooltip ("Save the current room as a user preset, in a folder you choose or create.");
+    saveKey.onClick = [this] { openSaveDialog(); };
+    slotA.setName ("Compare A"); slotB.setName ("Compare B");
+    slotA.setTooltip ("A/B compare: slot A. Switching keeps THROW, Output and Bypass.");
+    slotB.setTooltip ("A/B compare: slot B. The first switch copies A, so you can tweak B and compare.");
+    slotA.onClick = [this] { pluginProcessor.selectSlot (0); updateKeys(); updatePresetDisplay(); repaint(); };
+    slotB.onClick = [this] { pluginProcessor.selectSlot (1); updateKeys(); updatePresetDisplay(); repaint(); };
+    noteRoomsKey.setName ("Note rooms");
+    noteRoomsKey.setClickingTogglesState (true);
+    noteRoomsKey.setTooltip ("MIDI mode: each note also picks a factory room (C1 = the first room).");
+    keyAttachments.push_back (std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (pluginProcessor.apvts, "noteRooms", noteRoomsKey));
+    soundKey.setName ("Sound version");
+    soundKey.setTooltip ("Switch between the 0.1.5 sound (kept for older projects) and the latest sound. Undoable.");
+    soundKey.onClick = [this] {
+        const bool toLatest = pluginProcessor.getSoundVersion() == throwup::SoundVersion::v015;
+        auto* window = new juce::AlertWindow (toLatest ? "USE THE LATEST SOUND?" : "GO BACK TO THE 0.1.5 SOUND?",
+            toLatest ? "This project plays with the 0.1.5 sound. The latest sound has an accurate low cut, real Grit saturation, "
+                       "Duck in decibels and a recalibrated return, so it will sound different. You can switch back at any time, "
+                       "and your DAW's undo reverses it."
+                     : "The 0.1.5 tone, Grit, Duck and return level will be used again, exactly as 0.1.5 played them.",
+            juce::MessageBoxIconType::NoIcon, this);
+        window->addButton (toLatest ? "Use latest" : "Use 0.1.5", 1, juce::KeyPress (juce::KeyPress::returnKey));
+        window->addButton ("Cancel", 0, juce::KeyPress (juce::KeyPress::escapeKey));
+        showDialog (window, [this, toLatest] (int result) {
+            if (result != 1) return;
+            pluginProcessor.setSoundVersion (toLatest ? throwup::SoundVersion::latest : throwup::SoundVersion::v015);
+            updateKeys(); repaint();
+        });
+    };
+    for (auto* button : { &previous, &next, &bypass, &saveKey, &slotA, &slotB, &noteRoomsKey, &soundKey }) {
         button->setMouseCursor (juce::MouseCursor::PointingHandCursor);
         addAndMakeVisible (*button);
     }
+    for (auto* button : { &saveKey, &slotA, &slotB, &noteRoomsKey, &soundKey })
+        button->getProperties().set ("small", true);
+
+    // Molded keys on the board strip.
+    throwKey = std::make_unique<KeyButton> ("THROW!", normalTypeface);
+    throwKey->setButtonText ("THROW!");
+    throwKey->setTooltip ("Hold to throw: opens THROW to Amount with the THROW page's attack and release. Records as automation.");
+    throwKey->ledLit = [this] { return pluginProcessor.getTriggerLevel() > 1.0f; };
+    throwKey->onPress = [this] (bool down) {
+        auto* parameter = pluginProcessor.apvts.getParameter ("throwKey");
+        if (down) parameter->beginChangeGesture();
+        parameter->setValueNotifyingHost (down ? 1.0f : 0.0f);
+        if (! down) parameter->endChangeGesture();
+    };
+    freezeKey = std::make_unique<KeyButton> ("FREEZE", normalTypeface);
+    freezeKey->setButtonText ("FREEZE");
+    freezeKey->setClickingTogglesState (true);
+    freezeKey->setTooltip ("Holds the current tail forever and stops feeding it. Turn off to let it decay.");
+    keyAttachments.push_back (std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (pluginProcessor.apvts, "freeze", *freezeKey));
+    safeKey = std::make_unique<KeyButton> ("SAFE", normalTypeface);
+    safeKey->setButtonText ("SAFE");
+    safeKey->setClickingTogglesState (true);
+    safeKey->setTooltip ("Safe clip: a soft clip on the whole output (dry and wet) that never exceeds 0 dBFS. Off by default.");
+    keyAttachments.push_back (std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (pluginProcessor.apvts, "safeClip", *safeKey));
+    sendKey = std::make_unique<KeyButton> ("SEND", normalTypeface);
+    sendKey->setButtonText ("SEND");
+    sendKey->setTooltip ("Send mode: removes the dry signal, for a return track. THROW then sets the reverb level.");
+    sendKey->ledLit = [this] { return pluginProcessor.apvts.getRawParameterValue ("dry")->load() < .5f; };
+    sendKey->onClick = [this] {
+        auto* parameter = pluginProcessor.apvts.getParameter ("dry");
+        parameter->beginChangeGesture();
+        parameter->setValueNotifyingHost (parameter->getValue() >= .5f ? 0.0f : 1.0f);
+        parameter->endChangeGesture();
+        sendKey->repaint();
+    };
+    for (auto* key : { throwKey.get(), freezeKey.get(), safeKey.get(), sendKey.get() })
+        addAndMakeVisible (*key);
+
     updatePresetDisplay();
     bypass.setButtonText (bypass.getToggleState() ? "ON" : "OFF");
     const auto infoTheme = vfd::themeFor ("THROW-UP");
@@ -272,24 +447,61 @@ ThrowUpEditor::ThrowUpEditor (ThrowUpProcessor& p)
     setResizable (true, false);
     setResizeLimits (528, 528 * shellHeight / shellWidth, 990, 990 * shellHeight / shellWidth);
     if (auto* constrainer = getConstrainer()) constrainer->setFixedAspectRatio ((double) shellWidth / shellHeight);
-    setSize (660, juce::roundToInt (660.0 * shellHeight / shellWidth));
+    juce::Rectangle<int> userArea { 0, 0, 1920, 1080 };
+    if (const auto* display = juce::Desktop::getInstance().getDisplays().getPrimaryDisplay())
+        userArea = display->userBounds.toNearestInt();
+    const float scale = initialScale (pluginProcessor.getEditorScale(), userArea);
+    setSize (juce::roundToInt (baseWidth * scale), juce::roundToInt (baseWidth * scale * shellHeight / shellWidth));
+    sizeReady = true;
+    showPage (Page::room);
+    updateKeys();
     startTimerHz (24);
 }
 
 ThrowUpEditor::~ThrowUpEditor()
 {
     stopTimer();
+    if (dialog != nullptr) {
+        // The dialog uses this editor's look-and-feel: detach and close it first.
+        dialog->setLookAndFeel (nullptr);
+        dialog->exitModalState (0);
+    }
     bypassAttachment.reset();
+    keyAttachments.clear();
     controls.clear();
     setLookAndFeel (nullptr);
 }
 
+juce::String ThrowUpEditor::valueText (const juce::String& id, double value) const
+{
+    if (auto* choiceParameter = dynamic_cast<juce::AudioParameterChoice*> (pluginProcessor.apvts.getParameter (id)))
+        return choiceParameter->choices[juce::jlimit (0, choiceParameter->choices.size() - 1, juce::roundToInt (value))];
+    if (id == "decay") return juce::String (value, 2) + " s";
+    if (id == "predelay") return juce::String (value, 1) + " ms";
+    if (id == "lowCut" || id == "highCut")
+        return value >= 1000.0 ? juce::String (value / 1000.0, 2) + " kHz"
+                               : juce::String (juce::roundToInt (value)) + " Hz";
+    if (id == "output") return juce::String (value, 1) + " dB";
+    if (id == "returnTrim") return (value > 0.05 ? "+" : "") + juce::String (value, 1) + " dB";
+    if (id == "catchLevel" || id == "duckThreshold") return juce::String (value, 1) + " dB";
+    if (id == "throwAttack" || id == "throwRelease" || id == "duckRelease") return milliseconds (value);
+    return juce::String (juce::roundToInt (value)) + "%";
+}
+
+void ThrowUpEditor::addPageControl (const char* id, const char* title, const char* tooltip, Page controlPage, int slot)
+{
+    const float x = slot % 3 == 0 ? 188.0f : slot % 3 == 1 ? 448.0f : 708.0f;
+    const float y = slot < 3 ? 274.0f : 362.0f;
+    // Hit areas end just below each bar, leaving the display's bottom row free for page keys.
+    addControl (id, title, tooltip, { x, y, 222, 58 }, { x + 90.0f, y, 132, 34 }, false, false, static_cast<int> (controlPage));
+}
+
 void ThrowUpEditor::addControl (const char* id, const char* title, const char* tooltip,
                                 juce::Rectangle<float> hit, juce::Rectangle<float> readout,
-                                bool physical, bool large)
+                                bool physical, bool large, int controlPage)
 {
     auto c = std::make_unique<Control>();
-    c->id = id; c->title = title; c->physical = physical; c->large = large;
+    c->id = id; c->title = title; c->physical = physical; c->large = large; c->page = controlPage;
     c->hit = hit; c->readout = readout;
     c->slider.setName (title);
     c->slider.setSliderStyle (physical ? juce::Slider::RotaryVerticalDrag : juce::Slider::RotaryHorizontalVerticalDrag);
@@ -329,16 +541,26 @@ void ThrowUpEditor::addControl (const char* id, const char* title, const char* t
     };
     c->value.onEditorShow = [control] {
         if (auto* editor = control->value.getCurrentTextEditor()) {
-            editor->setText (juce::String (control->slider.getValue(), control->id == "decay" ? 2 : 1), false);
+            editor->setText (control->value.getText(), false);
             editor->selectAll();
         }
     };
     c->value.onTextChange = [this, control] {
         const auto typed = control->value.getText().trim();
+        auto* parameter = pluginProcessor.apvts.getParameter (control->id);
         double v = typed.getDoubleValue();
+        bool valid = std::isfinite (v) && typed.containsAnyOf ("0123456789");
+        if (auto* choiceParameter = dynamic_cast<juce::AudioParameterChoice*> (parameter)) {
+            // Choices accept their name ("1/8", "Dotted", "+12") or their number.
+            const int index = choiceParameter->choices.indexOf (typed, true);
+            valid = index >= 0;
+            if (! valid)
+                for (int i = 0; i < choiceParameter->choices.size() && ! valid; ++i)
+                    if (choiceParameter->choices[i].startsWithIgnoreCase (typed) && typed.isNotEmpty()) { v = i; valid = true; }
+            if (index >= 0) v = index;
+        }
         if ((control->id == "lowCut" || control->id == "highCut") && typed.containsIgnoreCase ("k")) v *= 1000.0;
-        if (std::isfinite (v) && typed.containsAnyOf ("0123456789")) {
-            auto* parameter = pluginProcessor.apvts.getParameter (control->id);
+        if (valid) {
             parameter->beginChangeGesture();
             parameter->setValueNotifyingHost (parameter->convertTo0to1 ((float) juce::jlimit (control->slider.getMinimum(), control->slider.getMaximum(), v)));
             parameter->endChangeGesture();
@@ -347,6 +569,192 @@ void ThrowUpEditor::addControl (const char* id, const char* title, const char* t
     };
     addAndMakeVisible (c->slider); addAndMakeVisible (c->value);
     controls.push_back (std::move (c));
+}
+
+void ThrowUpEditor::showPage (Page newPage)
+{
+    page = newPage;
+    for (size_t i = 0; i < pageTabs.size(); ++i)
+        pageTabs[i].setToggleState (static_cast<int> (i) == static_cast<int> (page), juce::dontSendNotification);
+    for (const auto& c : controls) {
+        const bool visible = c->page < 0 || c->page == static_cast<int> (page);
+        c->slider.setVisible (visible);
+        c->value.setVisible (visible);
+    }
+    noteRoomsKey.setVisible (page == Page::trigger);
+    soundKey.setVisible (page == Page::mix);
+    repaint();
+}
+
+void ThrowUpEditor::rebuildPresetMenu()
+{
+    auto* root = presets->getRootMenu();
+    root->clear();
+    const auto& bank = throwup::factoryPresets();
+    const auto addPreset = [this] (juce::PopupMenu& menu, int index) {
+        juce::PopupMenu::Item entry (throwup::factoryPresets()[(size_t) index].name);
+        entry.setID (index + 1);
+        // ComboBox only reports a changed ID. The item action also runs
+        // when the current room is chosen again, which reverts its edits.
+        entry.setAction ([safe = juce::Component::SafePointer<ThrowUpEditor> (this), index] {
+            if (safe == nullptr) return;
+            safe->pluginProcessor.loadFactoryPreset (index);
+            safe->updatePresetDisplay();
+            safe->repaint();
+        });
+        menu.addItem (std::move (entry));
+    };
+    for (const auto* folder : throwup::presetFolders()) {
+        juce::PopupMenu submenu;
+        for (int i = 0; i < throwup::legacyPresetStart(); ++i)
+            if (juce::String (bank[(size_t) i].group) == folder) addPreset (submenu, i);
+        root->addSubMenu (folder, submenu);
+    }
+    juce::PopupMenu legacy;
+    for (const char* group : { "Small", "Medium", "Large", "Huge", "Creative" }) {
+        juce::PopupMenu submenu;
+        for (int i = throwup::legacyPresetStart(); i < (int) bank.size(); ++i)
+            if (juce::String (bank[(size_t) i].group) == group) addPreset (submenu, i);
+        legacy.addSubMenu (group, submenu);
+    }
+    root->addSeparator();
+    root->addSubMenu ("0.1.5 rooms (original sound)", legacy);
+    // User presets: <root>/<Folder>/<Name>.throwup, read fresh each time.
+    userPresetFiles.clear();
+    juce::PopupMenu user;
+    const auto presetRoot = ThrowUpProcessor::userPresetRoot();
+    const auto addUser = [this] (juce::PopupMenu& menu, const juce::File& file) {
+        const int id = userItemBase + (int) userPresetFiles.size();
+        userPresetFiles.push_back (file);
+        juce::PopupMenu::Item entry (file.getFileNameWithoutExtension());
+        entry.setID (id);
+        entry.setAction ([safe = juce::Component::SafePointer<ThrowUpEditor> (this), file] {
+            if (safe == nullptr) return;
+            safe->pluginProcessor.loadUserPreset (file);
+            safe->updatePresetDisplay();
+            safe->repaint();
+        });
+        menu.addItem (std::move (entry));
+    };
+    auto folders = presetRoot.findChildFiles (juce::File::findDirectories, false);
+    folders.sort();
+    for (const auto& folder : folders) {
+        juce::PopupMenu submenu;
+        auto files = folder.findChildFiles (juce::File::findFiles, false, "*.throwup");
+        files.sort();
+        for (const auto& file : files) addUser (submenu, file);
+        if (submenu.getNumItems() > 0) user.addSubMenu (folder.getFileName(), submenu);
+    }
+    auto loose = presetRoot.findChildFiles (juce::File::findFiles, false, "*.throwup");
+    loose.sort();
+    for (const auto& file : loose) addUser (user, file);
+    if (user.getNumItems() == 0) user.addSectionHeader ("No user presets yet - use SAVE");
+    root->addSubMenu ("User", user);
+    visiblePreset = -1;
+    updatePresetDisplay();
+}
+
+void ThrowUpEditor::openSaveDialog()
+{
+    auto* window = new juce::AlertWindow ("SAVE PRESET", "Saved to Application Support/THROW-UP/Presets. Existing presets are never replaced.",
+                                          juce::MessageBoxIconType::NoIcon, this);
+    window->setLookAndFeel (skin.get());
+    const auto current = pluginProcessor.getUserPresetName().isNotEmpty() ? pluginProcessor.getUserPresetName()
+        : juce::String (throwup::factoryPresets()[(size_t) juce::jlimit (0, pluginProcessor.getNumPrograms() - 1, pluginProcessor.getCurrentProgram())].name);
+    window->addTextEditor ("name", current + (modified ? " edit" : ""), "Name");
+    juce::StringArray folders;
+    for (const auto& folder : ThrowUpProcessor::userPresetRoot().findChildFiles (juce::File::findDirectories, false))
+        folders.add (folder.getFileName());
+    folders.sort (true);
+    folders.add ("New folder...");
+    window->addComboBox ("folder", folders, "Folder");
+    window->addTextEditor ("newFolder", "My Throws", "New folder name");
+    window->addButton ("Save", 1, juce::KeyPress (juce::KeyPress::returnKey));
+    window->addButton ("Cancel", 0, juce::KeyPress (juce::KeyPress::escapeKey));
+    showDialog (window, [this, window] (int result) {
+        if (result != 1) return;
+        auto* box = window->getComboBoxComponent ("folder");
+        auto folder = box->getText();
+        if (box->getSelectedItemIndex() == box->getNumItems() - 1 || folder.isEmpty())
+            folder = window->getTextEditorContents ("newFolder");
+        const auto saved = pluginProcessor.saveUserPreset (folder, window->getTextEditorContents ("name"));
+        rebuildPresetMenu();
+        repaint();
+        if (saved == juce::File()) {
+            auto* failed = new juce::AlertWindow ("PRESET NOT SAVED", "THROW-UP could not write to its presets folder.",
+                                                  juce::MessageBoxIconType::NoIcon, this);
+            failed->addButton ("OK", 0, juce::KeyPress (juce::KeyPress::returnKey));
+            juce::MessageManager::callAsync ([safe = juce::Component::SafePointer<ThrowUpEditor> (this), failed] {
+                if (safe != nullptr) safe->showDialog (failed, nullptr); else delete failed;
+            });
+        }
+    });
+}
+
+void ThrowUpEditor::showDialog (juce::AlertWindow* window, std::function<void (int)> onResult)
+{
+    if (dialog != nullptr) { delete window; return; }
+    window->setLookAndFeel (skin.get());
+    for (int i = 0; i < window->getNumButtons(); ++i)
+        if (auto* button = window->getButton (i)) button->getProperties().set ("small", true);
+    dialog = window;
+    window->enterModalState (true, juce::ModalCallbackFunction::create (
+        [safe = juce::Component::SafePointer<ThrowUpEditor> (this), onResult = std::move (onResult)] (int result) {
+            if (safe == nullptr) return;
+            if (onResult) onResult (result);
+        }), true);
+}
+
+bool ThrowUpEditor::scaleFits (float scale, juce::Rectangle<int> userArea)
+{
+    const float width = baseWidth * scale;
+    const float height = width * shellHeight / shellWidth;
+    return width <= (float) userArea.getWidth() && height + 60.0f <= (float) userArea.getHeight();
+}
+
+float ThrowUpEditor::initialScale (float saved, juce::Rectangle<int> userArea)
+{
+    if (saved > 0.0f && scaleFits (saved, userArea)) return saved;
+    if (saved <= 0.0f && scaleFits (1.0f, userArea)) return 1.0f;
+    for (auto it = menuScales.rbegin(); it != menuScales.rend(); ++it)
+        if (*it <= (saved > 0.0f ? saved : 1.0f) && scaleFits (*it, userArea)) return *it;
+    return 0.8f;
+}
+
+juce::PopupMenu ThrowUpEditor::createSizeMenu (juce::Rectangle<int> userArea)
+{
+    juce::PopupMenu menu;
+    menu.addSectionHeader ("SIZE");
+    const float current = (float) getWidth() / (float) baseWidth;
+    for (size_t i = 0; i < menuScales.size(); ++i) {
+        const float scale = menuScales[i];
+        juce::PopupMenu::Item item (juce::String (juce::roundToInt (scale * 100.0f)) + "%");
+        item.setID ((int) i + 1);
+        item.setEnabled (scaleFits (scale, userArea));
+        item.setTicked (std::abs (current - scale) < 0.01f);
+        item.setAction ([safe = juce::Component::SafePointer<ThrowUpEditor> (this), scale] {
+            if (safe != nullptr) safe->applyScale (scale);
+        });
+        menu.addItem (std::move (item));
+    }
+    return menu;
+}
+
+void ThrowUpEditor::applyScale (float scale)
+{
+    setSize (juce::roundToInt (baseWidth * scale), juce::roundToInt (baseWidth * scale * shellHeight / shellWidth));
+    pluginProcessor.setEditorScale (scale);
+}
+
+void ThrowUpEditor::mouseDown (const juce::MouseEvent& event)
+{
+    // Right-click anywhere on the enclosure (not on a control) opens the size menu.
+    if (! event.mods.isPopupMenu()) return;
+    juce::Rectangle<int> userArea { 0, 0, 1920, 1080 };
+    if (const auto* display = juce::Desktop::getInstance().getDisplays().getDisplayForRect (getScreenBounds()))
+        userArea = display->userBounds.toNearestInt();
+    createSizeMenu (userArea).showMenuAsync (juce::PopupMenu::Options().withTargetComponent (this)
+        .withMousePosition());
 }
 
 juce::Rectangle<int> ThrowUpEditor::scaled (juce::Rectangle<float> r) const
@@ -368,14 +776,21 @@ void ThrowUpEditor::text (juce::Graphics& g, const juce::String& s, juce::Rectan
 
 void ThrowUpEditor::drawScreen (juce::Graphics& g)
 {
-    const auto& preset = throwup::factoryPresets()[(size_t) juce::jlimit (0, 49, pluginProcessor.getCurrentProgram())];
-    text (g, juce::String (preset.group).toUpperCase() + " / FACTORY", { 190, 175, 540, 25 }, 18, muted);
-    text (g, modified ? "EDITED" : juce::String (pluginProcessor.getCurrentProgram() + 1).paddedLeft ('0', 2) + " / 50",
-          { 765, 175, 165, 25 }, 18, amber, juce::Justification::centredRight);
+    const int program = juce::jlimit (0, pluginProcessor.getNumPrograms() - 1, pluginProcessor.getCurrentProgram());
+    const auto& preset = throwup::factoryPresets()[(size_t) program];
+    juce::String header;
+    if (pluginProcessor.getUserPresetName().isNotEmpty())
+        header = "USER";
+    else if (preset.legacy)
+        header = "0.1.5 " + juce::String (preset.group).toUpperCase() + "  " + juce::String (program - throwup::legacyPresetStart() + 1).paddedLeft ('0', 2) + "/50";
+    else
+        header = juce::String (preset.group).toUpperCase() + "  " + juce::String (program + 1).paddedLeft ('0', 2) + "/" + juce::String (throwup::legacyPresetStart());
+    if (modified) header = "EDITED  " + header;
+    text (g, header, { 560, 175, 370, 25 }, 17, modified ? amber : muted, juce::Justification::centredRight);
     g.setColour (amber.withAlpha (.22f));
     g.drawHorizontalLine (256, 188.0f, 930.0f);
     for (const auto& c : controls) {
-        if (c->physical || c->id == "output") continue;
+        if (c->physical || c->id == "output" || c->page != static_cast<int> (page)) continue;
         const auto r = c->hit;
         text (g, c->title, { r.getX(), r.getY(), 116, 34 }, 20.0f, muted);
         const float fraction = (float) c->slider.valueToProportionOfLength (c->slider.getValue());
@@ -391,7 +806,26 @@ void ThrowUpEditor::drawScreen (juce::Graphics& g)
             g.drawRoundedRectangle (r.expanded (5.0f), 5.0f, 1.5f);
         }
     }
-    text (g, preset.description, { 190, 422, 740, 21 }, 16, muted.withAlpha (.85f));
+    // Bottom line of the display: what this page is for.
+    const auto bpm = juce::String (juce::roundToInt (pluginProcessor.getHostTempo())) + " BPM";
+    switch (page) {
+        case Page::room:
+            text (g, pluginProcessor.getUserPresetName().isNotEmpty() ? "User preset: " + pluginProcessor.getUserPresetName()
+                                                                      : juce::String (preset.description),
+                  { 190, 422, 740, 21 }, 16, muted.withAlpha (.85f));
+            break;
+        case Page::trigger:
+            text (g, "THROW! key, MIDI notes or Auto-catch open the throw. C1 = first room.", { 190, 420, 590, 24 }, 15, muted.withAlpha (.85f));
+            break;
+        case Page::space:
+            text (g, "Synced pre-delay and swell follow the host tempo: " + bpm + ". FREEZE holds the tail.", { 190, 422, 740, 21 }, 16, muted.withAlpha (.85f));
+            break;
+        case Page::mix:
+            text (g, pluginProcessor.getSoundVersion() == throwup::SoundVersion::v015 ? "SOUND: 0.1.5 (this project's original sound)"
+                                                                                      : "SOUND: LATEST (accurate low cut, real Grit, Duck in dB)",
+                  { 190, 420, 520, 24 }, 15, pluginProcessor.getSoundVersion() == throwup::SoundVersion::v015 ? amber : muted.withAlpha (.85f));
+            break;
+    }
 }
 
 void ThrowUpEditor::drawKnob (juce::Graphics& g, Control& c)
@@ -401,6 +835,17 @@ void ThrowUpEditor::drawKnob (juce::Graphics& g, Control& c)
     const float pointerRadius = c.large ? 94.0f : 41.0f;
     const float fraction = (float) c.slider.valueToProportionOfLength (c.slider.getValue());
     const float angle = startAngle + fraction * (endAngle - startAngle);
+    if (c.large) {
+        // A triggered throw (THROW! key, MIDI, Auto-catch) shows as a cream arc beyond the knob.
+        const float triggered = pluginProcessor.getTriggerLevel() * 0.01f;
+        if (triggered > fraction + .005f) {
+            juce::Path arc;
+            arc.addCentredArc (centre.x, centre.y, arcRadius, arcRadius, 0, startAngle,
+                               startAngle + triggered * (endAngle - startAngle), true);
+            g.setColour (cream.withAlpha (.9f));
+            g.strokePath (arc, juce::PathStrokeType (7.0f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+        }
+    }
     if (fraction > .001f) {
         juce::Path arc;
         arc.addCentredArc (centre.x, centre.y, arcRadius, arcRadius, 0, startAngle, angle, true);
@@ -491,7 +936,11 @@ void ThrowUpEditor::paint (juce::Graphics& g)
     const float sy = (float) getHeight() / (float) shellHeight;
     g.addTransform (juce::AffineTransform (sx, 0, -(float) shellX * sx, 0, sy, -(float) shellY * sy));
     drawScreen (g);
-    text (g, "MID-BASS REVERB", { 602, 82, 302, 38 }, 23, cream, juce::Justification::centred);
+    // The small top display names the device, or warns that the 0.1.5 sound is in use.
+    if (pluginProcessor.getSoundVersion() == throwup::SoundVersion::v015)
+        text (g, "0.1.5 SOUND", { 602, 82, 302, 38 }, 23, amber, juce::Justification::centred);
+    else
+        text (g, "MID-BASS REVERB", { 602, 82, 302, 38 }, 23, cream, juce::Justification::centred);
     text (g, "THROW", { 440, 554, 240, 45 }, 38, ink, juce::Justification::centred);
     text (g, "SIZE", { 194, 508, 180, 37 }, 27, ink, juce::Justification::centred);
     text (g, "DECAY", { 750, 508, 180, 37 }, 27, ink, juce::Justification::centred);
@@ -514,33 +963,79 @@ void ThrowUpEditor::resized()
         const float fontSize = c->large ? 43.0f : c->physical || c->id == "output" ? 29.0f : 25.0f;
         c->value.setFont (skin->font (fontSize * uiScale));
     }
-    presets.setBounds (scaled ({ 186, 204, 612, 44 }));
+    presets->setBounds (scaled ({ 186, 204, 404, 44 }));
+    saveKey.setBounds (scaled ({ 600, 206, 74, 40 }));
+    slotA.setBounds (scaled ({ 684, 206, 40, 40 }));
+    slotB.setBounds (scaled ({ 730, 206, 40, 40 }));
     previous.setBounds (scaled ({ 822, 204, 47, 44 }));
     next.setBounds (scaled ({ 882, 204, 47, 44 }));
+    for (size_t i = 0; i < pageTabs.size(); ++i)
+        pageTabs[i].setBounds (scaled ({ 184.0f + (float) i * 88.0f, 172.0f, 84.0f, 28.0f }));
+    noteRoomsKey.setBounds (scaled ({ 780, 423, 150, 26 }));
+    soundKey.setBounds (scaled ({ 712, 423, 218, 26 }));
     bypass.setBounds (scaled (bypassBounds));
+    throwKey->setBounds (scaled (throwKeyBounds));
+    freezeKey->setBounds (scaled (freezeKeyBounds));
+    safeKey->setBounds (scaled (safeKeyBounds));
+    sendKey->setBounds (scaled (sendKeyBounds));
     if (infoButton) infoButton->setBounds (scaled (infoKeyBounds));
     if (infoOverlay) infoOverlay->setBounds (getLocalBounds());
+    // Remember host or menu resizes with the project.
+    if (sizeReady) pluginProcessor.setEditorScale ((float) getWidth() / (float) baseWidth);
 }
 
 void ThrowUpEditor::stepPreset (int direction)
 {
-    pluginProcessor.loadFactoryPreset ((pluginProcessor.getCurrentProgram() + direction + 50) % 50);
+    // Arrows step through the current bank; the 0.1.5 rooms step among themselves.
+    const int current = pluginProcessor.getCurrentProgram();
+    const int start = current >= throwup::legacyPresetStart() ? throwup::legacyPresetStart() : 0;
+    const int count = current >= throwup::legacyPresetStart() ? throwup::legacyPresetCount : throwup::legacyPresetStart();
+    pluginProcessor.loadFactoryPreset (start + (current - start + direction + count) % count);
     updatePresetDisplay(); repaint();
 }
 
 void ThrowUpEditor::updatePresetDisplay()
 {
-    const int current = juce::jlimit (0, 49, pluginProcessor.getCurrentProgram());
-    if (visiblePreset != current) {
-        visiblePreset = current;
-        presets.setSelectedId (current + 1, juce::dontSendNotification);
+    const int current = juce::jlimit (0, pluginProcessor.getNumPrograms() - 1, pluginProcessor.getCurrentProgram());
+    const auto userName = pluginProcessor.getUserPresetName();
+    const int shown = userName.isNotEmpty() ? -2 : current;
+    if (visiblePreset != shown) {
+        visiblePreset = shown;
+        if (userName.isNotEmpty()) presets->setText (userName, juce::dontSendNotification);
+        else presets->setSelectedId (current + 1, juce::dontSendNotification);
     }
-    const auto& s = throwup::factoryPresets()[(size_t) current].settings;
-    const std::array<const char*, 10> ids { "size", "decay", "predelay", "diffusion", "lowCut", "highCut", "width", "grit", "motion", "duck" };
-    const std::array<float, 10> values { s.size, s.decay, s.predelay, s.diffusion, s.lowCut, s.highCut, s.width, s.grit, s.motion, s.duck };
     modified = false;
-    for (size_t i = 0; i < ids.size(); ++i)
-        if (std::abs (pluginProcessor.apvts.getRawParameterValue (ids[i])->load() - values[i]) > .06f) modified = true;
+    if (userName.isNotEmpty()) return;
+    const auto& r = throwup::factoryPresets()[(size_t) current].room;
+    const std::array<float, 18> values { r.size, r.decay, r.predelay, r.lowCut, r.highCut, r.diffusion, r.motion,
+        r.width, r.grit, r.duck, (float) r.predelaySync, (float) r.predelayFeel, r.shimmer, (float) r.shimmerPitch,
+        (float) r.swell, r.duckRelease, r.duckThreshold, r.version == throwup::SoundVersion::v015 ? 0.0f : 1.0f };
+    const auto ids = ThrowUpProcessor::roomParameterIds();
+    for (int i = 0; i < ids.size(); ++i)
+        if (std::abs (pluginProcessor.apvts.getRawParameterValue (ids[i])->load() - values[(size_t) i]) > .06f) modified = true;
+}
+
+void ThrowUpEditor::updateKeys()
+{
+    slotA.setToggleState (pluginProcessor.getActiveSlot() == 0, juce::dontSendNotification);
+    slotB.setToggleState (pluginProcessor.getActiveSlot() == 1, juce::dontSendNotification);
+    soundKey.setButtonText (pluginProcessor.getSoundVersion() == throwup::SoundVersion::v015 ? "USE LATEST SOUND" : "USE 0.1.5 SOUND");
+    // The PRE-DELAY readout shows the synced note value when tempo sync is on.
+    const int sync = juce::roundToInt (pluginProcessor.apvts.getRawParameterValue ("predelaySync")->load());
+    for (const auto& c : controls)
+        if (c->id == "predelay" && ! c->value.isBeingEdited()) {
+            if (sync > 0) {
+                const int feel = juce::roundToInt (pluginProcessor.apvts.getRawParameterValue ("predelayFeel")->load());
+                const auto beats = throwup::predelayBeats (static_cast<throwup::PredelaySync> (sync), static_cast<throwup::PredelayFeel> (feel));
+                const double ms = std::min (beats * 60000.0 / pluginProcessor.getHostTempo(), (double) throwup::ReverbEngine::maximumPredelayMs);
+                c->value.setText (valueText ("predelaySync", sync) + (feel == 1 ? "." : feel == 2 ? "T" : "") + "  " + juce::String (juce::roundToInt (ms)) + " ms",
+                                  juce::dontSendNotification);
+            } else {
+                c->value.setText (valueText ("predelay", c->slider.getValue()), juce::dontSendNotification);
+            }
+        }
+    for (auto* key : { throwKey.get(), freezeKey.get(), safeKey.get(), sendKey.get() })
+        key->repaint();
 }
 
 void ThrowUpEditor::timerCallback()
@@ -554,6 +1049,7 @@ void ThrowUpEditor::timerCallback()
     inputClipHold = inputPeak > 1.0f ? clipHoldFrames : juce::jmax (0, inputClipHold - 1);
     outputClipHold = outputPeak > 1.0f ? clipHoldFrames : juce::jmax (0, outputClipHold - 1);
     updatePresetDisplay();
+    updateKeys();
     bypass.setButtonText (bypass.getToggleState() ? "ON" : "OFF");
     repaint();
 }

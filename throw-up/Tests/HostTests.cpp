@@ -10,6 +10,7 @@
 #include <array>
 #include <functional>
 #include <cstring>
+#include <AudioToolbox/AudioToolbox.h>
 
 namespace {
 void check(bool value, const char* message)
@@ -105,7 +106,7 @@ void runFixRegressionTests(const juce::File* folder)
             if (item.getItem().itemID == 24) action = item.getItem().action;
         check(action != nullptr, "preset menu items carry a load action");
         action();
-        const auto& room = throwup::factoryPresets()[23].settings;
+        const auto& room = throwup::factoryPresets()[23].room;
         check(p.getCurrentProgram() == 23 && std::abs(get(p, "size") - room.size) < .05f
               && std::abs(get(p, "grit") - room.grit) < .05f && std::abs(get(p, "mix") - 55) < .02f,
               "re-selecting the current preset reverts its edits and keeps THROW");
@@ -185,7 +186,7 @@ void runFixRegressionTests(const juce::File* folder)
         restored.setStateInformation(edited.getData(), static_cast<int>(edited.getSize()));
         check(restored.getCurrentProgram() == 37 && std::abs(get(restored, "mix") - 41.5f) < .02f
               && std::abs(get(restored, "output") + 2.5f) < .02f && std::abs(get(restored, "decay") - 2.4f) < .01f
-              && std::abs(get(restored, "size") - throwup::factoryPresets()[37].settings.size) < .05f,
+              && std::abs(get(restored, "size") - throwup::factoryPresets()[37].room.size) < .05f,
               "state with unknown children and a bad value restores every other parameter");
         set(restored, "mix", 12.0f);
         xml->setTagName("NOT_THROW_UP");
@@ -194,6 +195,490 @@ void runFixRegressionTests(const juce::File* folder)
         restored.setStateInformation(wrongRoot.getData(), static_cast<int>(wrongRoot.getSize()));
         check(std::abs(get(restored, "mix") - 12.0f) < .02f, "state with a foreign root is still rejected");
     }
+}
+
+// ---------------------------------------------------------------------------
+// 0.2.0 features
+juce::File temporaryPresetRoot()
+{
+    return juce::File::getSpecialLocation(juce::File::tempDirectory)
+        .getChildFile("throw-up-test-presets-" + juce::Uuid().toString());
+}
+
+bool enabledAt(juce::PopupMenu& menu, int id)
+{
+    for (juce::PopupMenu::MenuItemIterator item(menu, true); item.next();)
+        if (item.getItem().itemID == id) return item.getItem().isEnabled;
+    return false;
+}
+
+void processSine(ThrowUpProcessor& p, juce::AudioBuffer<float>& audio, juce::MidiBuffer& midi, int& clock)
+{
+    for (int c = 0; c < audio.getNumChannels(); ++c)
+        for (int i = 0; i < audio.getNumSamples(); ++i)
+            audio.setSample(c, i, c < 2 ? .3f * static_cast<float>(std::sin(2 * juce::MathConstants<double>::pi * 330 * (clock + i) / 48000.0)) : 0.0f);
+    clock += audio.getNumSamples();
+    p.processBlock(audio, midi);
+}
+
+void runFeatureHostTests(const juce::File* folder)
+{
+    using throwup::SoundVersion;
+    const int programs = static_cast<int>(throwup::factoryPresets().size());
+    {
+        // A project saved by 0.1.5: 13 parameters, schema 1, factory program 7.
+        juce::XmlElement xml("THROW_UP_STATE");
+        xml.setAttribute("factoryProgram", 7);
+        xml.setAttribute("schemaVersion", 1);
+        const std::array<std::pair<const char*, float>, 13> saved {{ { "mix", 55 }, { "size", 33 }, { "decay", 1.7f },
+            { "predelay", 42 }, { "lowCut", 260 }, { "highCut", 5100 }, { "diffusion", 64 }, { "motion", 12 },
+            { "width", 120 }, { "grit", 30 }, { "duck", 25 }, { "output", -2.5f }, { "bypass", 0 } }};
+        for (const auto& [id, value] : saved) {
+            auto* child = xml.createNewChildElement("PARAM");
+            child->setAttribute("id", id);
+            child->setAttribute("value", value);
+        }
+        juce::MemoryBlock block;
+        juce::AudioProcessor::copyXmlToBinary(xml, block);
+        ThrowUpProcessor old;
+        old.setStateInformation(block.getData(), static_cast<int>(block.getSize()));
+        bool all = true;
+        for (const auto& [id, value] : saved) all = all && std::abs(get(old, id) - value) < .01f;
+        check(all, "a 0.1.5 project restores all 13 of its settings");
+        check(old.getSoundVersion() == SoundVersion::v015, "a 0.1.5 project keeps the 0.1.5 sound");
+        check(old.getCurrentProgram() == throwup::legacyPresetStart() + 7
+              && old.getProgramName(old.getCurrentProgram()).contains("Mono Nook"),
+              "a 0.1.5 project's factory room is recalled from the 0.1.5 bank by its old index");
+        // JUCE's interval snapping can leave a restored 0 dB as ~3.6e-7 dB; the engine
+        // treats that as exact unity (and 160 +/- 0.01 ms as the 0.1.5 duck release).
+        const auto is = [&old](const char* id, float value) { return std::abs(get(old, id) - value) < 1.0e-4f; };
+        check(is("trigger", 0) && is("shimmer", 0) && is("swell", 0) && is("freeze", 0) && is("dry", 1) && is("returnTrim", 0)
+              && is("safeClip", 0) && is("predelaySync", 0) && is("duckRelease", 160) && is("duckSource", 0),
+              "every 0.2.0 control starts neutral in a 0.1.5 project");
+        juce::MemoryBlock resaved;
+        old.getStateInformation(resaved);
+        ThrowUpProcessor reopened;
+        reopened.setStateInformation(resaved.getData(), static_cast<int>(resaved.getSize()));
+        check(reopened.getSoundVersion() == SoundVersion::v015 && reopened.getCurrentProgram() == old.getCurrentProgram(),
+              "re-saving a 0.1.5 project keeps its sound and room");
+        // Projects from 0.1.0-0.1.3 carried no schema or program at all.
+        juce::XmlElement bare("THROW_UP_STATE");
+        auto* mix = bare.createNewChildElement("PARAM"); mix->setAttribute("id", "mix"); mix->setAttribute("value", 12.0);
+        juce::MemoryBlock bareBlock;
+        juce::AudioProcessor::copyXmlToBinary(bare, bareBlock);
+        ThrowUpProcessor older;
+        older.setStateInformation(bareBlock.getData(), static_cast<int>(bareBlock.getSize()));
+        check(older.getSoundVersion() == SoundVersion::v015 && older.getCurrentProgram() == throwup::legacyPresetStart(),
+              "older projects without a schema also keep the 0.1.5 sound");
+        ThrowUpProcessor fresh;
+        check(fresh.getSoundVersion() == SoundVersion::latest && fresh.getCurrentProgram() == 0, "new instances use the latest sound");
+        // The upgrade is a normal, undoable host edit.
+        throwup::tests::PresetHostObserver observer(old);
+        old.setSoundVersion(SoundVersion::latest);
+        const int versionIndex = ThrowUpProcessor::parameterCount - 1;
+        check(old.getSoundVersion() == SoundVersion::latest && observer.begins[static_cast<size_t>(versionIndex)] == 1
+              && observer.ends[static_cast<size_t>(versionIndex)] == 1, "Use latest sound is a single undoable host edit");
+        old.setSoundVersion(SoundVersion::v015);
+        check(old.getSoundVersion() == SoundVersion::v015, "the 0.1.5 sound can be restored");
+    }
+    {
+        // User presets, in a scratch folder (never the real one).
+        const auto root = temporaryPresetRoot();
+        ThrowUpProcessor::setUserPresetRootForTesting(root);
+        ThrowUpProcessor p;
+        p.loadFactoryPreset(12);
+        set(p, "size", 44.4f); set(p, "mix", 61);
+        const auto first = p.saveUserPreset("My Throws", "Wide Thing");
+        check(first.existsAsFile() && first.getParentDirectory() == root.getChildFile("My Throws"), "user preset saved in its chosen folder");
+        const auto original = first.loadFileAsString();
+        const auto originalTime = first.getLastModificationTime();
+        set(p, "size", 70);
+        const auto second = p.saveUserPreset("My Throws", "Wide Thing");
+        check(second.existsAsFile() && second != first && second.getFileName() == "Wide Thing 2.throwup",
+              "saving the same name creates a new file");
+        check(first.loadFileAsString() == original && first.getLastModificationTime() == originalTime,
+              "an existing user preset is never modified");
+        set(p, "size", 10);
+        check(p.loadUserPreset(first) && std::abs(get(p, "size") - 44.4f) < .05f && p.getUserPresetName() == "Wide Thing"
+              && std::abs(get(p, "mix") - 61) < .02f, "user preset recalls its room and keeps THROW");
+        juce::MemoryBlock state;
+        p.getStateInformation(state);
+        ThrowUpProcessor recalled;
+        recalled.setStateInformation(state.getData(), static_cast<int>(state.getSize()));
+        check(recalled.getUserPresetName() == "Wide Thing", "the project remembers the user preset name");
+        ThrowUpEditor editor(p);
+        auto* menu = dynamic_cast<juce::ComboBox*>(findNamed(editor, "Factory presets"));
+        editor.rebuildPresetMenu();
+        check(menu != nullptr && menu->getNumItems() == programs + 2, "preset menu lists factory rooms and both user presets");
+        ThrowUpProcessor::setUserPresetRootForTesting({});
+        root.deleteRecursively();
+    }
+    {
+        // A/B compare.
+        ThrowUpProcessor p;
+        set(p, "size", 20); set(p, "mix", 33);
+        p.selectSlot(1);
+        check(std::abs(get(p, "size") - 20) < .05f, "slot B starts as a copy of A");
+        set(p, "size", 80); set(p, "grit", 70);
+        p.selectSlot(0);
+        check(std::abs(get(p, "size") - 20) < .05f && std::abs(get(p, "mix") - 33) < .02f, "A recalls its room and keeps THROW");
+        p.selectSlot(1);
+        check(std::abs(get(p, "size") - 80) < .05f && std::abs(get(p, "grit") - 70) < .05f, "B recalls its room");
+        juce::MemoryBlock state;
+        p.getStateInformation(state);
+        ThrowUpProcessor recalled;
+        recalled.setStateInformation(state.getData(), static_cast<int>(state.getSize()));
+        recalled.selectSlot(0);
+        check(recalled.getActiveSlot() == 0 && std::abs(get(recalled, "size") - 20) < .05f, "A/B slots are saved with the project");
+    }
+    {
+        // Size menu: sizes that do not fit the display are disabled; the size is saved.
+        const juce::Rectangle<int> laptop { 0, 0, 1440, 875 }, desktop { 0, 0, 2560, 1415 };
+        check(ThrowUpEditor::scaleFits(0.9f, laptop) && !ThrowUpEditor::scaleFits(1.0f, laptop)
+              && ThrowUpEditor::scaleFits(1.5f, desktop), "size fit rule: width and height + 60 within the display");
+        check(juce::exactlyEqual(ThrowUpEditor::initialScale(0.0f, desktop), 1.0f) && juce::exactlyEqual(ThrowUpEditor::initialScale(0.0f, laptop), 0.9f)
+              && juce::exactlyEqual(ThrowUpEditor::initialScale(1.25f, desktop), 1.25f) && juce::exactlyEqual(ThrowUpEditor::initialScale(1.5f, laptop), 0.9f),
+              "editor opens at the saved size, or the largest that fits");
+        ThrowUpProcessor p;
+        ThrowUpEditor editor(p);
+        auto menu = editor.createSizeMenu(laptop);
+        check(enabledAt(menu, 1) && !enabledAt(menu, 2) && !enabledAt(menu, 3) && !enabledAt(menu, 4),
+              "on a small display only the sizes that fit are enabled");
+        auto large = editor.createSizeMenu(desktop);
+        check(enabledAt(large, 1) && enabledAt(large, 2) && enabledAt(large, 3) && enabledAt(large, 4), "all sizes fit a large display");
+        editor.applyScale(1.25f);
+        check(editor.getWidth() == 825 && std::abs(p.getEditorScale() - 1.25f) < .001f, "the chosen size applies and is stored");
+        juce::MemoryBlock state;
+        p.getStateInformation(state);
+        ThrowUpProcessor recalled;
+        recalled.setStateInformation(state.getData(), static_cast<int>(state.getSize()));
+        check(std::abs(recalled.getEditorScale() - 1.25f) < .001f, "the editor size is saved with the project");
+    }
+    {
+        // MIDI: note-on throws (velocity), note-off releases, a note can pick the room.
+        ThrowUpProcessor p;
+        set(p, "mix", 0); set(p, "trigger", 1); set(p, "throwAttack", 4); set(p, "throwRelease", 100);
+        p.prepareToPlay(48000, 256);
+        juce::AudioBuffer<float> audio(2, 256);
+        juce::MidiBuffer midi, none;
+        int clock = 0;
+        for (int b = 0; b < 40; ++b) processSine(p, audio, none, clock);
+        check(juce::exactlyEqual(p.getTriggerLevel(), 0.0f), "no throw without a note");
+        midi.addEvent(juce::MidiMessage::noteOn(1, 60, static_cast<juce::uint8>(127)), 10);
+        double added = 0;
+        for (int b = 0; b < 8; ++b) {
+            juce::AudioBuffer<float> dry(2, 256);
+            processSine(p, audio, b == 0 ? midi : none, clock);
+            for (int i = 0; i < 256; ++i)
+                added += std::abs(audio.getSample(0, i) - .3f * static_cast<float>(std::sin(2 * juce::MathConstants<double>::pi * 330 * (clock - 256 + i) / 48000.0)));
+        }
+        check(p.getTriggerLevel() > 99 && added > 1, "a MIDI note-on throws the reverb in");
+        midi.clear();
+        midi.addEvent(juce::MidiMessage::noteOff(1, 60), 0);
+        processSine(p, audio, midi, clock);
+        for (int b = 0; b < 30; ++b) processSine(p, audio, none, clock);
+        check(juce::exactlyEqual(p.getTriggerLevel(), 0.0f), "note-off releases the throw");
+        set(p, "noteRooms", 1);
+        midi.clear();
+        midi.addEvent(juce::MidiMessage::noteOn(1, ThrowUpProcessor::firstRoomNote + 5, static_cast<juce::uint8>(90)), 0);
+        processSine(p, audio, midi, clock);
+        p.flushPendingRoomForTesting();
+        check(p.getCurrentProgram() == 5 && std::abs(get(p, "size") - throwup::factoryPresets()[5].room.size) < .05f,
+              "with Note picks room, the note selects its room");
+    }
+    {
+        // Optional sidechain for Duck.
+        ThrowUpProcessor p;
+        auto layout = p.getBusesLayout();
+        check(layout.inputBuses.size() == 2 && layout.getChannelSet(true, 1).isDisabled(), "a sidechain input exists and is off by default");
+        layout.inputBuses.getReference(1) = juce::AudioChannelSet::mono();
+        check(p.isBusesLayoutSupported(layout), "mono sidechain accepted");
+        layout.inputBuses.getReference(1) = juce::AudioChannelSet::create5point1();
+        check(!p.isBusesLayoutSupported(layout), "surround sidechain rejected");
+        layout.inputBuses.getReference(1) = juce::AudioChannelSet::stereo();
+        check(p.setBusesLayout(layout) && p.getTotalNumInputChannels() == 4, "stereo sidechain enabled");
+        set(p, "mix", 100); set(p, "duck", 100); set(p, "duckSource", 1); set(p, "size", 60); set(p, "decay", 4);
+        p.prepareToPlay(48000, 256);
+        juce::AudioBuffer<float> audio(4, 256);
+        juce::MidiBuffer none;
+        double quiet = 0, keyed = 0;
+        for (int b = 0; b < 300; ++b) {
+            for (int i = 0; i < 256; ++i) {
+                const int n = b * 256 + i;
+                const float dry = n < 48000 / 4 ? .3f * static_cast<float>(std::sin(2 * juce::MathConstants<double>::pi * 440 * n / 48000.0)) : 0.0f;
+                audio.setSample(0, i, dry); audio.setSample(1, i, dry);
+                const float key = n >= 48000 ? .8f : 0.0f;
+                audio.setSample(2, i, key); audio.setSample(3, i, key);
+            }
+            p.processBlock(audio, none);
+            if (b >= 150 && b < 185) quiet += audio.getRMSLevel(0, 0, 256);   // ~0.8-0.99 s, no key
+            if (b >= 200 && b < 235) keyed += audio.getRMSLevel(0, 0, 256);   // ~1.07-1.25 s, key on
+        }
+        check(keyed < quiet * 0.1, "the sidechain key ducks the tail (Duck source External)");
+    }
+    if (folder == nullptr) return;
+    // Screenshots of the new editor states.
+    ThrowUpProcessor::setUserPresetRootForTesting(temporaryPresetRoot());
+    ThrowUpProcessor p;
+    p.loadFactoryPreset(14);
+    set(p, "mix", 40);
+    ThrowUpEditor editor(p);
+    editor.applyScale(1.0f);
+    // No two visible controls overlap on any page (a bar or knob and its own value
+    // label are one control).
+    for (const auto page : { ThrowUpEditor::Page::room, ThrowUpEditor::Page::trigger, ThrowUpEditor::Page::space, ThrowUpEditor::Page::mix }) {
+        editor.showPage(page);
+        std::vector<juce::Component*> visible;
+        for (auto* child : editor.getChildren())
+            if (child->isVisible() && child->getName() != "VFD Info Page") visible.push_back(child);
+        bool clear = true;
+        for (size_t a = 0; a < visible.size(); ++a)
+            for (size_t b = a + 1; b < visible.size(); ++b) {
+                const auto nameA = visible[a]->getName(), nameB = visible[b]->getName();
+                if (nameA + " value" == nameB || nameB + " value" == nameA) continue;
+                if (visible[a]->getBounds().intersects(visible[b]->getBounds())) {
+                    clear = false;
+                    std::cout << "  overlap: " << nameA << " / " << nameB << '\n';
+                }
+            }
+        check(clear, "no controls overlap on this display page");
+    }
+    editor.showPage(ThrowUpEditor::Page::room);
+    saveImage(editor, folder->getChildFile("THROW-UP-room-page.png"));
+    set(p, "trigger", 1); set(p, "noteRooms", 1); set(p, "releaseSync", 3);
+    editor.showPage(ThrowUpEditor::Page::trigger);
+    saveImage(editor, folder->getChildFile("THROW-UP-throw-page.png"));
+    set(p, "predelaySync", 4); set(p, "predelayFeel", 1); set(p, "swell", 3); set(p, "shimmer", 40); set(p, "shimmerPitch", 0);
+    editor.showPage(ThrowUpEditor::Page::space);
+    juce::Timer::callPendingTimersSynchronously();
+    saveImage(editor, folder->getChildFile("THROW-UP-space-page.png"));
+    set(p, "returnTrim", -6); set(p, "duckSource", 1); set(p, "duckThreshold", -30);
+    editor.showPage(ThrowUpEditor::Page::mix);
+    saveImage(editor, folder->getChildFile("THROW-UP-mix-page.png"));
+    p.setSoundVersion(SoundVersion::v015);
+    pumpTimersUntil([] { return false; }, 120);
+    saveImage(editor, folder->getChildFile("THROW-UP-0.1.5-sound.png"));
+    p.setSoundVersion(SoundVersion::latest);
+    // Keys lit: FREEZE, SAFE, SEND, and a held THROW! (LED and trigger arc).
+    set(p, "freeze", 1); set(p, "safeClip", 1); set(p, "dry", 0); set(p, "throwKey", 1);
+    p.prepareToPlay(48000, 256);
+    {
+        juce::AudioBuffer<float> audio(2, 256);
+        juce::MidiBuffer none;
+        int clock = 0;
+        for (int b = 0; b < 40; ++b) processSine(p, audio, none, clock);
+    }
+    editor.showPage(ThrowUpEditor::Page::room);
+    pumpTimersUntil([] { return false; }, 120);
+    saveImage(editor, folder->getChildFile("THROW-UP-keys-lit.png"));
+    set(p, "freeze", 0); set(p, "safeClip", 0); set(p, "dry", 1); set(p, "throwKey", 0);
+    for (const float scale : { 0.9f, 1.25f, 1.5f }) {
+        editor.applyScale(scale);
+        check(editor.getWidth() == juce::roundToInt(660 * scale), "editor applies each menu size");
+        saveImage(editor, folder->getChildFile("THROW-UP-" + juce::String(juce::roundToInt(scale * 100)) + ".png"));
+    }
+    editor.applyScale(1.0f);
+    editor.openSaveDialog();
+    if (auto* modal = juce::ModalComponentManager::getInstance()->getModalComponent(0)) {
+        auto shot = modal->createComponentSnapshot(modal->getLocalBounds(), true, 2.0f);
+        juce::FileOutputStream stream(folder->getChildFile("THROW-UP-save-dialog.png"));
+        stream.setPosition(0); stream.truncate();
+        check(stream.openedOk() && juce::PNGImageFormat().writeImageToStream(shot, stream), "save dialog snapshot saved");
+        modal->exitModalState(0);
+    } else {
+        check(false, "save dialog opens");
+    }
+    pumpTimersUntil([] { return false; }, 50);
+    ThrowUpProcessor::setUserPresetRootForTesting({});
+}
+
+// ---------------------------------------------------------------------------
+// Compatibility: projects saved with the 0.1.5 payload play identically here.
+juce::AudioPluginInstance* findParameterOwner(juce::AudioPluginInstance& plugin, const juce::String& name, float plain, float lo, float hi)
+{
+    for (auto* parameter : plugin.getParameters())
+        if (parameter->getName(128) == name) { parameter->setValueNotifyingHost((plain - lo) / (hi - lo)); return &plugin; }
+    throw std::runtime_error(("hosted parameter missing: " + name).toStdString());
+}
+
+std::vector<float> renderHosted(juce::AudioPluginInstance& plugin, double rate, bool mono, int length)
+{
+    plugin.prepareToPlay(rate, 1024);
+    std::vector<float> left(static_cast<size_t>(length)), right(static_cast<size_t>(length));
+    for (int i = 0; i < length; ++i) {
+        const double t = i / rate;
+        left[static_cast<size_t>(i)] = i < length / 2 ? static_cast<float>(0.6 * std::sin(2 * juce::MathConstants<double>::pi * 110 * t + 3 * std::sin(2 * juce::MathConstants<double>::pi * 220 * t))) : 0.0f;
+        right[static_cast<size_t>(i)] = i < length / 2 ? static_cast<float>(0.5 * std::cos(2 * juce::MathConstants<double>::pi * 83 * t)) : 0.0f;
+    }
+    const int sizes[] { 1, 7, 64, 511, 1024, 13, 257 };
+    juce::MidiBuffer midi;
+    for (int position = 0, k = 0; position < length; ) {
+        const int count = std::min(sizes[k++ % 7], length - position);
+        float* channels[] { left.data() + position, right.data() + position };
+        juce::AudioBuffer<float> view(channels, mono ? 1 : 2, count);
+        plugin.processBlock(view, midi);
+        position += count;
+    }
+    plugin.releaseResources();
+    left.insert(left.end(), right.begin(), right.end());
+    return left;
+}
+
+int runCompatibility(const juce::File& oldPlugin, const juce::File& newPlugin)
+{
+    juce::VST3PluginFormat format;
+    juce::OwnedArray<juce::PluginDescription> oldTypes, newTypes;
+    format.findAllTypesForFile(oldTypes, oldPlugin.getFullPathName());
+    format.findAllTypesForFile(newTypes, newPlugin.getFullPathName());
+    check(oldTypes.size() == 1 && newTypes.size() == 1 && oldTypes[0]->version == "0.1.5", "0.1.5 payload and new VST3 both scan");
+    check(oldTypes[0]->uniqueId == newTypes[0]->uniqueId, "the VST3 identity is unchanged");
+    int identical = 0, cases = 0;
+    double worst = 0;
+    for (const double rate : { 44100.0, 48000.0, 96000.0, 192000.0 }) {
+        const int length = static_cast<int>(rate * (rate > 96000 ? 0.6 : 1.5));
+        for (int preset = 0; preset < 50; ++preset) {
+            for (int mode = 0; mode < 3; ++mode) {
+                const bool mono = preset % 7 == 3;
+                juce::String error;
+                auto old = format.createInstanceFromDescription(*oldTypes[0], rate, 1024, error);
+                check(old != nullptr, "0.1.5 payload instantiates");
+                if (mono) {
+                    auto layout = old->getBusesLayout();
+                    layout.inputBuses.getReference(0) = layout.outputBuses.getReference(0) = juce::AudioChannelSet::mono();
+                    check(old->setBusesLayout(layout), "0.1.5 accepts mono");
+                }
+                old->setCurrentProgram(preset);
+                findParameterOwner(*old, "THROW", mode == 0 ? 100.0f : mode == 1 ? 37.5f : 0.0f, 0, 100);
+                findParameterOwner(*old, "Output", mode == 2 ? -4.0f : mode == 1 ? 3.0f : 0.0f, -18, 6);
+                juce::MemoryBlock state;
+                old->getStateInformation(state);
+                const auto expected = renderHosted(*old, rate, mono, length);
+                old.reset();
+                auto updated = format.createInstanceFromDescription(*newTypes[0], rate, 1024, error);
+                check(updated != nullptr, "new VST3 instantiates");
+                if (mono) {
+                    auto layout = updated->getBusesLayout();
+                    layout.inputBuses.getReference(0) = layout.outputBuses.getReference(0) = juce::AudioChannelSet::mono();
+                    check(updated->setBusesLayout(layout), "new build accepts mono");
+                }
+                updated->setStateInformation(state.getData(), static_cast<int>(state.getSize()));
+                const auto actual = renderHosted(*updated, rate, mono, length);
+                ++cases;
+                if (std::memcmp(expected.data(), actual.data(), expected.size() * sizeof(float)) == 0) ++identical;
+                for (size_t i = 0; i < expected.size(); ++i)
+                    worst = std::max(worst, static_cast<double>(std::abs(expected[i] - actual[i])));
+            }
+        }
+    }
+    std::cout << "0.1.5 payload -> 0.2.0 VST3: " << identical << "/" << cases << " renders bit-identical; maximum difference " << worst << '\n';
+    check(identical == cases, "every 0.1.5 project renders bit-identically in this build");
+    return 0;
+}
+
+// ---------------------------------------------------------------------------
+// Audio Unit: register the built component for this process only and validate it.
+juce::String fourCharacters(CFTypeRef value)
+{
+    if (value != nullptr && CFGetTypeID(value) == CFStringGetTypeID()) return juce::String::fromCFString(static_cast<CFStringRef>(value));
+    return {};
+}
+
+OSType fourCC(const juce::String& text)
+{
+    jassert(text.length() == 4);
+    return static_cast<OSType>((static_cast<juce::uint32>(text[0]) << 24) | (static_cast<juce::uint32>(text[1]) << 16)
+                               | (static_cast<juce::uint32>(text[2]) << 8) | static_cast<juce::uint32>(text[3]));
+}
+
+int runAudioUnitValidation(const juce::File& component)
+{
+    auto url = juce::String(component.getFullPathName());
+    CFURLRef bundleUrl = CFURLCreateFromFileSystemRepresentation(nullptr, reinterpret_cast<const UInt8*>(url.toRawUTF8()),
+                                                                 static_cast<CFIndex>(url.getNumBytesAsUTF8()), true);
+    CFBundleRef bundle = CFBundleCreate(nullptr, bundleUrl);
+    CFRelease(bundleUrl);
+    check(bundle != nullptr && CFBundleLoadExecutable(bundle), "AU bundle loads from the build folder");
+    check(fourCharacters(CFBundleGetIdentifier(bundle)) == "com.yoiboi.throwup", "AU bundle identifier com.yoiboi.throwup");
+    auto components = static_cast<CFArrayRef>(CFBundleGetValueForInfoDictionaryKey(bundle, CFSTR("AudioComponents")));
+    check(components != nullptr && CFArrayGetCount(components) == 1, "one AudioComponent declared");
+    auto entry = static_cast<CFDictionaryRef>(CFArrayGetValueAtIndex(components, 0));
+    const auto type = fourCharacters(CFDictionaryGetValue(entry, CFSTR("type")));
+    const auto subtype = fourCharacters(CFDictionaryGetValue(entry, CFSTR("subtype")));
+    const auto manufacturer = fourCharacters(CFDictionaryGetValue(entry, CFSTR("manufacturer")));
+    const auto factoryName = fourCharacters(CFDictionaryGetValue(entry, CFSTR("factoryFunction")));
+    std::cout << "AU identity: type " << type << ", subtype " << subtype << ", manufacturer " << manufacturer << '\n';
+    check(subtype == "Thr1" && manufacturer == "Yoib" && (type == "aumf" || type == "aufx"), "AU identity: subtype Thr1, manufacturer Yoib");
+    auto factory = reinterpret_cast<AudioComponentFactoryFunction>(
+        CFBundleGetFunctionPointerForName(bundle, factoryName.toCFString()));
+    check(factory != nullptr, "AU factory function found");
+    AudioComponentDescription description { fourCC(type), fourCC(subtype), fourCC(manufacturer), 0, 0 };
+    SInt32 version = 0;
+    if (auto number = static_cast<CFNumberRef>(CFDictionaryGetValue(entry, CFSTR("version")))) CFNumberGetValue(number, kCFNumberSInt32Type, &version);
+    check(version == 0x00000200, "AU version 0.2.0");
+    check(AudioComponentRegister(&description, CFSTR("Vivid Fever Dreams: THROW-UP (test)"), static_cast<UInt32>(version), factory) != nullptr,
+          "AU registered for this process only");
+    juce::AudioUnitPluginFormat format;
+    juce::OwnedArray<juce::PluginDescription> types;
+    format.findAllTypesForFile(types, "AudioUnit:Effects/" + type + "," + subtype + "," + manufacturer);
+    check(types.size() == 1, "AU scans as one plugin");
+    for (const double rate : { 44100.0, 48000.0, 96000.0 }) {
+        for (const int blockSize : { 64, 512, 1024 }) {
+            juce::String error;
+            auto au = format.createInstanceFromDescription(*types[0], rate, blockSize, error);
+            check(au != nullptr, "AU instantiates");
+            ThrowUpProcessor reference;
+            check(au->getNumPrograms() == reference.getNumPrograms() && au->getParameters().size() >= ThrowUpProcessor::parameterCount,
+                  "AU exposes every program and parameter");
+            if (rate == 44100.0 && blockSize == 64)
+                std::cout << "AU buses as hosted: inputs " << au->getBusCount(true) << " (" << au->getTotalNumInputChannels()
+                          << " channels), outputs " << au->getBusCount(false) << " (" << au->getTotalNumOutputChannels() << " channels)\n";
+            au->setCurrentProgram(33); reference.loadFactoryPreset(33);
+            for (auto* parameter : au->getParameters())
+                if (parameter->getName(128) == "THROW") parameter->setValueNotifyingHost(.7f);
+            set(reference, "mix", 70);
+            au->prepareToPlay(rate, blockSize); reference.prepareToPlay(rate, blockSize);
+            check(au->getLatencySamples() == 0, "AU reports zero latency");
+            juce::MidiBuffer midi;
+            double worst = 0, energy = 0;
+            bool finite = true;
+            const int blocks = static_cast<int>(rate * 1.5) / blockSize;
+            // The AU host buffer carries every input bus (the sidechain is an AU input
+            // element); the sidechain stays silent here, as in the reference.
+            const int auChannels = juce::jmax(au->getTotalNumInputChannels(), au->getTotalNumOutputChannels());
+            for (int b = 0; b < blocks; ++b) {
+                juce::AudioBuffer<float> a(auChannels, blockSize), r(2, blockSize);
+                a.clear();
+                for (int c = 0; c < 2; ++c) for (int i = 0; i < blockSize; ++i)
+                    a.setSample(c, i, b * blockSize + i < rate * 0.5 ? signal(b * blockSize + i, c) : 0.0f);
+                r.makeCopyOf(a, true);
+                r.setSize(2, blockSize, true);
+                au->processBlock(a, midi); reference.processBlock(r, midi);
+                for (int c = 0; c < 2; ++c) for (int i = 0; i < blockSize; ++i) {
+                    finite = finite && std::isfinite(a.getSample(c, i));
+                    worst = std::max(worst, static_cast<double>(std::abs(a.getSample(c, i) - r.getSample(c, i))));
+                    if (b * blockSize > rate * 0.6) energy += std::abs(a.getSample(c, i));
+                }
+            }
+            check(finite && worst < 3e-5 && energy > 1, "AU audio is finite, matches the tested processor and leaves a tail");
+            juce::MemoryBlock state;
+            au->getStateInformation(state);
+            auto reopened = format.createInstanceFromDescription(*types[0], rate, blockSize, error);
+            reopened->setStateInformation(state.getData(), static_cast<int>(state.getSize()));
+            bool same = true;
+            for (int i = 0; i < ThrowUpProcessor::parameterCount; ++i)
+                if (std::abs(au->getParameters()[i]->getValue() - reopened->getParameters()[i]->getValue()) >= 1e-5f) {
+                    same = false;
+                    std::cout << "  AU parameter " << au->getParameters()[i]->getName(64) << ": " << au->getParameters()[i]->getValue()
+                              << " vs " << reopened->getParameters()[i]->getValue() << '\n';
+                }
+            check(same, "AU state recalls every parameter into a new instance");
+            if (reopened->getCurrentProgram() != 33)
+                std::cout << "  AU current program after state recall: " << reopened->getCurrentProgram() << " (saved 33)\n";
+            au->releaseResources();
+        }
+    }
+    std::cout << "AU validated in-process at 44.1/48/96 kHz with 64/512/1024-sample blocks\n";
+    return 0;
 }
 
 void checkInfoPage(ThrowUpEditor& editor, ThrowUpProcessor& processor, const juce::File& snapshot)
@@ -280,24 +765,35 @@ int main(int argc, char** argv)
 {
     try {
         juce::ScopedJuceInitialiser_GUI gui;
+        if (argc == 4 && juce::String(argv[1]) == "--compat")
+            return runCompatibility(juce::File(juce::String::fromUTF8(argv[2])), juce::File(juce::String::fromUTF8(argv[3])));
+        if (argc == 3 && juce::String(argv[1]) == "--au")
+            return runAudioUnitValidation(juce::File(juce::String::fromUTF8(argv[2])));
+        // Tests never read or write the real user presets folder.
+        const auto presetRoot = temporaryPresetRoot();
+        ThrowUpProcessor::setUserPresetRootForTesting(presetRoot);
         throwup::tests::runPresetAutomationRegressionTests();
         {
             const juce::File folder(argc >= 2 ? juce::String::fromUTF8(argv[1]) : juce::String());
             if (argc >= 2) folder.createDirectory();
             runFixRegressionTests(argc >= 2 ? &folder : nullptr);
+            runFeatureHostTests(argc >= 2 ? &folder : nullptr);
+            ThrowUpProcessor::setUserPresetRootForTesting(presetRoot);
         }
         ThrowUpProcessor p;
-        check(p.getNumPrograms() == 50, "50 factory programs exposed to host");
-        check(p.getParameters().size() == 13, "all 13 controls exposed as host parameters");
+        const int programs = static_cast<int>(throwup::factoryPresets().size());
+        check(p.getNumPrograms() == programs && programs == throwup::legacyPresetStart() + 50,
+              "factory programs: the current bank, then the 50 rooms of 0.1.5");
+        check(p.getParameters().size() == ThrowUpProcessor::parameterCount, "all 34 controls exposed as host parameters");
         check(p.getBypassParameter() == p.apvts.getParameter("bypass"), "host bypass uses dedicated bypass parameter");
         std::set<std::string> names;
-        for (int i = 0; i < 50; ++i) {
+        for (int i = 0; i < programs; ++i) {
             p.loadFactoryPreset(i);
             names.insert(p.getProgramName(i).toStdString());
         }
-        check(names.size() == 50, "all factory program names unique");
+        check(static_cast<int>(names.size()) == programs, "all factory program names unique");
         set(p, "mix", 73.42f); set(p, "output", -3.4f); set(p, "bypass", 1);
-        for (int i = 0; i < 50; ++i) p.loadFactoryPreset(i);
+        for (int i = 0; i < programs; ++i) p.loadFactoryPreset(i);
         check(std::abs(get(p, "mix") - 73.42f) < .02f && std::abs(get(p, "output") + 3.4f) < .02f && get(p, "bypass") == 1,
             "all preset changes preserve THROW, output, and bypass");
         set(p, "bypass", 0); set(p, "decay", 7.31f);
@@ -305,7 +801,7 @@ int main(int argc, char** argv)
         p.getStateInformation(state);
         ThrowUpProcessor recalled;
         recalled.setStateInformation(state.getData(), static_cast<int>(state.getSize()));
-        bool equal = recalled.getCurrentProgram() == 49;
+        bool equal = recalled.getCurrentProgram() == programs - 1;
         for (int i = 0; i < p.getParameters().size(); ++i)
             equal = equal && std::abs(p.getParameters()[i]->getValue() - recalled.getParameters()[i]->getValue()) < 1e-6f;
         check(equal, "project state recalls every parameter and selected preset");
@@ -345,12 +841,12 @@ int main(int argc, char** argv)
                 }
                 if (auto* menu = dynamic_cast<juce::ComboBox*>(child)) presetMenu = menu;
             }
-            check(sliderCount == 12 && throwKnob != nullptr, "editor exposes giant THROW plus 11 shaping controls");
+            check(sliderCount == 27 && throwKnob != nullptr, "editor exposes giant THROW plus 26 controls across the plate and display pages");
             throwKnob->setValue(47, juce::sendNotificationSync);
             check(std::abs(get(p, "mix") - 47) < .02f, "moving the actual THROW control changes its host parameter");
             set(p, "mix", 64);
             check(std::abs(throwKnob->getValue() - 64) < .02, "host automation updates the actual THROW control");
-            check(presetMenu != nullptr && presetMenu->getNumItems() == 50, "editor menu exposes all 50 grouped presets");
+            check(presetMenu != nullptr && presetMenu->getNumItems() == programs, "editor menu exposes every factory preset by folder");
             presetMenu->setSelectedId(44, juce::sendNotificationSync);
             check(p.getCurrentProgram() == 43 && std::abs(get(p, "mix") - 64) < .02f, "preset menu loads creative sound while preserving THROW");
             presetMenu->setSelectedId(24, juce::sendNotificationSync);
@@ -381,7 +877,7 @@ int main(int argc, char** argv)
                     }
                 }
             }
-            check(matched == 13, "all compiled VST3 controls receive host parameter changes");
+            check(matched == ThrowUpProcessor::parameterCount, "all compiled VST3 controls receive host parameter changes");
             // VST3 hosts wrap component/controller state; round-trip their own blob.
             juce::MemoryBlock hostedState;
             hosted->getStateInformation(hostedState);
@@ -420,6 +916,8 @@ int main(int argc, char** argv)
             check(wetEnergy > .01, "compiled VST3 emits a real reverb tail on silent input at full wet");
             hosted->releaseResources();
         }
+        ThrowUpProcessor::setUserPresetRootForTesting({});
+        presetRoot.deleteRecursively();
         std::cout << "THROW-UP host checks passed\n";
         return 0;
     } catch (const std::exception& e) { std::cerr << "FAIL " << e.what() << '\n'; return 1; }

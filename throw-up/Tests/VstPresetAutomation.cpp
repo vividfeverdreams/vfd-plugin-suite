@@ -6,6 +6,8 @@
 #include <juce_audio_plugin_client/juce_audio_plugin_client_VST3.cpp>
 #undef Component
 #include "ThrowUpProcessor.h"
+#include "Presets.h"
+#include <algorithm>
 #include <iostream>
 #include <vector>
 #include <set>
@@ -163,12 +165,21 @@ void test(Bundle& bundle, Host& host)
     } cleanup {component, controller, componentConnection, controllerConnection, concrete, processor};
 
     std::vector<ParamID> ids;
+    ParamID programId = 0;
+    int programCount = 0;
     for (int32 i = 0; i < controller->getParameterCount(); ++i) {
-        ParameterInfo info {}; controller->getParameterInfo(i, info); ids.push_back(info.id);
+        ParameterInfo info {}; controller->getParameterInfo(i, info);
+        if ((info.flags & ParameterInfo::kIsProgramChange) != 0) { programId = info.id; ++programCount; }
+        else ids.push_back(info.id);
     }
-    require(ids.size() == 14, "13 stable controls plus existing VST3 Program parameter remain exposed");
-    require(ids[0] == static_cast<ParamID>(juce::String("mix").hashCode() & 0x7fffffff), "THROW retains its existing mix-based VST3 parameter ID");
-    std::set<ParamID> soundIds(ids.begin() + 1, ids.begin() + 11);
+    require(ids.size() == static_cast<size_t>(ThrowUpProcessor::parameterCount) && programCount == 1,
+            "34 controls (the 13 of 0.1.5 first, then 21 appended) plus the VST3 Program parameter, and no MIDI-CC proxies");
+    const auto hashed = [](const char* id) { return static_cast<ParamID>(juce::String(id).hashCode() & 0x7fffffff); };
+    require(ids[0] == hashed("mix") && ids[0] == 108124u, "THROW retains its existing mix-based VST3 parameter ID 108124");
+    for (const char* id : { "size", "decay", "predelay", "lowCut", "highCut", "diffusion", "motion", "width", "grit", "duck", "output", "bypass" })
+        require(std::find(ids.begin(), ids.end(), hashed(id)) != ids.end(), "every 0.1.5 parameter keeps its VST3 ID");
+    std::set<ParamID> soundIds;
+    for (const auto& id : ThrowUpProcessor::roomParameterIds()) soundIds.insert(hashed(id.toRawUTF8()));
     std::unique_ptr<juce::AudioProcessorEditor> editor(actual->createEditorAndMakeActive());
     auto* menu = dynamic_cast<juce::ComboBox*>(named(*editor, "Factory presets"));
     auto* previous = dynamic_cast<juce::Button*>(named(*editor, "Previous preset"));
@@ -234,7 +245,16 @@ void test(Bundle& bundle, Host& host)
         }
         ++totalBlocks;
     };
-    for (int i = 0; i < 50; ++i) {
+    const int programs = actual->getNumPrograms();
+    const int legacyStart = throwup::legacyPresetStart();
+    require(programs == legacyStart + throwup::legacyPresetCount, "VST3 programs: the current bank, then the 0.1.5 bank");
+    // The arrows step within the current bank, or within the 0.1.5 bank.
+    const auto stepped = [&](int index, int direction) {
+        const int start = index >= legacyStart ? legacyStart : 0;
+        const int count = index >= legacyStart ? throwup::legacyPresetCount : legacyStart;
+        return start + (index - start + direction + count) % count;
+    };
+    for (int i = 0; i < programs; ++i) {
         for (int b = 0; b < 4; ++b) render();
         host.clear();
         menu->setSelectedId(i + 1, juce::sendNotificationSync);
@@ -242,19 +262,19 @@ void test(Bundle& bundle, Host& host)
         reference.setCurrentProgram(i);
         checkNotifications(host, soundIds);
         for (int b = 0; b < 12; ++b) render();
-        host.clear(); previous->onClick(); reference.setCurrentProgram((i + 49) % 50);
+        host.clear(); previous->onClick(); reference.setCurrentProgram(stepped(i, -1));
         checkNotifications(host, soundIds); render();
         host.clear(); next->onClick(); reference.setCurrentProgram(i);
         checkNotifications(host, soundIds); render();
-        const auto hostProgram = (i + 17) % 50;
+        const auto hostProgram = (i + 17) % programs;
         host.clear();
-        controller->setParamNormalized(ids.back(), static_cast<double>(hostProgram) / 49.0);
+        controller->setParamNormalized(programId, static_cast<double>(hostProgram) / static_cast<double>(programs - 1));
         require(actual->getCurrentProgram() == hostProgram, "native VST3 Program selection remains available");
         reference.setCurrentProgram(hostProgram);
         checkNotifications(host, soundIds); render();
     }
     std::cout << "Packaged/reference maximum audio error " << worst << '\n';
-    require(worst < .00003, "actual VST3 queued automation matches reference audio through all 200 preset selections");
+    require(worst < .00003, "actual VST3 queued automation matches reference audio through all preset selections");
     host.clear();
     {
         juce::Slider::ScopedDragNotification drag(*throwKnob);
@@ -265,7 +285,8 @@ void test(Bundle& bundle, Host& host)
     require(std::abs(controller->getParamNormalized(ids[0]) - .4321) < .00011,
             "manual THROW drag reaches actual VST3 controller");
     require(host.restartFlags == 0, "manual THROW drag does not restart plugin");
-    std::cout << "PASS actual VST3: 50 menu, 50 previous, 50 next, 50 host Program selections; " << totalBlocks
+    std::cout << "PASS actual VST3: " << programs << " menu, " << programs << " previous, " << programs << " next, "
+              << programs << " host Program selections; " << totalBlocks
               << " automated blocks; stable THROW ID " << ids[0] << "; maximum audio error " << worst << '\n';
     std::cout << "PASS no THROW/Program edits or global parameter-cache invalidation during preset selection\n";
     std::cout << "PASS manual THROW drag still records normal VST3 automation gestures\n";

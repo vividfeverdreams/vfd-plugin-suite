@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <functional>
 #include <iostream>
 #include <limits>
 #include <new>
@@ -37,7 +38,17 @@ namespace
 {
 using throwup::ReverbEngine;
 using throwup::Settings;
+using throwup::SoundVersion;
 constexpr double pi = 3.14159265358979323846;
+// The core suites run once with the 0.1.5 sound and once with the latest sound.
+SoundVersion testVersion = SoundVersion::latest;
+
+Settings makeSettings()
+{
+    Settings settings;
+    settings.version = testVersion;
+    return settings;
+}
 
 void require (bool condition, const std::string& message)
 {
@@ -133,7 +144,7 @@ void dryAndBypass (double sr)
     original.right[37] = -0.0f;
     for (int mode = 0; mode < 3; ++mode)
     {
-        Settings settings;
+        Settings settings = makeSettings();
         settings.mix = mode == 1 ? 100.0f : 0.0f;
         settings.bypass = mode == 1;
         settings.output = mode == 1 ? 6.0f : 0.0f;
@@ -151,7 +162,7 @@ void dryAndBypass (double sr)
 
 void timingAndBlocks (double sr)
 {
-    Settings settings;
+    Settings settings = makeSettings();
     settings.mix = 100; settings.motion = 0; settings.grit = 0; settings.duck = 0;
     settings.predelay = 0;
     const auto immediate = wetImpulse (sr, settings, 0.8);
@@ -195,7 +206,7 @@ void parallelReturn (double sr)
     const auto original = inputSignal (sr, static_cast<std::size_t> (sr * 0.40));
     for (const bool mono : { false, true })
     {
-        Settings settings;
+        Settings settings = makeSettings();
         settings.mix = 100; settings.predelay = 100; settings.grit = 40;
         settings.motion = 65; settings.duck = 50;
         ReverbEngine fullEngine;
@@ -252,7 +263,7 @@ void automatedReturn (double sr)
 {
     for (const bool mono : { false, true })
     {
-        Settings settings;
+        Settings settings = makeSettings();
         settings.mix = 0; settings.predelay = 0; settings.motion = 30;
         settings.grit = 25; settings.duck = 20;
         ReverbEngine automated, fullEngine;
@@ -346,7 +357,7 @@ void automatedReturn (double sr)
 
 void filteringDecayAndStereo (double sr)
 {
-    Settings settings;
+    Settings settings = makeSettings();
     settings.mix = 100; settings.motion = 0; settings.grit = 0; settings.duck = 0;
     settings.predelay = 0; settings.lowCut = 300; settings.highCut = 12000;
     const auto sineEnergy = [&] (double frequency)
@@ -392,7 +403,7 @@ void filteringDecayAndStereo (double sr)
 
 void longDecayHeadroom()
 {
-    Settings settings;
+    Settings settings = makeSettings();
     settings.mix = 100; settings.size = 0; settings.decay = 18;
     settings.predelay = 0; settings.lowCut = 80; settings.highCut = 18000;
     settings.diffusion = 75; settings.motion = 0; settings.width = 100;
@@ -437,9 +448,10 @@ void longDecayHeadroom()
     std::cout << "Long-decay wet peak " << peak << "; output-trimmed parallel peak " << trimmedPeak << '\n';
 }
 
-Settings presetSettings (std::size_t index, float mix)
+// The 0.1.5 bank (Legacy folder), by its original index: 10 = Back Room, 30 = Event Horizon.
+Settings presetSettings (std::size_t legacyIndex, float mix)
 {
-    auto settings = throwup::factoryPresets()[index].settings;
+    auto settings = throwup::settingsFor (throwup::factoryPresets()[static_cast<std::size_t> (throwup::legacyPresetStart()) + legacyIndex].room);
     settings.mix = mix;
     return settings;
 }
@@ -542,7 +554,7 @@ void predelayChangeWithoutPitchGlide()
     constexpr double sr = 48000;
     for (const auto& change : std::array<std::array<float, 2>, 3> {{ { 24, 105 }, { 0, 250 }, { 7, 34 } }})
     {
-        Settings settings;
+        Settings settings = makeSettings();
         settings.mix = 100; settings.size = 36; settings.decay = 1.15f; settings.predelay = change[0];
         settings.lowCut = 180; settings.highCut = 18000; settings.diffusion = 76; settings.motion = 0;
         settings.width = 100; settings.grit = 0; settings.duck = 0;
@@ -596,7 +608,7 @@ void bypassFadesWithoutClicks()
     {
         // THROW 0 with Output -12 dB: bypass used to jump +12 dB in one sample.
         ReverbEngine engine;
-        Settings settings;
+        Settings settings = makeSettings();
         settings.mix = 0; settings.output = -12;
         engine.setSettings (settings);
         engine.prepare (sr, 64);
@@ -665,34 +677,346 @@ void blockRampedThrow()
     std::cout << "PASS block-rate THROW automation: largest deviation from host curve " << worst << "% THROW\n";
 }
 
+// Renders `seconds` of a source through a fresh engine in 256-sample blocks.
+// `each` (optional) may change settings at a block start; `sidechain` feeds the sidechain.
+struct Render
+{
+    std::vector<float> left, right;
+};
+
+Render renderWith (Settings settings, double seconds, const std::function<float (std::size_t)>& source,
+                   const std::function<void (std::size_t, Settings&)>& each = nullptr,
+                   const std::vector<float>* sidechain = nullptr, double sr = 48000)
+{
+    ReverbEngine engine;
+    engine.setSettings (settings);
+    engine.prepare (sr, 256);
+    const auto length = static_cast<std::size_t> (sr * seconds);
+    Render out { std::vector<float> (length), std::vector<float> (length) };
+    for (std::size_t i = 0; i < length; ++i) out.left[i] = out.right[i] = source (i);
+    for (std::size_t position = 0; position < length; position += 256)
+    {
+        if (each)
+        {
+            each (position, settings);
+            engine.setSettings (settings);
+        }
+        const int count = static_cast<int> (std::min<std::size_t> (256, length - position));
+        float* channels[] { out.left.data() + position, out.right.data() + position };
+        countAllocations = true;
+        if (sidechain != nullptr)
+        {
+            const float* side[] { sidechain->data() + position, sidechain->data() + position };
+            engine.process (channels, 2, count, side, 2);
+        }
+        else
+            engine.process (channels, 2, count);
+        countAllocations = false;
+    }
+    return out;
+}
+
+double rmsOf (const std::vector<float>& x, double sr, double from, double to)
+{
+    double sum = 0;
+    const auto a = static_cast<std::size_t> (from * sr), b = std::min (x.size(), static_cast<std::size_t> (to * sr));
+    for (std::size_t i = a; i < b; ++i) sum += static_cast<double> (x[i]) * x[i];
+    return std::sqrt (sum / static_cast<double> (std::max<std::size_t> (1, b - a)));
+}
+
+double dbOf (double value) { return 20.0 * std::log10 (std::max (value, 1.0e-12)); }
+
+void latestSoundAndFeatures()
+{
+    constexpr double sr = 48000;
+    const auto sine = [] (double frequency, double amplitude, double until = 1.0e9) {
+        return [frequency, amplitude, until] (std::size_t i) {
+            const double t = static_cast<double> (i) / sr;
+            return t < until ? static_cast<float> (amplitude * std::sin (2 * pi * frequency * t)) : 0.0f;
+        };
+    };
+    const auto wet = [] (Render r, const std::function<float (std::size_t)>& source) {
+        for (std::size_t i = 0; i < r.left.size(); ++i) { r.left[i] -= source (i); r.right[i] -= source (i); }
+        return r;
+    };
+
+    // Accurate low cut: the whole wet path is a fourth-order Butterworth high-pass, -3 dB at the label.
+    for (const float cut : { 180.0f, 520.0f })
+    {
+        Settings settings; settings.mix = 100; settings.motion = 0; settings.grit = 0; settings.duck = 0;
+        settings.predelay = 0; settings.highCut = 18000; settings.size = 30; settings.decay = 1;
+        const auto source = sine (cut, 0.1);
+        settings.lowCut = cut;
+        const auto filtered = wet (renderWith (settings, 1.5, source), source);
+        settings.lowCut = 80;
+        const auto open = wet (renderWith (settings, 1.5, source), source);
+        const double response = dbOf (rmsOf (filtered.left, sr, 1.0, 1.5) / rmsOf (open.left, sr, 1.0, 1.5));
+        require (std::abs (response + 3.0) < 0.3, "Latest-sound Low cut must be 3 dB down at its label");
+        std::cout << "PASS latest Low cut " << cut << " Hz: " << response << " dB at the label\n";
+    }
+
+    // Grit v2: unity gain for quiet tails, a real ceiling for loud ones.
+    {
+        Settings settings; settings.mix = 100; settings.motion = 0; settings.duck = 0; settings.predelay = 0;
+        settings.lowCut = 180; settings.highCut = 8000; settings.size = 30; settings.decay = 1.5f;
+        const auto quiet = sine (440, 0.01), loud = sine (440, 1.0);
+        settings.grit = 0;
+        const auto quietClean = wet (renderWith (settings, 1.5, quiet), quiet);
+        const auto loudClean = wet (renderWith (settings, 1.5, loud), loud);
+        settings.grit = 100;
+        const auto quietGrit = wet (renderWith (settings, 1.5, quiet), quiet);
+        const auto loudGrit = wet (renderWith (settings, 1.5, loud), loud);
+        const double smallSignal = dbOf (rmsOf (quietGrit.left, sr, 1, 1.5) / rmsOf (quietClean.left, sr, 1, 1.5));
+        float loudPeak = 0, cleanPeak = 0;
+        for (std::size_t i = static_cast<std::size_t> (sr); i < loudGrit.left.size(); ++i)
+        {
+            loudPeak = std::max (loudPeak, std::abs (loudGrit.left[i]));
+            cleanPeak = std::max (cleanPeak, std::abs (loudClean.left[i]));
+        }
+        require (std::abs (smallSignal) < 0.1, "Latest Grit must not change the level of quiet tails");
+        require (loudPeak < cleanPeak * 0.5f && loudPeak < 0.75f, "Latest Grit 100% must hold loud wet peaks near -6 dBFS");
+        std::cout << "PASS latest Grit: quiet tail " << smallSignal << " dB, loud wet peak " << dbOf (cleanPeak)
+                  << " -> " << dbOf (loudPeak) << " dBFS at Grit 100\n";
+    }
+
+    // Duck v2: depth in dB above the threshold, from the dry input or a sidechain.
+    {
+        Settings settings; settings.mix = 100; settings.motion = 0; settings.grit = 0; settings.predelay = 0;
+        settings.size = 30; settings.decay = 1; settings.duckThreshold = -24;
+        const auto source = sine (440, 0.5);
+        settings.duck = 0;
+        const auto open = wet (renderWith (settings, 1.5, source), source);
+        settings.duck = 50;
+        const auto half = wet (renderWith (settings, 1.5, source), source);
+        settings.duck = 100;
+        const auto full = wet (renderWith (settings, 1.5, source), source);
+        const double halfDb = dbOf (rmsOf (half.left, sr, 1, 1.5) / rmsOf (open.left, sr, 1, 1.5));
+        const double fullDb = dbOf (rmsOf (full.left, sr, 1, 1.5) / rmsOf (open.left, sr, 1, 1.5));
+        require (std::abs (halfDb + 15) < 0.5 && std::abs (fullDb + 30) < 0.5, "Latest Duck 50/100% must reduce the wet by 15/30 dB");
+        std::vector<float> key (static_cast<std::size_t> (sr * 1.5), 0.0f);
+        std::fill (key.begin() + static_cast<long> (sr), key.end(), 0.8f);
+        Settings external; external.mix = 100; external.duck = 100; external.duckExternal = true;
+        external.motion = 0; external.grit = 0; external.size = 60; external.decay = 4;
+        const auto tail = renderWith (external, 1.5, sine (440, 0.3, 0.3), nullptr, &key);
+        const double before = dbOf (rmsOf (tail.left, sr, 0.8, 0.95)), during = dbOf (rmsOf (tail.left, sr, 1.05, 1.2));
+        require (during < before - 25, "External sidechain must duck the tail");
+        std::cout << "PASS latest Duck: 50% " << halfDb << " dB, 100% " << fullDb << " dB; sidechain key "
+                  << before << " -> " << during << " dBFS\n";
+    }
+
+    // Freeze holds the tail without loss and takes no new input.
+    {
+        Settings settings; settings.mix = 100; settings.decay = 2; settings.size = 60; settings.highCut = 8000;
+        std::uint32_t random = 7;
+        const auto noise = [&random] (std::size_t i) {
+            random = random * 1664525u + 1013904223u;
+            return i < static_cast<std::size_t> (sr * 0.5) ? (static_cast<float> (random >> 8) / 16777216.0f - 0.5f) * 0.5f : 0.0f;
+        };
+        const auto frozen = renderWith (settings, 25, noise, [] (std::size_t position, Settings& s) {
+            s.freeze = position >= static_cast<std::size_t> (sr * 0.6);
+        });
+        const double early = dbOf (rmsOf (frozen.left, sr, 1, 2)), late = dbOf (rmsOf (frozen.left, sr, 23, 24));
+        require (std::abs (late - early) < 0.5, "Freeze must hold the tail level");
+        std::cout << "PASS freeze holds: " << early << " dBFS at 1 s, " << late << " dBFS at 23 s\n";
+    }
+
+    // Shimmer: stable at maximum with the longest decay, and really pitched.
+    {
+        Settings settings; settings.mix = 100; settings.decay = 18; settings.size = 40; settings.highCut = 12000;
+        settings.lowCut = 200; settings.motion = 0; settings.grit = 0; settings.duck = 0; settings.shimmer = 100;
+        const auto source = sine (440, 0.3, 0.5);
+        const auto shimmer = renderWith (settings, 40, source);
+        float peak = 0;
+        for (const auto value : shimmer.left) { require (std::isfinite (value), "Shimmer must stay finite"); peak = std::max (peak, std::abs (value)); }
+        require (peak < 4 && rmsOf (shimmer.left, sr, 38, 40) < rmsOf (shimmer.left, sr, 1, 2), "Shimmer must stay bounded and decay");
+        // Energy at the octave (880 Hz) relative to 440 Hz, with and without shimmer.
+        const auto octave = [&] (const Render& r) {
+            const auto goertzel = [&] (double f) {
+                double s1 = 0, s2 = 0; const double c = 2 * std::cos (2 * pi * f / sr);
+                for (std::size_t i = static_cast<std::size_t> (sr * 1.5); i < static_cast<std::size_t> (sr * 2.5); ++i)
+                { const double s0 = r.left[i] + c * s1 - s2; s2 = s1; s1 = s0; }
+                return s1 * s1 + s2 * s2 - c * s1 * s2;
+            };
+            return 10 * std::log10 (goertzel (880) / goertzel (440));
+        };
+        settings.shimmer = 0;
+        const auto plain = renderWith (settings, 2.5, source);
+        settings.shimmer = 60;
+        const auto shifted = renderWith (settings, 2.5, source);
+        require (octave (shifted) > octave (plain) + 20, "+12 shimmer must put clear energy an octave up");
+        std::cout << "PASS shimmer: bounded (peak " << peak << ") and pitched (octave/fundamental " << octave (plain)
+                  << " -> " << octave (shifted) << " dB)\n";
+    }
+
+    // THROW! key: 5 ms attack, 500 ms linear release, while THROW stays at 0.
+    {
+        Settings settings; settings.mix = 0; settings.triggerAttack = 5; settings.triggerRelease = 500; settings.triggerAmount = 100;
+        ReverbEngine engine;
+        engine.setSettings (settings);
+        engine.prepare (sr, 64);
+        std::vector<float> levels;
+        Audio block (64);
+        for (int b = 0; b < static_cast<int> (sr / 64); ++b)
+        {
+            settings.triggerHeld = b * 64 >= static_cast<int> (0.1 * sr) && b * 64 < static_cast<int> (0.3 * sr);
+            engine.setSettings (settings);
+            std::fill (block.left.begin(), block.left.end(), 0.1f);
+            std::fill (block.right.begin(), block.right.end(), 0.1f);
+            float* channels[] { block.left.data(), block.right.data() };
+            countAllocations = true;
+            engine.process (channels, 2, 64);
+            countAllocations = false;
+            levels.push_back (engine.getTriggerLevel());
+        }
+        const auto at = [&] (double t) { return levels[static_cast<std::size_t> (t * sr / 64)]; };
+        require (at (0.09) == 0 && at (0.106) == 100 && std::abs (at (0.55) - 50) < 2 && at (0.81) == 0,
+                 "THROW! key must follow its attack and release");
+        std::cout << "PASS THROW! key: 0 -> 100% in 5 ms, half-way 250 ms into a 500 ms release\n";
+    }
+
+    // MIDI-style trigger events at sample offsets.
+    {
+        Settings settings; settings.mix = 0; settings.triggerAttack = 5; settings.triggerRelease = 200;
+        ReverbEngine engine;
+        engine.setSettings (settings);
+        engine.prepare (sr, 128);
+        Audio block (128);
+        float* channels[] { block.left.data(), block.right.data() };
+        const throwup::TriggerEvent on { 10, 80.0f }, off { 100, 0.0f };
+        engine.setTriggerEvents (&on, 1);
+        engine.process (channels, 2, 128);
+        const float rising = engine.getTriggerLevel();
+        engine.process (channels, 2, 128);
+        const float held = engine.getTriggerLevel();
+        engine.setTriggerEvents (&off, 1);
+        engine.process (channels, 2, 128);
+        const float releasing = engine.getTriggerLevel();
+        require (std::abs (rising - 49.2f) < 0.5f && std::abs (held - 80.0f) < 0.01f && releasing < 80.0f && releasing > 79.0f,
+                 "Trigger events must start at their sample offset and follow velocity");
+        std::cout << "PASS MIDI trigger events: velocity 80% reached, release starts at its offset\n";
+    }
+
+    // Auto-catch: a phrase that stops opens a throw about 0.1 s later.
+    {
+        Settings settings; settings.mix = 0; settings.autoCatch = true; settings.catchThreshold = -30; settings.triggerRelease = 400;
+        ReverbEngine engine;
+        engine.setSettings (settings);
+        engine.prepare (sr, 64);
+        Audio block (64);
+        double fired = -1; float maximum = 0;
+        for (int b = 0; b < static_cast<int> (sr * 1.5 / 64); ++b)
+        {
+            for (int i = 0; i < 64; ++i)
+            {
+                const auto n = static_cast<std::size_t> (b * 64 + i);
+                block.left[static_cast<std::size_t> (i)] = block.right[static_cast<std::size_t> (i)]
+                    = n < static_cast<std::size_t> (sr * 0.5) ? static_cast<float> (0.3 * std::sin (2 * pi * 110 * static_cast<double> (n) / sr)) : 0.0f;
+            }
+            float* channels[] { block.left.data(), block.right.data() };
+            engine.process (channels, 2, 64);
+            if (engine.getTriggerLevel() > 1 && fired < 0) fired = b * 64 / sr;
+            maximum = std::max (maximum, engine.getTriggerLevel());
+        }
+        require (fired > 0.55 && fired < 0.7 && maximum > 99, "Auto-catch must throw shortly after the phrase ends");
+        std::cout << "PASS auto-catch: phrase ends at 0.5 s, throw opens at " << fired << " s\n";
+    }
+
+    // Safe clip, Send mode (DRY off) and Return trim.
+    {
+        Settings settings; settings.mix = 100; settings.safeClip = true; settings.size = 0; settings.decay = 18;
+        settings.width = 150; settings.output = 6;
+        const auto clipped = renderWith (settings, 2, [] (std::size_t i) {
+            return static_cast<float> (std::clamp (2.5 * std::sin (2 * pi * 110 * static_cast<double> (i) / sr), -1.0, 1.0)); });
+        float peak = 0;
+        for (std::size_t i = 0; i < clipped.left.size(); ++i) peak = std::max ({ peak, std::abs (clipped.left[i]), std::abs (clipped.right[i]) });
+        require (peak <= 1.0f, "Safe clip must never exceed 0 dBFS");
+        Settings send; send.mix = 0; send.dry = false;
+        const auto silent = renderWith (send, 0.5, sine (110, 0.5));
+        require (rmsOf (silent.left, sr, 0.05, 0.5) == 0.0, "Send mode with THROW at 0 must be silent");
+        Settings trim; trim.mix = 100; trim.motion = 0; trim.grit = 0;
+        const auto source = sine (440, 0.2);
+        const auto full = wet (renderWith (trim, 1.0, source), source);
+        trim.returnTrim = -6;
+        const auto trimmed = wet (renderWith (trim, 1.0, source), source);
+        const double ratio = dbOf (rmsOf (trimmed.left, sr, 0.5, 1.0) / rmsOf (full.left, sr, 0.5, 1.0));
+        require (std::abs (ratio + 6.0) < 0.05, "Return trim must scale only the wet return");
+        std::cout << "PASS Safe peak " << peak << ", Send mode silent at THROW 0, Return -6 dB -> " << ratio << " dB\n";
+    }
+
+    // Swell: rises through the cycle and cuts at the grid line.
+    {
+        Settings settings; settings.mix = 100; settings.swell = true; settings.swellPhaseStep = 1.0 / (2.0 * sr);
+        settings.size = 60; settings.decay = 6;
+        const auto source = sine (330, 0.3);
+        const auto swell = wet (renderWith (settings, 4.2, source, [] (std::size_t position, Settings& s) {
+            s.swellPhase = std::fmod (static_cast<double> (position) / (2.0 * sr), 1.0); }), source);
+        const double start = dbOf (rmsOf (swell.left, sr, 2.0, 2.2)), middle = dbOf (rmsOf (swell.left, sr, 2.9, 3.1));
+        const double end = dbOf (rmsOf (swell.left, sr, 3.7, 3.95)), cut = dbOf (rmsOf (swell.left, sr, 4.003, 4.1));
+        require (start < middle - 20 && middle < end - 15 && cut < end - 60, "Swell must rise through the cycle and cut on the grid");
+        std::cout << "PASS swell: " << start << " / " << middle << " / " << end << " dBFS, then " << cut << " after the cut\n";
+    }
+
+    // Synced pre-delay up to 2.5 s.
+    {
+        Settings settings; settings.mix = 100; settings.predelay = 2000; settings.motion = 0; settings.grit = 0; settings.duck = 0;
+        const auto impulse = renderWith (settings, 2.5, [] (std::size_t i) { return i < 10 ? 0.5f : 0.0f; });
+        std::size_t first = 0;
+        for (std::size_t i = 20; i < impulse.left.size(); ++i) if (std::abs (impulse.left[i]) > 1.0e-6f) { first = i; break; }
+        require (first > static_cast<std::size_t> (sr * 2.0) && first < static_cast<std::size_t> (sr * 2.1), "A 2 s synced pre-delay must delay the wet by 2 s");
+        std::cout << "PASS synced pre-delay: 2000 ms delays the first wet sample to " << static_cast<double> (first) / sr << " s\n";
+    }
+}
+
 void presetsAndStress()
 {
     const auto& presets = throwup::factoryPresets();
+    const auto legacyStart = static_cast<std::size_t> (throwup::legacyPresetStart());
+    require (presets.size() == legacyStart + throwup::legacyPresetCount && legacyStart >= 80,
+             "The bank needs 80+ current rooms followed by the 50 rooms of 0.1.5");
+    // The current bank is contiguous by folder, in menu order.
+    std::size_t index = 0;
+    for (const auto* folder : throwup::presetFolders())
+    {
+        std::size_t inFolder = 0;
+        while (index < legacyStart && presets[index].group == std::string (folder)) { ++index; ++inFolder; }
+        require (inFolder >= 6, std::string ("Every folder needs at least six rooms: ") + folder);
+    }
+    require (index == legacyStart, "Current presets must be grouped by folder in menu order");
     constexpr std::array<const char*, 5> groups { "Small", "Medium", "Large", "Huge", "Creative" };
-    std::set<std::string> names;
+    std::set<std::string> currentNames, legacyNames;
     for (std::size_t p = 0; p < presets.size(); ++p)
     {
         const auto& preset = presets[p];
-        require (preset.group == std::string (groups[p / 10]), "Presets must be grouped in banks of ten");
-        require (names.insert (preset.name).second, "Every factory preset needs a unique name");
-        require (preset.settings.mix == 0 && preset.settings.output == 0 && ! preset.settings.bypass,
-                 "Factory values must leave mix/output/bypass neutral");
-        auto settings = preset.settings;
+        const bool legacy = p >= legacyStart;
+        require (preset.legacy == legacy, "Only the last 50 presets are the 0.1.5 rooms");
+        require (preset.room.version == (legacy ? SoundVersion::v015 : SoundVersion::latest),
+                 "0.1.5 rooms play with the 0.1.5 sound and current rooms with the latest sound");
+        if (legacy)
+            require (preset.group == std::string (groups[(p - legacyStart) / 10]), "0.1.5 presets keep their groups of ten");
+        require ((legacy ? legacyNames : currentNames).insert (preset.name).second, "Preset names must be unique within a bank");
+        auto settings = throwup::settingsFor (preset.room, 140.0);
         settings.mix = 100;
-        const auto audio = wetImpulse (48000, settings, 0.75);
+        // Long synced pre-delays (a half note at 140 BPM is 857 ms) arrive later.
+        const auto audio = wetImpulse (48000, settings, 0.75 + settings.predelay * 0.001);
         require (energy (audio, 0, audio.left.size()) > 1.0e-7, "Every preset must produce a tail");
         for (std::size_t i = 0; i < audio.left.size(); ++i)
             require (std::isfinite (audio.left[i]) && std::isfinite (audio.right[i])
                      && std::abs (audio.left[i]) < 4 && std::abs (audio.right[i]) < 4,
                      "Factory impulse renders must remain finite and bounded");
     }
+    for (std::size_t i = 0; i < throwup::legacyPresetCount; ++i)
+        require (presets[legacyStart + i].name == std::string (presets[i].name),
+                 "The reworked rooms keep the 0.1.5 names and order");
 
     ReverbEngine engine;
     engine.prepare (96000, 64);
-    Settings settings;
+    Settings settings = makeSettings();
     settings.mix = 100; settings.decay = 18; settings.size = 100;
     settings.diffusion = 100; settings.motion = 100; settings.grit = 100;
     settings.width = 150; settings.duck = 0; settings.output = 6;
+    // Every 0.2.0 feature at once: shimmer, swell, freeze and trigger toggling below.
+    settings.shimmer = 100; settings.swell = true; settings.swellPhaseStep = 1.0 / 48000.0;
+    settings.triggerAmount = 100; settings.autoCatch = true;
     engine.setSettings (settings);
     Audio block (1024);
     std::uint32_t random = 0x43218765u;
@@ -706,6 +1030,10 @@ void presetsAndStress()
             settings.lowCut = iteration % 62 == 0 ? 80.0f : 1000.0f;
             settings.highCut = iteration % 62 == 0 ? 1000.0f : 18000.0f;
             settings.mix = iteration % 62 == 0 ? 0.0f : 100.0f;
+            settings.freeze = iteration % 93 == 0 ? ! settings.freeze : settings.freeze;
+            settings.triggerHeld = iteration % 124 == 0;
+            settings.version = iteration % 155 == 0 ? SoundVersion::v015 : SoundVersion::latest;
+            settings.predelay = iteration % 186 == 0 ? 2500.0f : settings.predelay;
             engine.setSettings (settings);
         }
         for (std::size_t i = 0; i < block.left.size(); ++i)
@@ -733,7 +1061,7 @@ void presetsAndStress()
     }
     require (peak < 12, "Extreme parameter modulation must stay bounded");
     require (realtimeAllocations == 0, "Audio processing must never allocate memory");
-    std::cout << "50 presets verified; extreme-automation peak " << peak
+    std::cout << presets.size() << " presets verified; extreme-automation peak " << peak
               << "; realtime allocations " << realtimeAllocations << '\n';
 }
 } // namespace
@@ -743,17 +1071,25 @@ int main()
     try
     {
         require (Settings {}.mix == 0.0f, "Default THROW must be a silent return over unchanged dry");
-        for (const double sampleRate : { 44100.0, 48000.0, 96000.0, 192000.0 })
+        for (const auto version : { SoundVersion::v015, SoundVersion::latest })
         {
-            dryAndBypass (sampleRate);
-            timingAndBlocks (sampleRate);
-            parallelReturn (sampleRate);
-            automatedReturn (sampleRate);
-            filteringDecayAndStereo (sampleRate);
-            std::cout << "PASS " << sampleRate << " Hz: exact dry/bypass, parallel return, wet-only path, "
-                         "4 ms automation, mono/stereo, output trim, timing, blocks, filtering, decay\n";
+            testVersion = version;
+            const char* name = version == SoundVersion::v015 ? "0.1.5 sound" : "latest sound";
+            for (const double sampleRate : { 44100.0, 48000.0, 96000.0, 192000.0 })
+            {
+                dryAndBypass (sampleRate);
+                timingAndBlocks (sampleRate);
+                parallelReturn (sampleRate);
+                automatedReturn (sampleRate);
+                filteringDecayAndStereo (sampleRate);
+                std::cout << "PASS " << sampleRate << " Hz, " << name << ": exact dry/bypass, parallel return, wet-only path, "
+                             "4 ms automation, mono/stereo, output trim, timing, blocks, filtering, decay\n";
+            }
+            std::cout << name << ": ";
+            longDecayHeadroom();
         }
-        longDecayHeadroom();
+        testVersion = SoundVersion::latest;
+        latestSoundAndFeatures();
         sizeChangeWithoutZipper();
         predelayChangeWithoutPitchGlide();
         bypassFadesWithoutClicks();

@@ -1,41 +1,145 @@
-# THROW-UP 0.1.4 verification
+# THROW-UP 0.2.0 verification
 
-Native Apple Silicon VST3 for macOS 12 or later, built with JUCE 9.0.2. Installer and plugin are locally ad hoc signed, not Apple-notarized.
+Native Apple Silicon VST3 and Audio Unit for macOS 12 or later, built with JUCE 9.0.2. Locally ad hoc signed, not Apple-notarized. Nothing was installed into `~/Library` or `/Library` while testing, and the tests never touch the real user-presets folder.
 
-## Change and reason
+## Old projects play identically
 
-The previous release preserved dry correctly but its filtered, ducked, energy-normalised reverb return was too quiet. Earlier tests proved that tails existed without requiring useful wet level. This release adds a fixed +18 dB (7.943282347×) gain to the wet return, after filtering, saturation, width and ducking, outside the feedback loop. It applies to both mono and stereo. Dry gain, linear THROW range and 4 ms ramp remain unchanged. Preset values, names, 13 parameter IDs, order, state format, VST3 identities and preset-automation behavior are retained.
+`ThrowUpHostTests --compat <0.1.5 payload VST3> <new VST3>` loads the released THROW-UP 0.1.5 (from the Vivid Fever Dreams Suite 1.2.2 payload, read-only copy) and this build side by side as VST3 plug-ins. For each case it sets a room and settings in 0.1.5, saves 0.1.5's own project state, renders audio, loads that state into this build, and renders the same audio.
 
-This is return calibration, not a change to the overall Output setting or a limiter. The reverb decay and grit are not driven harder internally. THROW zero and Bypass remain exact dry paths. Nonzero THROW in saved sessions now produces a stronger effect.
+There are 600 cases: all 50 rooms × three THROW/Output settings (100%/0 dB, 37.5%/+3 dB, 0%/−4 dB) × 44.1, 48, 96 and 192 kHz, using variable block sizes from 1 to 1,024 samples and mono for one room in seven.
 
-## Musical level regression
+Result: **600/600 renders bit-identical; maximum difference 0.** The VST3 identity is unchanged.
 
-The new WetLevelAudit measures all 50 presets against harmonic mid-bass, detuned reese and repeated bass stabs at 48 kHz. The sources have matched active RMS of -14.8945 dBFS. Sustained notes last 1.6 seconds; the stab source uses four 160 ms hits. THROW is 100%, Output is 0 dB. The original input is subtracted to isolate wet audio. Measurements separate active notes, strongest 100 ms, first-arrival 100 ms and the first 250 ms after a note; they do not use whole-clip RMS that rewards long decays.
+The same promise is checked inside the host suite:
 
-Across all 150 preset/source pairs, every measured wet window rises exactly 18.0000 dB relative to 0.1.3. Small-room active wet median improves from -16.51 to +1.49 dB versus dry, and Medium from -18.45 to -0.45 dB. Their strongest-window medians are now +2.75 and +3.36 dB; the quietest Small/Medium strongest window is -4.76 dB. Separate first-arrival and post-note limits ensure that short rooms cannot pass only by accumulating a long tail. Large/Huge and deliberately band-limited Creative presets use suitable separate floors.
+- A 0.1.5 state restores all 13 settings, keeps the 0.1.5 sound, and recalls its room from the 0.1.5 bank by its old number.
+- Every new control starts neutral.
+- A 0.1.0–0.1.3 state (no schema) also keeps the 0.1.5 sound.
+- New instances use the latest sound.
+- **Use latest sound** is a single undoable host edit and can be switched back.
 
-The corrected build passes 150/150 audibility cases; the saved 0.1.3 engine passes only 11/150. Baseline and corrected CSVs, thresholds and summary are included in Checks. An independent shorter-note fixture also found an exact 18 dB increase across the bank, with Small/Medium active medians moving from -20.2/-24.5 to -2.2/-6.5 dB versus dry.
+The VST3 test confirms that THROW keeps parameter ID 108124 and every 0.1.5 parameter keeps its ID.
 
-At full THROW the loudest audit fixture reaches +6.44 dBFS combined peak. Floating-point headroom is intentional: use Output trim for hot sources or intense throws. This release applies no limiter or automatic dry attenuation. The narrow, maximum-decay resonance check allows a bounded wet peak below 4.0 rather than the old 0.85 ceiling, checks decay afterward, and verifies that -18 dB Output recovers headroom without altering wet/dry balance. Measured resonance wet peak is 3.08931; combined peak with trim is 0.434255.
+**Why it can be identical.** Every change made since 0.1.5 leaves a steady sound bit-exact, including the earlier fixes for size crackle, pre-delay pitch bends, bypass clicks and block-stepped THROW automation. Each new feature is off by default and adds nothing to the signal path until it is used. A tiny parameter-snapping residue (a restored "0 dB" Output or Return can be 3.6e-7 dB) is treated as exact unity, so a restored 0 dB really is 0 dB.
 
-## Before/after audio
+## Results (verbatim)
 
-The included 37.25-second comparison plays dry → 0.1.3 → 0.1.4 for Orange Crate (Small), then Back Room (Medium). Separate 18.5-second examples and a timing guide are included. Sources and gain are identical, with no normalization, gain matching or limiting. Samples verify that the new wet signal equals the old wet signal times the +18 dB gain within 24-bit PCM roundoff. Dry is sample-identical. Exported peaks are -0.74 dBFS for Small and -3.73 dBFS for Medium, with no clipping.
+`ctest --test-dir build --output-on-failure`
 
-## Compatibility checks
+```
+1/2 Test #1: ThrowUpDsp .......................   Passed
+2/2 Test #2: ThrowUpWetLevels .................   Passed
+100% tests passed, 0 tests failed out of 2
+```
 
-Pluginval passes at strictness 5, including processing, state, automation, editor automation and bus layouts across 44.1/48/96 kHz and 64–1024-sample blocks. It runs with normal macOS application access and does not install the plugin or edit a DAW project. The optimized DSP suite and AddressSanitizer/UndefinedBehaviorSanitizer suite passed at 44.1/48/96/192 kHz, with zero audio-processing allocations and no sanitizer findings. Checks retain exact dry/bypass, parallel summation, mono/stereo, wet-only pre-delay, the 4 ms THROW ramp, variable blocks, filtering, decay, all presets and invalid-input stress. Extreme automation peak is 6.31031 in the deliberate hot-input stress case.
+`ThrowUpDspTests` runs the core suites with both sound versions:
 
-The native host suite passes with 50 factory presets, stable controls and saved state, exact VST3/reference output (maximum difference 0), audible reverb on silent input, native/compact editor renders and INFO-page checks. Preset menu and arrow callbacks preserve THROW without unwanted gestures; manual knob edits still record normal automation.
+```
+PASS 44100/48000/96000/192000 Hz, 0.1.5 sound: exact dry/bypass, parallel return, wet-only path, 4 ms automation, mono/stereo, output trim, timing, blocks, filtering, decay
+0.1.5 sound: Long-decay wet peak 3.08931; output-trimmed parallel peak 0.434255
+PASS 44100/48000/96000/192000 Hz, latest sound: (same checks)
+latest sound: Long-decay wet peak 3.77331; output-trimmed parallel peak 0.525956
+PASS latest Low cut 180 Hz: -3.00358 dB at the label
+PASS latest Low cut 520 Hz: -3.01035 dB at the label
+PASS latest Grit: quiet tail -0.00671921 dB, loud wet peak 4.74121 -> -2.88831 dBFS at Grit 100
+PASS latest Duck: 50% -15 dB, 100% -30 dB; sidechain key -2.31059 -> -34.4109 dBFS
+PASS freeze holds: -12.1845 dBFS at 1 s, -12.1621 dBFS at 23 s
+PASS shimmer: bounded (peak 2.07112) and pitched (octave/fundamental -40.6105 -> -6.38102 dB)
+PASS THROW! key: 0 -> 100% in 5 ms, half-way 250 ms into a 500 ms release
+PASS MIDI trigger events: velocity 80% reached, release starts at its offset
+PASS auto-catch: phrase ends at 0.5 s, throw opens at 0.602667 s
+PASS Safe peak 1, Send mode silent at THROW 0, Return -6 dB -> -6 dB
+PASS swell: -78.5156 / -37.3789 / -12.0607 dBFS, then -98.2314 after the cut
+PASS synced pre-delay: 2000 ms delays the first wet sample to 2.03906 s
+PASS Size change mid-tail (Back Room -> Event Horizon): >6 kHz share -58.8352 dB before, -57.4486 dB after
+PASS pre-delay 24 -> 105 ms: 1 kHz energy share 0.999995 / 0.999999 (also 0 -> 250 and 7 -> 34 ms)
+PASS bypass during tail: largest step 0.137508 vs natural 0.245053
+PASS bypass/un-bypass with -12 dB output: largest step 0.00628316 vs natural 0.00628319
+PASS block-rate THROW automation: largest deviation from host curve 0.000191675% THROW
+140 presets verified; extreme-automation peak 4.47637; realtime allocations 0
+All THROW-UP DSP tests passed.
+```
 
-The installer passes 43 isolated checks, including payload hashes, update/rollback and preservation of other plugins. The copied VST3 and installer have verified local signatures. Screenshots, icons, original dry/throws demo and the new level comparisons are included.
+The DSP suite also passes under AddressSanitizer and UndefinedBehaviorSanitizer.
 
-The actual installer payload also passes the raw VST3 callback regression: 200 preset selections (50 menu, 50 previous, 50 next, 50 host Program) over 950 queued THROW-automation blocks, stable parameter ID 108124, no preset-originated THROW/Program edits or global parameter-cache resets, and maximum audio error 0 against the direct processor. Manual THROW gestures still record normally.
+- **Extreme automation** (peak 4.48): Size, pre-delay (up to 2.5 s), filters, THROW, Freeze, the THROW! key and the sound version jump every 31 blocks with shimmer, swell and Auto-catch on.
+- **Shimmer stress** (separate run): decay 18 s, sizes 0/40/100, every pitch, sines from 45 Hz to 1 kHz, 50% and 100% shimmer. Every tail decays (worst case −82 dB over 27 s) and stays finite.
 
-Both registered CTest checks pass: core DSP and all 150 musical-level cases. The optional comparison renderer also builds through CMake. Reproducible commands are in README.md.
+`ThrowUpWetLevelAudit build/wet-level-audit.csv factory --verify`
 
-## Limits and compatibility
+```
+Audited 140 presets x 3 mid-bass sources at 100% THROW; mode=factory, dry active RMS=-14.8945 dBFS
+0.1.5 bank (Legacy 0.1.5 folder): Maximum wet peak 6.1806 dBFS; maximum parallel-output peak 6.4423 dBFS (floating-point headroom).
+Latest bank: Maximum wet peak 8.15442 dBFS; maximum parallel-output peak 8.15442 dBFS.
+Latest bank on hot riddim sources (peak -0.5 dBFS): combined peak 17.0859 dBFS (Glass Pebble); with Safe clip 0 dBFS.
+PASS: 150/150 0.1.5 preset/source pairs meet active, strongest 100 ms, first-arrival, and post-note audibility floors.
+PASS: 270/270 latest preset/source pairs meet their folder's audibility floors.
+```
 
-The audio examples use synthesized bass, not the user's stems. An actual Ableton Live session, Live automation recording, freeze/flatten and Live export have not been tested. No installation into the user's plugin folder was performed. The release contains an Apple Silicon VST3, not Intel, Windows, AU or AAX binaries.
+The 0.1.5 bank numbers are identical to 0.1.5's own audit, and its 150 CSV rows are byte-identical (apart from the new bank column). Per-folder levels are in PRESETS.md.
 
-A DAW's generic Program display can lag behind the plugin's own preset menu because the global program-change notification remains suppressed to preserve THROW automation. The internal preset display, saved selection and host-originated Program selection remain correct. Existing sessions retain parameter mappings but play stronger nonzero throws; keep an older release for exact recall of its previous sound.
+`ThrowUpHostTests <screenshots folder> <THROW-UP.vst3>`: every check passes, ending `THROW-UP host checks passed`. It covers:
+
+- all 140 menu/arrow/host-program selections keep THROW, Output and Bypass, with scoped, balanced gestures;
+- the 0.1.5-state cases above;
+- user presets in a scratch folder: saved in the chosen folder; saving a taken name makes "Name 2" and the original file is byte- and date-unchanged; loading restores the room and keeps THROW; the project remembers the name; the menu lists them;
+- A/B (B starts as A, both recall, both are saved with the project);
+- the size menu rule (a size fits if its width ≤ the screen width and its height + 60 ≤ the screen height), the chosen size applied and saved;
+- MIDI note-on throw, note-off release, and note-picks-room;
+- the sidechain bus (off by default; mono/stereo accepted, surround rejected; External ducking works);
+- no overlapping controls on any display page;
+- all the 0.1.5-era checks;
+- the built VST3 hosted in-process: 34 controls, state round trip, zero latency, maximum difference 0 against the tested processor.
+
+`ThrowUpVstPresetAutomation <THROW-UP.vst3>`
+
+```
+Packaged/reference maximum audio error 0
+PASS actual VST3: 140 menu, 140 previous, 140 next, 140 host Program selections; 2660 automated blocks; stable THROW ID 108124; maximum audio error 0
+PASS no THROW/Program edits or global parameter-cache invalidation during preset selection
+PASS manual THROW drag still records normal VST3 automation gestures
+```
+
+It also checks that the controller exposes exactly 34 controls plus Program, and none of JUCE's 2,080 "MIDI CC" proxy parameters, which are turned off because THROW-UP only needs MIDI notes.
+
+`ThrowUpHostTests --au <THROW-UP.component>` (Audio Unit, registered for the test process only, from the build folder):
+
+```
+AU identity: type aumf, subtype Thr1, manufacturer Yoib
+AU buses as hosted: inputs 2 (4 channels), outputs 1 (2 channels)
+PASS AU bundle identifier com.yoiboi.throwup / AU version 0.2.0 / AU registered for this process only / AU scans as one plugin
+PASS (x9) AU instantiates, exposes every program and parameter, reports zero latency
+PASS (x9) AU audio is finite, matches the tested processor and leaves a tail
+PASS (x9) AU state recalls every parameter into a new instance
+AU validated in-process at 44.1/48/96 kHz with 64/512/1024-sample blocks
+```
+
+After a state recall the AU host reports "no factory preset" rather than the saved program number. THROW-UP's own display still shows the saved room.
+
+`pluginval --strictness-level 5` on the built VST3, with `HOME` pointed at a scratch folder: **SUCCESS**. All sections ran: scan, open (cold/warm), info, programs, editor, editor while processing, audio processing, state, automation, editor automation, automatable parameters, auval, VST3 validator, and the bus tests.
+
+## Screenshots
+
+The host suite renders: every display page (ROOM, THROW, SPACE, MIX), the 0.1.5-sound badge, the keys lit (THROW! held with its cream arc, FREEZE, SAFE, SEND), 90%, 100%, 125% and 150% sizes, the compact host size, the INFO page, the meters, and the Save dialog. These were inspected for overlaps, clipping and small text.
+
+## Earlier fixes included in 0.2.0
+
+These changes since 0.1.5 leave a steady sound identical:
+
+- **Size and preset changes:** no more crackle (delay lengths are smooth per sample) or pitch dive. Small moves glide gently and big jumps crossfade over 40 ms.
+- **Pre-delay changes:** crossfade instead of bending the pitch.
+- **Bypass:** fades over 15 ms both ways, and the reverb stops taking input while bypassed.
+- **THROW automation:** follows the host curve inside each audio block (never faster than 4 ms full range).
+- **Meters:** hold every block's peak.
+- **Preset menu:** choosing the current room again reverts your edits.
+- **Output:** double-click resets it to 0 dB.
+- **Projects from newer versions:** these load safely.
+
+## Limits
+
+- **Real DAW sessions:** Ableton Live, Logic and other hosts were not driven in this check. The VST3 and AU were hosted in-process by JUCE and by pluginval.
+- **Audio Unit type:** the AU is a MIDI-controlled effect (`aumf`) so that Logic can send it MIDI for throws.
+- **Freeze:** a frozen tail holds exactly. Shimmer pauses while frozen.
+- **Shimmer:** keeps the loop's decay time, but octave-up content is darkened by High cut on each pass.
+- **Loud sources at full THROW:** these still produce peaks well above 0 dBFS, as 0.1.5 did. Use Return, Output or SAFE.
+- **0.1.5 rooms:** keep 0.1.5's low cut, which is about 2.5 times above its label.

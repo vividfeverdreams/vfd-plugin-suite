@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.22)
-project(ThrowUp VERSION 0.1.5 LANGUAGES C CXX)
+project(ThrowUp VERSION 0.2.0 LANGUAGES C CXX)
 if(APPLE)
   enable_language(OBJCXX)
   set(CMAKE_OSX_DEPLOYMENT_TARGET "12.0" CACHE STRING "Minimum macOS version")
@@ -20,11 +20,14 @@ add_subdirectory("${JUCE_SOURCE_DIR}" "${CMAKE_BINARY_DIR}/JUCE")
 juce_add_binary_data(ThrowUpAssets SOURCES Assets/AppIcon.png Assets/DeviceShell-fullbleed.png ../shared/VfdLogo.svg Assets/ChakraPetch-SemiBold.ttf Assets/ChakraPetch-BoldItalic.ttf)
 juce_add_plugin(ThrowUp
   COMPANY_NAME "VIVID FEVER DREAMS" BUNDLE_ID com.yoiboi.throwup
-  PLUGIN_MANUFACTURER_CODE Yoib PLUGIN_CODE Thr1 FORMATS VST3 PRODUCT_NAME "THROW-UP"
+  PLUGIN_MANUFACTURER_CODE Yoib PLUGIN_CODE Thr1 FORMATS VST3 AU PRODUCT_NAME "THROW-UP"
   ICON_BIG "${CMAKE_CURRENT_SOURCE_DIR}/Assets/AppIcon.png"
   ICON_SMALL "${CMAKE_CURRENT_SOURCE_DIR}/Assets/AppIcon.png"
   DESCRIPTION "Mid-bass reverb throws"
-  IS_SYNTH FALSE NEEDS_MIDI_INPUT FALSE NEEDS_MIDI_OUTPUT FALSE IS_MIDI_EFFECT FALSE
+  # MIDI input drives the THROW trigger (note-on throws, note picks room). The
+  # VST3 class IDs and parameter IDs are unchanged; VST3 gains an event bus.
+  IS_SYNTH FALSE NEEDS_MIDI_INPUT TRUE NEEDS_MIDI_OUTPUT FALSE IS_MIDI_EFFECT FALSE
+  AU_MAIN_TYPE kAudioUnitType_MusicEffect
   EDITOR_WANTS_KEYBOARD_FOCUS TRUE COPY_PLUGIN_AFTER_BUILD FALSE)
 target_sources(ThrowUp PRIVATE Source/ThrowUpProcessor.cpp Source/ThrowUpEditor.cpp Source/ReverbEngine.cpp Source/Presets.cpp)
 target_include_directories(ThrowUp PUBLIC Source PRIVATE ../shared)
@@ -38,12 +41,21 @@ target_compile_definitions(ThrowUp PUBLIC JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0 JUC
 get_target_property(_throwup_interface_definitions ThrowUp INTERFACE_COMPILE_DEFINITIONS)
 list(FILTER _throwup_interface_definitions EXCLUDE REGEX "^JUCE_STANDALONE_APPLICATION=")
 set_target_properties(ThrowUp PROPERTIES INTERFACE_COMPILE_DEFINITIONS "${_throwup_interface_definitions}")
-target_compile_definitions(ThrowUp_VST3 PRIVATE JUCE_STANDALONE_APPLICATION=JucePlugin_Build_Standalone)
-if(APPLE)
-  add_custom_command(TARGET ThrowUp_VST3 POST_BUILD
-    COMMAND /usr/bin/codesign --force --deep --sign - "$<TARGET_BUNDLE_DIR:ThrowUp_VST3>"
-    COMMAND /usr/bin/codesign --verify --deep --strict "$<TARGET_BUNDLE_DIR:ThrowUp_VST3>" VERBATIM)
+# THROW-UP takes MIDI notes only. JUCE would otherwise publish 2,080 "MIDI CC"
+# proxy parameters on the VST3 controller (16 channels x 130 controllers).
+if(TARGET ThrowUp_VST3)
+  target_compile_definitions(ThrowUp_VST3 PRIVATE JUCE_VST3_EMULATE_MIDI_CC_WITH_PARAMETERS=0)
 endif()
+foreach(_throwup_format ThrowUp_VST3 ThrowUp_AU)
+  if(TARGET ${_throwup_format})
+    target_compile_definitions(${_throwup_format} PRIVATE JUCE_STANDALONE_APPLICATION=JucePlugin_Build_Standalone)
+    if(APPLE)
+      add_custom_command(TARGET ${_throwup_format} POST_BUILD
+        COMMAND /usr/bin/codesign --force --deep --sign - "$<TARGET_BUNDLE_DIR:${_throwup_format}>"
+        COMMAND /usr/bin/codesign --verify --deep --strict "$<TARGET_BUNDLE_DIR:${_throwup_format}>" VERBATIM)
+    endif()
+  endif()
+endforeach()
 option(THROW_UP_BUILD_TESTS "Build audio and plugin checks" ON)
 if(THROW_UP_BUILD_TESTS)
   add_executable(ThrowUpDspTests Tests/DspTests.cpp Source/ReverbEngine.cpp Source/Presets.cpp)
@@ -61,13 +73,21 @@ if(THROW_UP_BUILD_TESTS)
   target_include_directories(ThrowUpHostTests PRIVATE Source)
   target_link_libraries(ThrowUpHostTests PRIVATE ThrowUp ThrowUpAssets juce::juce_audio_utils
     juce::juce_recommended_config_flags juce::juce_recommended_warning_flags)
-  target_compile_definitions(ThrowUpHostTests PRIVATE JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0 JUCE_PLUGINHOST_VST3=1)
+  # Hosts the built VST3 and AU in-process (the AU is registered for this process
+  # only, from the build folder) and the read-only 0.1.5 payload for compatibility.
+  target_compile_definitions(ThrowUpHostTests PRIVATE JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0
+    JUCE_PLUGINHOST_VST3=1 JUCE_PLUGINHOST_AU=1)
+  if(APPLE)
+    target_link_libraries(ThrowUpHostTests PRIVATE "-framework AudioUnit" "-framework CoreAudioKit")
+  endif()
   if(APPLE)
     # This regression host inspects callbacks from the shipping VST3 bundle.
     # Its concrete controller test hook requires the same JUCE wrapper version.
     juce_add_console_app(ThrowUpVstPresetAutomation PRODUCT_NAME "THROW-UP VST3 Automation Tests")
     target_sources(ThrowUpVstPresetAutomation PRIVATE Tests/VstPresetAutomation.cpp)
-    set_source_files_properties(Tests/VstPresetAutomation.cpp PROPERTIES LANGUAGE OBJCXX)
+    # Same wrapper configuration as the shipping VST3 (no MIDI-CC proxy parameters).
+    set_source_files_properties(Tests/VstPresetAutomation.cpp PROPERTIES LANGUAGE OBJCXX
+      COMPILE_DEFINITIONS JUCE_VST3_EMULATE_MIDI_CC_WITH_PARAMETERS=0)
     target_include_directories(ThrowUpVstPresetAutomation PRIVATE Source)
     target_link_libraries(ThrowUpVstPresetAutomation PRIVATE ThrowUp ThrowUpAssets juce::juce_audio_utils
       juce::juce_recommended_config_flags juce::juce_recommended_warning_flags)

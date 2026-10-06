@@ -95,7 +95,9 @@ Samples source()
 
 Samples render(const Samples& dry, int preset)
 {
-    auto settings = throwup::factoryPresets()[static_cast<size_t>(preset)].settings;
+    // This comparison renderer documents the 0.1.3 -> 0.1.4 return change, so it
+    // renders the original rooms with the 0.1.5 sound (the Legacy 0.1.5 bank).
+    auto settings = throwup::settingsFor(throwup::factoryPresets()[static_cast<size_t>(throwup::legacyPresetStart() + preset)].room);
     settings.mix = 100.0f;
     settings.output = 0.0f;
     settings.bypass = false;

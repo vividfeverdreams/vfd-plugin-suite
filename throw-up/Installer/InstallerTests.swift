@@ -244,7 +244,7 @@ func runInstallerTests() throws {
                "ticking AU installs the Audio Unit into Components, skips the identical VST3 and refreshes the AU list once")
     try expect(try InstallerEngine.fileHashes(in: destinationAU) == manifest.audioUnitFiles
                && (try InstallerEngine.identity(at: destinationAU, format: .au)).audioUnits == [InstallerEngine.audioUnit],
-               "the installed AU is byte-identical and registers aufx/Thr1/Yoib")
+               "the installed AU is byte-identical and registers aumf/Thr1/Yoib")
     try fm.removeItem(at: destinationAU)
     try fm.copyItem(at: previousAU, to: destinationAU)
     let auUpdate = try engine().install(formats: [.au])
