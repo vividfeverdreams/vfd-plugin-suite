@@ -1,6 +1,7 @@
 #include "LiveScratchEngine.h"
 #include <algorithm>
 #include <cmath>
+#include <functional>
 #include <limits>
 #include <new>
 
@@ -11,7 +12,10 @@ constexpr int radius = LiveScratchEngine::interpolationGuardSamples;
 constexpr int taps = radius * 2;
 constexpr int phaseSteps = 256;
 constexpr int phaseRows = phaseSteps + 1;
-constexpr int rateSteps = 49;
+// 48 rows per unit of speed, from 1x to 4x. Rows 0..48 (1x..2x) are exactly
+// the 0.10 table; Depth uses the rows above 2x.
+constexpr int rateStepsPerUnit = 48;
+constexpr int rateSteps = 3 * rateStepsPerUnit + 1;
 
 // The table is built from prepare(), never from the audio callback. Rate and
 // phase interpolation avoid zippering when a curved scratch changes speed.
@@ -19,7 +23,7 @@ struct KernelTable {
     std::vector<float> values;
     KernelTable() : values(static_cast<std::size_t>(rateSteps * phaseRows * taps)) {
         for (int speedRow = 0; speedRow < rateSteps; ++speedRow) {
-            const double speed = 1.0 + static_cast<double>(speedRow) / (rateSteps - 1);
+            const double speed = 1.0 + static_cast<double>(speedRow) / rateStepsPerUnit;
             const double cutoff = 1.0 / speed;
             for (int phase = 0; phase < phaseRows; ++phase) {
                 const double fraction = static_cast<double>(phase) / phaseSteps;
@@ -48,6 +52,10 @@ double finiteOr(double value, double fallback) noexcept
 }
 
 double smoothStep(double x) noexcept { return x * x * (3.0 - 2.0 * x); }
+
+// Intentional exact comparison: the 0.10 defaults must skip every extra
+// operation so their output stays bit-identical.
+bool exactly(double a, double b) noexcept { return std::equal_to<double>()(a, b); }
 }
 
 void LiveScratchEngine::LinearPhaseFilter::prepare(int halfLength, double normalizedCutoff)
@@ -106,7 +114,10 @@ void LiveScratchEngine::BassExtractor::prepare(double sampleRate)
         baseRate *= 0.5;
     }
     const int baseRadius = std::max(16, static_cast<int>(std::lround(baseRate * 128.0 / 12000.0)));
-    base.prepare(baseRadius, crossoverHz / baseRate);
+    // Same length for every split: the choice never changes the latency.
+    for (std::size_t split = 0; split < bases.size(); ++split)
+        bases[split].prepare(baseRadius, splitFrequencies[split] / baseRate);
+    blendStep = 1.0 / std::max(1.0, baseRate * 0.02);
     delay += baseRadius * stride;
     reset();
 }
@@ -119,12 +130,33 @@ void LiveScratchEngine::BassExtractor::reset() noexcept
         stage.up.reset();
         stage.even = true;
     }
-    base.reset();
+    for (auto& base : bases) base.reset();
+    previous = selected;
+    blend = 1.0;
+}
+
+void LiveScratchEngine::BassExtractor::select(int split) noexcept
+{
+    split = std::clamp(split, 0, static_cast<int>(bases.size()) - 1);
+    if (split == selected) return;
+    // A change during a blend continues from whichever filter dominates now.
+    previous = blend < 0.5 ? previous : selected;
+    selected = split;
+    blend = 0.0;
 }
 
 double LiveScratchEngine::BassExtractor::process(double input, int level) noexcept
 {
-    if (level == stageCount) return base.process(input);
+    if (level == stageCount) {
+        std::array<double, splitFrequencies.size()> lower {};
+        for (std::size_t split = 0; split < bases.size(); ++split) lower[split] = bases[split].process(input);
+        const auto chosen = static_cast<std::size_t>(selected);
+        if (blend >= 1.0) return lower[chosen];
+        // A 20 ms blend avoids a step in the protected layer.
+        blend = std::min(1.0, blend + blendStep);
+        const auto from = static_cast<std::size_t>(previous);
+        return lower[from] + smoothStep(blend) * (lower[chosen] - lower[from]);
+    }
     auto& stage = stages[static_cast<std::size_t>(level)];
     const double down = stage.down.process(input);
     const double inner = stage.even ? process(down, level + 1) : 0.0;
@@ -133,11 +165,16 @@ double LiveScratchEngine::BassExtractor::process(double input, int level) noexce
 }
 
 
+std::size_t LiveScratchEngine::framesFor(double seconds) const noexcept
+{
+    return static_cast<std::size_t>(std::ceil(rate * std::max(0.0, seconds)))
+        + static_cast<std::size_t>(latencySamples() + taps * 2);
+}
+
 bool LiveScratchEngine::allocateHistory(double seconds) noexcept
 {
     try {
-        const auto frames = static_cast<std::size_t>(std::ceil(rate * seconds))
-            + static_cast<std::size_t>(latencySamples() + taps * 2);
+        const auto frames = framesFor(seconds);
         if (frames > static_cast<std::size_t>(std::numeric_limits<int>::max())
             || frames > memoryLimit / (history.size() * sizeof(float)))
             throw std::bad_alloc();
@@ -153,6 +190,57 @@ bool LiveScratchEngine::allocateHistory(double seconds) noexcept
     }
 }
 
+bool LiveScratchEngine::requestHistory(double seconds) noexcept
+{
+    collectRetiredHistory();
+    if (historyHandoff.load(std::memory_order_acquire) != 0) return false;
+    seconds = std::clamp(finiteOr(seconds, defaultHistorySeconds), 0.0, static_cast<double>(maximumHistorySeconds));
+    try {
+        const auto frames = framesFor(seconds);
+        if (frames > static_cast<std::size_t>(std::numeric_limits<int>::max())
+            || frames > memoryLimit / (spareHistory.size() * sizeof(float)))
+            return false;
+        for (auto& channel : spareHistory) channel.assign(frames, 0.0f);
+        spareCapacity = static_cast<int>(frames);
+        spareSeconds = seconds;
+    } catch (...) {
+        for (auto& channel : spareHistory) std::vector<float>().swap(channel);
+        spareCapacity = 0;
+        return false;
+    }
+    historyHandoff.store(1, std::memory_order_release);
+    return true;
+}
+
+void LiveScratchEngine::collectRetiredHistory() noexcept
+{
+    if (historyHandoff.load(std::memory_order_acquire) != 2) return;
+    for (auto& channel : spareHistory) std::vector<float>().swap(channel);
+    spareCapacity = 0;
+    historyHandoff.store(0, std::memory_order_release);
+}
+
+void LiveScratchEngine::adoptRequestedHistory() noexcept
+{
+    if (historyHandoff.load(std::memory_order_acquire) != 1) return;
+    // Carry over the dry latency pipeline and the interpolation guard. Only
+    // these few thousand values are copied on the audio thread; swapping the
+    // vectors exchanges their storage without allocating.
+    const std::int64_t keep = std::min<std::int64_t>({writeFrame, static_cast<std::int64_t>(capacity),
+        static_cast<std::int64_t>(spareCapacity), static_cast<std::int64_t>(latencySamples() + taps * 2)});
+    if (capacity > 0 && spareCapacity > 0)
+        for (std::int64_t frame = writeFrame - keep; frame < writeFrame; ++frame)
+            for (std::size_t channel = 0; channel < history.size(); ++channel)
+                spareHistory[channel][static_cast<std::size_t>(frame % spareCapacity)]
+                    = history[channel][static_cast<std::size_t>(frame % capacity)];
+    std::swap(history, spareHistory);
+    std::swap(capacity, spareCapacity);
+    retainedSeconds = spareSeconds;
+    // Anything older than the copy is gone; never read it.
+    storedFrom = std::max(storedFrom, writeFrame - keep);
+    historyHandoff.store(2, std::memory_order_release);
+}
+
 void LiveScratchEngine::prepare(double sampleRate, int channels, double historySeconds) noexcept
 {
     capacity = 0;
@@ -160,6 +248,9 @@ void LiveScratchEngine::prepare(double sampleRate, int channels, double historyS
     // Release the previous ring before asking for a new one, so changing rate
     // never needs both allocations at once.
     for (auto& channel : history) std::vector<float>().swap(channel);
+    for (auto& channel : spareHistory) std::vector<float>().swap(channel);
+    spareCapacity = 0;
+    historyHandoff.store(0);
     try {
         (void) kernels();
         rate = std::clamp(finiteOr(sampleRate, 48000.0), 8000.0, 384000.0);
@@ -187,9 +278,10 @@ void LiveScratchEngine::prepare(double sampleRate, int channels, double historyS
 
 void LiveScratchEngine::reset() noexcept
 {
-    writeFrame = validFrom = 0;
+    writeFrame = validFrom = storedFrom = 0;
     for (auto& channel : bass) channel.reset();
     wetAmount = 0;
+    mixAmount = gainAmount = 1;
     gateAmount = motionAmount = subAmount = 1;
     previousTarget = outgoingFrame = 0;
     previousRate = outgoingRate = 1;
@@ -219,7 +311,7 @@ bool LiveScratchEngine::available(double frame) const noexcept
 {
     if (!std::isfinite(frame)) return false;
     const auto centre = static_cast<std::int64_t>(std::floor(frame));
-    const auto oldest = std::max<std::int64_t>(0, writeFrame - capacity + 1);
+    const auto oldest = std::max<std::int64_t>({0, writeFrame - capacity + 1, storedFrom});
     return centre - radius + 1 >= oldest && centre + radius <= writeFrame - crossoverDelay;
 }
 
@@ -231,7 +323,7 @@ bool LiveScratchEngine::readable(double frame) const noexcept
 bool LiveScratchEngine::clampToReadable(double& frame, bool allowRetained) const noexcept
 {
     if (!std::isfinite(frame) || capacity == 0) return false;
-    const auto retainedOldest = std::max<std::int64_t>(0, writeFrame - capacity + 1) + radius - 1;
+    const auto retainedOldest = std::max<std::int64_t>({0, writeFrame - capacity + 1, storedFrom}) + radius - 1;
     const auto newest = writeFrame - crossoverDelay - radius;
     auto oldest = std::max(retainedOldest, validFrom + radius - 1);
     if (oldest > newest && allowRetained) oldest = retainedOldest;
@@ -244,8 +336,11 @@ std::array<double, 4> LiveScratchEngine::read(double frame, double speed) const 
 {
     std::array<double, 4> output {};
     if (!available(frame)) return output;
-    const double speedRow = (std::clamp(std::abs(speed), 1.0, 2.0) - 1.0) * (rateSteps - 1);
-    const int lowRate = std::min(static_cast<int>(speedRow), rateSteps - 2);
+    const double clampedSpeed = std::clamp(std::abs(speed), 1.0, maximumSpeed);
+    const double speedRow = (clampedSpeed - 1.0) * rateStepsPerUnit;
+    // Up to 2x this indexes exactly as 0.10 did, including the 2x row itself.
+    const int lastLowRow = clampedSpeed <= 2.0 ? rateStepsPerUnit - 1 : rateSteps - 2;
+    const int lowRate = std::min(static_cast<int>(speedRow), lastLowRow);
     const double speedFraction = speedRow - lowRate;
     const auto centre = static_cast<std::int64_t>(std::floor(frame));
     const double phaseRow = (frame - std::floor(frame)) * phaseSteps;
@@ -267,7 +362,8 @@ std::array<double, 4> LiveScratchEngine::read(double frame, double speed) const 
 }
 
 std::array<float, 2> LiveScratchEngine::process(float left, float right, const PatternSample& sample,
-                                             double samplesPerBeat, bool keepSub, bool bypass) noexcept
+                                             double samplesPerBeat, bool keepSub, bool bypass,
+                                             const Shaping& shaping) noexcept
 {
     const std::array<double, 2> input {finiteOr(left, 0.0), finiteOr(busChannels == 1 ? left : right, 0.0)};
     if (capacity == 0) return {static_cast<float>(input[0]), static_cast<float>(input[1])};
@@ -275,6 +371,7 @@ std::array<float, 2> LiveScratchEngine::process(float left, float right, const P
     const std::int64_t splitFrame = writeFrame - crossoverDelay;
     for (int channel = 0; channel < 2; ++channel) {
         const auto c = static_cast<std::size_t>(channel);
+        bass[c].select(shaping.split);
         history[c][static_cast<std::size_t>(writeIndex)] = static_cast<float>(input[c]);
         const double lower = bass[c].process(input[c]);
         if (splitFrame >= 0) {
@@ -295,14 +392,15 @@ std::array<float, 2> LiveScratchEngine::process(float left, float right, const P
     }
     const double targetSub = keepSub ? 1.0 : 0.0;
     subAmount += std::clamp(targetSub - subAmount, -fadeStep, fadeStep);
-    const double speed = std::clamp(finiteOr(sample.playbackRate, 1.0), -2.0, 2.0);
+    const double speedLimit = std::clamp(finiteOr(shaping.speedLimit, 2.0), 1.0, maximumSpeed);
+    const double speed = std::clamp(finiteOr(sample.playbackRate, 1.0), -speedLimit, speedLimit);
     const double delayBeats = std::max(0.0, finiteOr(sample.delayBeats, 0.0));
     const double beatSamples = std::clamp(finiteOr(samplesPerBeat, rate * 0.5), 1.0, rate * 60.0);
     // A steady tempo leaves glideSamplesPerBeat equal to the host value, so the
     // delay below is exactly delayBeats * samplesPerBeat as before.
     if (!haveTarget || std::abs(beatSamples - glideSamplesPerBeat) > tempoSnapFraction * glideSamplesPerBeat)
         glideSamplesPerBeat = beatSamples;
-    else if (beatSamples != glideSamplesPerBeat) {
+    else if (!exactly(beatSamples, glideSamplesPerBeat)) {
         const double limit = tempoGlideDrift / std::max(previousDelayBeats, 1.0e-9);
         glideSamplesPerBeat += std::clamp(beatSamples - glideSamplesPerBeat, -limit, limit);
     }
@@ -379,6 +477,12 @@ std::array<float, 2> LiveScratchEngine::process(float left, float right, const P
     gateAmount += controlCoefficient * (std::clamp(finiteOr(sample.gate, 1.0), 0.0, 1.0) - gateAmount);
     const double targetMotion = std::clamp(std::abs(speed) / 0.025, 0.0, 1.0);
     motionAmount += controlCoefficient * (targetMotion - motionAmount);
+    // Mix and output trim ramp linearly and land exactly on their targets, so
+    // the defaults (1 and 1) leave every sample bit-identical to 0.10.
+    const double targetMix = std::clamp(finiteOr(shaping.mix, 1.0), 0.0, 1.0);
+    mixAmount += std::clamp(targetMix - mixAmount, -fadeStep, fadeStep);
+    const double targetGain = bypass ? 1.0 : std::clamp(finiteOr(shaping.gain, 1.0), 0.0, 8.0);
+    gainAmount += std::clamp(targetGain - gainAmount, -fadeStep, fadeStep);
     std::array<float, 2> output {};
     for (int channel = 0; channel < 2; ++channel) {
         const auto c = static_cast<std::size_t>(channel);
@@ -388,7 +492,9 @@ std::array<float, 2> LiveScratchEngine::process(float left, float right, const P
         const double scratch = fullScratch + subAmount * (protectedScratch - fullScratch);
         // At zero delay/rate 1 the full and protected paths both equal dry.
         // Linear crossfades then stay neutral even for correlated material.
-        const double result = dry[c] + wetAmount * (scratch - dry[c]);
+        double result = dry[c] + wetAmount * (scratch - dry[c]);
+        if (!exactly(mixAmount, 1.0)) result = dry[c] + mixAmount * (result - dry[c]);
+        if (!exactly(gainAmount, 1.0)) result *= gainAmount;
         output[c] = static_cast<float>(finiteOr(result, dry[c]));
     }
     ++writeFrame;

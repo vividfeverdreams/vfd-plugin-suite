@@ -1,4 +1,110 @@
-# BACK-SCRATCH 0.10.1 validation
+# BACK-SCRATCH 0.11.0 validation
+
+Checked on Apple Silicon macOS, 5 October 2026, with the Release build from this source (VST3 and AU in `build/BackScratch_artefacts/Release`). Nothing was installed into `~/Library` or `/Library`; every run used a scratch folder as HOME, and preset tests used a temporary preset root, never the real one.
+
+## What was checked
+
+**Old projects, against the real 0.10.2 release.** A plain host with no BACK-SCRATCH code loaded the BACK-SCRATCH.vst3 from the Vivid Fever Dreams Suite 1.2.2 installer payload (read-only). For four projects (a factory recipe with dotted timing, grid shift and Keep Sub off; a generated two-bar triplet pattern; a legacy-motion recipe; a hand-drawn custom pattern) a fresh 0.10.2 instance saved the project and rendered 240 blocks of a bass-and-tone test signal at 140 BPM. The check confirms the 0.10.2 build kept each setting and was actually scratching. In a second process, a fresh 0.11 instance opened each saved project. All 14 0.10 controls came back exactly, all 11 new controls sat at their neutral defaults, and the audio matched:
+
+```
+0.10.2 payload -> 0.11 factory recipe, dotted, shifted, Keep Sub off: maximum difference 2.98023e-08 over 122880 stereo frames
+0.10.2 payload -> 0.11 generated pattern, two bars, triplet: maximum difference 2.98023e-08 over 122880 stereo frames
+0.10.2 payload -> 0.11 legacy motion recipe: maximum difference 2.98023e-08 over 122880 stereo frames
+0.10.2 payload -> 0.11 hand-drawn custom pattern: maximum difference 2.98023e-08 over 122880 stereo frames
+BACK-SCRATCH 0.10.2 project compatibility passed
+```
+
+2.98e-8 is the smallest step a 32-bit float can take near these sample values, so this is a rounding-level difference, not a change in sound. While building this test, a reused 0.10.2 instance ignored host parameter changes made after its first prepare/release cycle. That is the 0.10 automation-queue behaviour fixed in 0.11, so each project is now saved from a fresh instance, as a real session would be.
+
+**Default sound unchanged.** The engine suite checks that the new shaping stage (Mix, Output, split choice, speed limit) at its default settings produces exactly the same samples as the engine without it; the 0.10.2 comparison above is the end-to-end proof against the real old release. Existing regression suites (75 factories, 5,000 generated phrases, motion profiles, history, continuity, transport, drawing, recall and schema migration) all still pass.
+
+**New features.** The engine tests cover Mix and Output, all four Keep Sub splits at the same 730-sample latency, 4× strokes, live history resizing and validity of all 230 bank presets. The host tests cover the PERFORM page (real clicks), Engage snap timing on the audible clock, Retrigger (two processors in lockstep: the retriggered phrase restarts at the beat-9 snap point, one beat behind song position), Play Every, slots and chains, Mix/Depth/Output bars, the roll tool and starters, the Size menu (fit rules), the factory bank and arrows, user preset folders (temporary root), and project and preset round trips including slots, history mode and editor size.
+
+**Factory bank export.** All 230 presets were written as schema 10 files in 17 folders, reopened in a fresh instance and compared setting by setting and slot by slot.
+
+**Audio Unit.** The AU builds and is signed with the agreed identity (type `aufx`, subtype `Bsc1`, manufacturer `Yoib`, bundle ID `com.yoiboi.backscratch`, version 0.11.0). pluginval cannot test an AU that macOS has not registered, and registering it means installing it into a Components folder, which was not allowed here. So pluginval on the `.component` stops at "No types found". Instead, the plain host registers the built `.component` with its own process only (`AudioComponentRegister`; nothing is installed or written to the system), hosts it through JUCE's AU host, and compares it with the VST3: same 33 controls, same 730-sample latency, identical audio, and a saved AU state reopened in a new AU instance sounds identical. **Apple's `auval` and pluginval have not been run on the AU**; run them after installing (for example `auval -v aufx Bsc1 Yoib`).
+
+## Verbatim results
+
+Engine and pattern suite (`BackScratchTests`), exit 0:
+
+```
+BACK-SCRATCH 75 factory patterns, 5,000 complete generated phrases, exact duration scaling, and circular grid shifts passed; maximum 183 segments
+Grid editing: all 75 factories at 16 shifts, exact curve clipping, safe draw slopes, dry erasing and retiming passed
+Drawing tools: event-independent freehand, fractional/reversed lines, eased curves, exact shifted clipping, 10 musical shapes, 5 roll/tape starters and the roll tool passed
+Motion profiles: Sub Tug speed step 3.12 -> 0.00149712, accelerating wet frames 0.004% -> 99.944%; 61518 curved intervals, 22097 clipped/gated intervals, largest continuous velocity corner 5.94191e-13; audio/trajectory relative error 4.59853e-06 over 20530 samples; legacy golden geometry exact
+75 shortest half-beat phrases at 400 BPM, both sub modes: peak 0.432171, smallest source change 0.166368, energy ratio 0.776383..0.993329
+36 full generated source-family/sub-mode renders at 140 BPM: peak 0.475974, energy ratio 0.667613..1.11396, minimum original bass 0.999625x, rejected alias RMS 2.46463e-05
+75 presets x bass/drums/vocal-like sources: peak 0.634231, smallest normalized change 0.0767872
+128-second history: 96-second impulse error 6.06676e-17, 16-bar / 20 BPM source error 1.31117e-08 across 381768 deep-lookback samples
+Live scratch engine: neutral relative error 1.47976e-24, broadband transition error 0, time-warp relative error 2.50489e-05; sub kept/full 0.999728/0.948897x; 100 Hz kept/full 0.990301/0.945598x; jump step 0.0522105; rejected alias RMS 6.01481e-06
+Engine continuity: bypass-on step 1.05376x normal, gapless invalidation, moving fallback step 0.0143984, tempo-ramp crossfades 0 (1 beat) / 34 (4 beats) over 100 callbacks, memory fallback 128 -> 16 -> 0 s
+0.11 engine features: defaults bit-identical, mix/output, four Keep Sub splits at one latency, 4x strokes, live history resize and 230 valid factory bank presets passed
+BACK-SCRATCH live engine and pattern tests passed
+```
+
+Host suite (`BackScratchHostSmoke`), final build, run three times, exit 0 each time. The slowest display read varied with machine load (3.05, 1.01 and 0.76 ms; 0.81 ms in the VST3 run; the test limit is 250 ms). Output of the third run:
+
+```
+BACK-SCRATCH live processor, automation, preset and transport tests passed
+BACK-SCRATCH single-pass duration scaling, short preset recall, meter and delayed automation integration passed
+BACK-SCRATCH audible display, shifted/modulated automation, tempo and seek alignment tests passed
+BACK-SCRATCH all 75 factory shifts isolated across direct recall, reselect and host programs; saved offsets and audio retained
+BACK-SCRATCH dotted/triplet shape identity, shifted preset and project recall, schema migration and timing validation passed
+BACK-SCRATCH immutable edit lifetime, single-stroke undo, custom recall and audible drawing alignment passed
+BACK-SCRATCH clipped factory/generated curve recall, timed retiming and atomic invalid-geometry rejection passed
+BACK-SCRATCH smooth/legacy recipe recall, schema4–8 migration, custom geometry preservation and invalid version rejection passed
+BACK-SCRATCH freehand, line/curve, actual tool/shape menus, live preview, erase, undo/redo, cancellation and scaling checks passed
+BACK-SCRATCH transport continuity: host bypass 830-sample impulse, ramp silent samples 512:0 512:0 512:0 1024:0 1024:0 1024:0, gapless wraps/seeks, bypass-on step 1x normal, no-op writes silent, slowest display read 0.759958 ms, per-instance queues, atomic parameter groups passed
+BACK-SCRATCH 0.11 PERFORM page, Engage snap, Retrigger, Play Every, slots and chains, Mix/Depth/Output, roll tool, Size menu, factory bank, user preset folders and project round trips passed
+BACK-SCRATCH control layout, indicator clearance, duration knob, dotted/triplet timing, circular pattern nudges, crop, generation, phrase lock, sub toggle, preset navigation and editor lifecycle checks passed
+BACK-SCRATCH live pattern host smoke passed
+```
+
+The same suite with screenshots and the built VST3 added these lines (lines printed several times are shown once), exit 0:
+
+```
+Packaged VST3 real processing matches processor; worst difference 0
+Packaged VST3 automated timing and looping maximum difference 0
+Packaged VST3 recalled/static timing and looping maximum difference 0
+Packaged VST3 dotted/triplet, grid-shift, loop and project-recall tests passed
+Packaged VST3 pencil/eraser contour audio and custom project-container recall passed
+Packaged VST3 host bypass: impulse delayed by 730 samples (reported latency 730)
+BACK-SCRATCH live pattern host smoke passed
+```
+
+In-process AU check (`BackScratchCompatHost --au`), exit 0:
+
+```
+AU bundle BACK-SCRATCH.component: VIVID FEVER DREAMS: BACK-SCRATCH, aufx/Bsc1/Yoib, version 0xb00, registered in-process only
+AU and VST3 publish the same 33 plug-in controls
+AU vs VST3 default render: maximum difference 0 over 122880 stereo frames
+AU state reopened in a new instance: maximum difference 0
+BACK-SCRATCH AU in-process check passed
+```
+
+Factory bank export (`BackScratchHostSmoke --export-presets`), exit 0:
+
+```
+Exported and recalled 230 schema 10 factory bank presets in 17 folders
+```
+
+pluginval 1.0.4, strictness 5, in-process, HOME pointed at a scratch folder: **VST3 `SUCCESS`**, exit 0. AU: `!!! Test 1 failed: No types found ... an AU that isn't found by macOS so can't be created.`, exit 1 (the AU is not installed, see above).
+
+## Screens
+
+28 editor screenshots were rendered from the real editor and inspected: the PATTERN and PERFORM pages, a busy PERFORM page (slot C selected while the A–D chain plays A, Mix 70%, Depth 140%, Output −3 dB, 160 Hz split, 64 s history), the slot right-click menu, the Size menu (only 90% fits the test display, so the larger sizes are greyed out), the editor at 125%, the preset menu with folders, the roll tool with its hover preview, the Shapes and tools menus with the roll entries, Play Every waiting and Engage standby states, four new presets, and the earlier pencil, eraser, timing and INFO screens. They use the existing Chakra Petch type, palette, LEDs and soft-key style.
+
+## Not verified
+
+- Use inside an actual Ableton Live (or Logic) session, automation recording there, and listening tests.
+- The AU with `auval`, pluginval or Logic, which needs it installed.
+- How the new presets sound on real material; their audio was checked only for validity, not for taste.
+- The installer was not rebuilt or run for 0.11.0.
+
+Earlier release evidence follows as historical context.
+
+# Prior 0.10.1 validation
 
 Checked on Apple Silicon macOS, 4 October 2026.
 

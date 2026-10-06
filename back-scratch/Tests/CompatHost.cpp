@@ -1,0 +1,225 @@
+// A plain VST3 host for the 0.10.2 -> 0.11 project compatibility check. It
+// contains no BACK-SCRATCH code, so the old payload plug-in and the new build
+// each run against nothing but their own code.
+//   BackScratchCompatHost --save  <0.10.2 BACK-SCRATCH.vst3> <folder>
+//   BackScratchCompatHost --check <new BACK-SCRATCH.vst3>    <folder>
+//   BackScratchCompatHost --au <new BACK-SCRATCH.component> <new BACK-SCRATCH.vst3>
+#include <juce_audio_processors/juce_audio_processors.h>
+#include <juce_gui_basics/juce_gui_basics.h>
+#include <cmath>
+#include <cstring>
+
+namespace backScratch::processorTests {
+struct Head final : juce::AudioPlayHead {
+    bool playing = true;
+    double beat = 0, bpm = 140;
+    juce::Optional<PositionInfo> getPosition() const override {
+        PositionInfo p; p.setIsPlaying(playing); p.setBpm(bpm); p.setPpqPosition(beat);
+        p.setTimeSignature(TimeSignature{4, 4}); return p;
+    }
+};
+inline float testSound(int frame, int channel = 0) {
+    const double t = frame / 48000.0;
+    return static_cast<float>(0.24 * std::sin(t * 6.283185307179586 * 49)
+        + 0.18 * std::sin(t * 6.283185307179586 * (channel == 0 ? 441 : 667))
+        * (0.65 + 0.35 * std::sin(t * 23)));
+}
+}
+
+// The edited-pattern XML writer, as used by the plug-in (format 1).
+namespace backScratch {
+struct ScratchSegment { double start, end, delayStart, delayEnd; float gateStart, gateEnd, wet; bool curved; double curveStart = 0.0, curveEnd = 1.0; };
+struct ScratchPattern { double beats = 1.0; ScratchSegment segments[4]; int count = 0; double editingRange = 0.0; };
+inline std::unique_ptr<juce::XmlElement> editedPatternToXml(const ScratchPattern& pattern)
+{
+    auto xml = std::make_unique<juce::XmlElement>("EDITED_PATTERN");
+    xml->setAttribute("format", 1);
+    xml->setAttribute("beats", pattern.beats);
+    xml->setAttribute("range", pattern.editingRange);
+    for (int i = 0; i < pattern.count; ++i) {
+        const auto& s = pattern.segments[i];
+        auto* node = xml->createNewChildElement("SEGMENT");
+        node->setAttribute("start", s.start); node->setAttribute("end", s.end);
+        node->setAttribute("delayStart", s.delayStart); node->setAttribute("delayEnd", s.delayEnd);
+        node->setAttribute("gateStart", static_cast<double>(s.gateStart)); node->setAttribute("gateEnd", static_cast<double>(s.gateEnd));
+        node->setAttribute("wet", static_cast<double>(s.wet)); node->setAttribute("curved", s.curved);
+        node->setAttribute("curveStart", s.curveStart); node->setAttribute("curveEnd", s.curveEnd);
+    }
+    return xml;
+}
+}
+
+#define BACK_SCRATCH_COMPAT_HOST 1
+#include "CompatibilityTests.h"
+
+#if JUCE_MAC
+#include <AudioToolbox/AudioToolbox.h>
+#include <CoreFoundation/CoreFoundation.h>
+
+// The Audio Unit from the build folder, checked without installing it: the
+// .component is registered with this process only (AudioComponentRegister),
+// hosted through JUCE's AU format and compared with the VST3 of the same build.
+namespace backScratch::audioUnitCheck {
+using compatibilityTests::require;
+
+inline juce::String text(CFStringRef value) { return value != nullptr ? juce::String::fromCFString(value) : juce::String(); }
+
+inline OSType code(CFDictionaryRef entry, CFStringRef key)
+{
+    const auto value = text(static_cast<CFStringRef>(CFDictionaryGetValue(entry, key)));
+    require(value.length() == 4, "AU Info.plist has a four-character " + text(key).toStdString());
+    return static_cast<OSType>((value[0] << 24) | (value[1] << 16) | (value[2] << 8) | value[3]);
+}
+
+inline std::unique_ptr<juce::AudioPluginInstance> createUnit(juce::AudioUnitPluginFormat& format, const juce::PluginDescription& type)
+{
+    juce::String error;
+    auto unit = format.createInstanceFromDescription(type, 48000.0, 512, error);
+    require(unit != nullptr, "the AU instantiates: " + error.toStdString());
+    return unit;
+}
+
+inline std::vector<float> play(juce::AudioPluginInstance& plugin, int blocks)
+{
+    processorTests::Head head;
+    plugin.setPlayHead(&head);
+    plugin.prepareToPlay(48000.0, 512);
+    std::vector<float> result;
+    juce::MidiBuffer midi;
+    for (int block = 0; block < blocks; ++block) {
+        juce::AudioBuffer<float> audio(2, 512);
+        for (int i = 0; i < 512; ++i) for (int ch = 0; ch < 2; ++ch) audio.setSample(ch, i, processorTests::testSound(block * 512 + i, ch));
+        head.beat = block * 512.0 * head.bpm / (60.0 * 48000.0);
+        plugin.processBlock(audio, midi);
+        for (int i = 0; i < 512; ++i) for (int ch = 0; ch < 2; ++ch) result.push_back(audio.getSample(ch, i));
+    }
+    plugin.releaseResources();
+    plugin.setPlayHead(nullptr);
+    return result;
+}
+
+inline double largestDifference(const std::vector<float>& a, const std::vector<float>& b)
+{
+    require(a.size() == b.size(), "renders have the same length");
+    double worst = 0.0;
+    for (size_t i = 0; i < a.size(); ++i) worst = std::max(worst, static_cast<double>(std::abs(a[i] - b[i])));
+    return worst;
+}
+
+inline void run(const juce::String& componentPath, const juce::String& vst3Path)
+{
+    // Identity straight from the bundle's Info.plist.
+    const juce::File component(componentPath);
+    auto url = CFURLCreateFromFileSystemRepresentation(nullptr, reinterpret_cast<const UInt8*>(component.getFullPathName().toRawUTF8()),
+                                                       static_cast<CFIndex>(strlen(component.getFullPathName().toRawUTF8())), true);
+    auto bundle = CFBundleCreate(nullptr, url);
+    CFRelease(url);
+    require(bundle != nullptr, "the .component bundle opens");
+    require(text(CFBundleGetIdentifier(bundle)) == "com.yoiboi.backscratch", "AU bundle ID is com.yoiboi.backscratch");
+    auto components = static_cast<CFArrayRef>(CFBundleGetValueForInfoDictionaryKey(bundle, CFSTR("AudioComponents")));
+    require(components != nullptr && CFArrayGetCount(components) == 1, "the AU declares one AudioComponents entry");
+    auto entry = static_cast<CFDictionaryRef>(CFArrayGetValueAtIndex(components, 0));
+    AudioComponentDescription description {};
+    description.componentType = code(entry, CFSTR("type"));
+    description.componentSubType = code(entry, CFSTR("subtype"));
+    description.componentManufacturer = code(entry, CFSTR("manufacturer"));
+    require(description.componentType == 'aufx' && description.componentSubType == 'Bsc1' && description.componentManufacturer == 'Yoib',
+            "AU identity is aufx / Bsc1 / Yoib");
+    SInt32 version = 0;
+    CFNumberGetValue(static_cast<CFNumberRef>(CFDictionaryGetValue(entry, CFSTR("version"))), kCFNumberSInt32Type, &version);
+    const auto factoryName = text(static_cast<CFStringRef>(CFDictionaryGetValue(entry, CFSTR("factoryFunction"))));
+    auto factory = reinterpret_cast<AudioComponentFactoryFunction>(CFBundleGetFunctionPointerForName(bundle, factoryName.toCFString()));
+    require(factory != nullptr, "the AU binary loads and exports " + factoryName.toStdString());
+    auto name = static_cast<CFStringRef>(CFDictionaryGetValue(entry, CFSTR("name")));
+    require(AudioComponentRegister(&description, name, static_cast<UInt32>(version), factory) != nullptr,
+            "the AU registers with this process");
+    std::cout << "AU bundle " << component.getFileName() << ": " << text(name) << ", aufx/Bsc1/Yoib, version 0x"
+              << juce::String::toHexString(version) << ", registered in-process only\n";
+
+    juce::AudioUnitPluginFormat format;
+    juce::OwnedArray<juce::PluginDescription> types;
+    format.findAllTypesForFile(types, "AudioUnit:Effects/aufx,Bsc1,Yoib");
+    require(types.size() == 1, "JUCE's AU host finds the registered unit");
+    require(types[0]->name == "BACK-SCRATCH" && types[0]->manufacturerName == "VIVID FEVER DREAMS", "AU name and manufacturer");
+    auto unit = createUnit(format, *types[0]);
+    auto vst3 = compatibilityTests::load(vst3Path);
+
+    // Same controls, in the same order, with the same latency.
+    juce::StringArray unitNames, vstNames;
+    for (auto* parameter : unit->getParameters()) unitNames.add(parameter->getName(128));
+    for (auto* parameter : vst3->getParameters()) vstNames.add(parameter->getName(128));
+    // The VST3 wrapper adds its own host Bypass and Program entries, and the
+    // AU host lists controls by their hashed IDs, so compare the sets.
+    vstNames.removeString("Program");
+    vstNames.removeDuplicates(false);
+    unitNames.sort(false);
+    vstNames.sort(false);
+    if (unitNames != vstNames)
+        std::cerr << "AU controls: " << unitNames.joinIntoString(", ") << "\nVST3 controls: " << vstNames.joinIntoString(", ") << '\n';
+    require(unitNames == vstNames, "the AU publishes the same controls as the VST3");
+    std::cout << "AU and VST3 publish the same " << unitNames.size() << " plug-in controls\n";
+    unit->prepareToPlay(48000.0, 512);
+    vst3->prepareToPlay(48000.0, 512);
+    require(unit->getLatencySamples() == 730 && vst3->getLatencySamples() == 730, "AU and VST3 both report 730 samples of latency");
+    unit->releaseResources();
+    vst3->releaseResources();
+
+    // Default sound: the AU renders what the VST3 renders.
+    const auto unitAudio = play(*unit, 240);
+    const auto vstAudio = play(*vst3, 240);
+    const auto formatDifference = largestDifference(unitAudio, vstAudio);
+    std::cout << "AU vs VST3 default render: maximum difference " << formatDifference << " over " << unitAudio.size() / 2 << " stereo frames\n";
+    require(formatDifference < 0.00003, "the AU renders the same audio as the VST3");
+
+    // Settings saved by one AU instance reopen in another.
+    compatibilityTests::set(*unit, "Scratch Pattern", 37.0f / 74.0f);
+    compatibilityTests::set(*unit, "Phrase Timing", 0.5f);
+    compatibilityTests::set(*unit, "Mix", 0.7f);
+    compatibilityTests::set(*unit, "Depth", 0.7f);
+    compatibilityTests::set(*unit, "Keep Sub Split", 1.0f / 3.0f);
+    const auto changed = play(*unit, 240);
+    require(largestDifference(changed, unitAudio) > 0.05, "AU parameter changes are heard");
+    juce::MemoryBlock state;
+    unit->getStateInformation(state);
+    auto reopened = createUnit(format, *types[0]);
+    reopened->setStateInformation(state.getData(), static_cast<int>(state.getSize()));
+    for (const auto& [parameterName, value] : compatibilityTests::configured())
+        require(std::abs(compatibilityTests::parameter(*reopened, parameterName).getValue() - value) < 1.0e-4f,
+                "a reopened AU keeps " + parameterName.toStdString());
+    const auto recalled = largestDifference(play(*reopened, 240), changed);
+    std::cout << "AU state reopened in a new instance: maximum difference " << recalled << '\n';
+    require(recalled < 0.00003, "a reopened AU sounds the same");
+    reopened.reset();
+    unit.reset();
+    vst3.reset();
+    CFRelease(bundle);
+    std::cout << "BACK-SCRATCH AU in-process check passed\n";
+}
+} // namespace backScratch::audioUnitCheck
+#endif
+
+int main(int argc, char* argv[])
+{
+    try {
+        juce::ScopedJuceInitialiser_GUI gui;
+#if JUCE_MAC
+        if (argc == 4 && juce::String(argv[1]) == "--au") {
+            backScratch::audioUnitCheck::run(juce::String::fromUTF8(argv[2]), juce::String::fromUTF8(argv[3]));
+            return 0;
+        }
+#endif
+        if (argc == 4 && juce::String(argv[1]) == "--save") {
+            backScratch::compatibilityTests::saveWithPayload(juce::String::fromUTF8(argv[2]), juce::File(juce::String::fromUTF8(argv[3])));
+            return 0;
+        }
+        if (argc == 4 && juce::String(argv[1]) == "--check") {
+            backScratch::compatibilityTests::checkAgainstPayload(juce::String::fromUTF8(argv[2]), juce::File(juce::String::fromUTF8(argv[3])));
+            return 0;
+        }
+        std::cerr << "usage: --save <0.10.2 vst3> <folder> | --check <new vst3> <folder> | --au <new component> <new vst3>\n";
+        return 2;
+    } catch (const std::exception& e) {
+        std::cerr << "FAIL: " << e.what() << '\n';
+        return 1;
+    }
+}

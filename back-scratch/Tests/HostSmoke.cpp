@@ -14,6 +14,7 @@
 #include "MotionVersionTests.h"
 #include "PerformanceRender.h"
 #include "TransportContinuityTests.h"
+#include "FeatureUiTests.h"
 #include <juce_audio_utils/juce_audio_utils.h>
 #include <iostream>
 
@@ -82,6 +83,7 @@ int main(int argc, char* argv[])
         runMotionVersionTests();
         runGridEditorInteractionTests();
         runTransportContinuityTests();
+        runFeatureUiTests();
         backScratch::BackScratchProcessor processor;
         processor.prepareToPlay(48000, 512);
         runInteractionTests(processor);
@@ -153,6 +155,7 @@ int main(int argc, char* argv[])
                     backScratch::processorTests::check(juce::PNGImageFormat().writeImageToStream(credits, creditsOutput), "credits PNG saved");
                 }
             };
+            backScratch::featureUiTests::renderFeatureScreens(file.getParentDirectory());
             renderEditor(file, [](auto&) {});
             renderEditor(file.getSiblingFile(file.getFileNameWithoutExtension() + "-pencil.png"), [](auto&) {});
             renderEditor(file.getSiblingFile(file.getFileNameWithoutExtension() + "-eraser.png"), [](auto&) {});

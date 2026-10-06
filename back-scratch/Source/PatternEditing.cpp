@@ -1,4 +1,5 @@
 #include "PatternEditing.h"
+#include "PhraseBuilder.h"
 
 #include <algorithm>
 #include <cmath>
@@ -368,20 +369,69 @@ bool PatternFreeDrawStroke::render(ScratchPattern& destination, double* appliedD
     return true;
 }
 
+bool drawPatternRoll(ScratchPattern& pattern, double fromPhase, double toPhase, double grain, RollStyle style) noexcept
+{
+    if (!validateEditedPattern(pattern) || !std::isfinite(fromPhase) || !std::isfinite(toPhase) || !std::isfinite(grain)
+        || grain <= 1.0e-4 || grain > 1.0) return false;
+    fromPhase = std::clamp(fromPhase, 0.0, 1.0);
+    toPhase = std::clamp(toPhase, 0.0, 1.0);
+    if (fromPhase > toPhase) std::swap(fromPhase, toPhase);
+    if (toPhase - fromPhase < 1.0e-6) return false;
+    PhraseBuilder builder(pattern.beats);
+    switch (style) {
+        case RollStyle::repeat: builder.roll(fromPhase, toPhase, grain); break;
+        case RollStyle::reverse: builder.reverseRoll(fromPhase, toPhase, grain); break;
+        case RollStyle::accelerate: builder.accelerate(fromPhase, toPhase, {grain, grain * 0.5, grain * 0.25}); break;
+        case RollStyle::chopped: builder.roll(fromPhase, toPhase, grain, 0.35); break;
+    }
+    const auto built = builder.finish();
+    const double from = fromPhase * pattern.beats - 1.0e-9, to = toPhase * pattern.beats + 1.0e-9;
+    double deepest = 0.0;
+    for (int index = 0; index < built.count; ++index) {
+        const auto& part = built.segments[static_cast<std::size_t>(index)];
+        if (part.start >= from && part.end <= to)
+            deepest = std::max({deepest, segmentDelay(part, 0.0), segmentDelay(part, 1.0)});
+    }
+    auto result = pattern;
+    result.editingRange = std::min(pattern.beats, std::max(patternEditingDelayRange(pattern), deepest));
+    for (int index = 0; index < built.count; ++index) {
+        const auto& part = built.segments[static_cast<std::size_t>(index)];
+        if (part.start < from || part.end > to) continue;
+        if (!replaceVisibleInterval(result, part)) return false;
+    }
+    pattern = result;
+    return true;
+}
+
 const char* scratchShapeName(int index) noexcept
 {
     static constexpr std::array<const char*, scratchShapeCount> names {
         "Baby Scratch", "Double Push", "Slow Drag", "Rubber Band", "Chirp",
-        "Reverse Swell", "Stop & Go", "Triplet Bounce", "Late Scratch", "Wobble Roll"
+        "Reverse Swell", "Stop & Go", "Triplet Bounce", "Late Scratch", "Wobble Roll",
+        "Accelerating Roll", "Triplet Roll", "Reverse Roll", "Tape Stop", "Half-Time Drag"
     };
     return names[static_cast<std::size_t>(std::clamp(index, 0, scratchShapeCount - 1))];
 }
 
 ScratchPattern makeScratchShape(const ScratchPattern& templatePattern, int index) noexcept
 {
+    const double beats = std::isfinite(templatePattern.beats) ? std::clamp(templatePattern.beats, 1.0 / 6.0, 384.0) : 4.0;
+    if (index >= 10) {
+        // Roll and tape starters, written in fractions of the phrase.
+        PhraseBuilder builder(beats);
+        switch (std::clamp(index, 10, scratchShapeCount - 1)) {
+            case 10: builder.accelerate(0.5, 1.0, {0.125, 0.0625, 0.03125}); break;
+            case 11: builder.roll(0.5, 1.0, 1.0 / 24.0); break;
+            case 12: builder.reverseRoll(0.5, 1.0, 0.0625); break;
+            case 13: builder.tapeStop(0.5, 1.0); break;
+            default: builder.halfTime(0.5, 1.0); break;
+        }
+        auto shape = builder.finish();
+        shape.gridOffset = wrapPatternGridOffset(templatePattern.gridOffset);
+        return shape;
+    }
     ScratchPattern pattern;
-    pattern.beats = std::isfinite(templatePattern.beats)
-        ? std::clamp(templatePattern.beats, 1.0 / 6.0, 384.0) : 4.0;
+    pattern.beats = beats;
     pattern.gridOffset = wrapPatternGridOffset(templatePattern.gridOffset);
     pattern.editingRange = pattern.beats * 0.25;
     double position = 0.0;

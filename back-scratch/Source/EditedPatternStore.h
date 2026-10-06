@@ -16,16 +16,17 @@ namespace backScratch {
 // that lock. Each acquired index owns one pin until release(); retain() requires
 // the caller already to own (or otherwise protect) an existing pin. A full pool
 // leaves the previous publication intact so the editor can coalesce previews.
-class EditedPatternStore final {
+template <typename Snapshot, int Capacity>
+class SnapshotStore final {
 public:
     static constexpr int None = -1;
-    static constexpr int capacity = 32;
+    static constexpr int capacity = Capacity;
 
-    EditedPatternStore() : slots(std::make_unique<Slots>()) {}
-    EditedPatternStore(const EditedPatternStore&) = delete;
-    EditedPatternStore& operator=(const EditedPatternStore&) = delete;
+    SnapshotStore() : slots(std::make_unique<Slots>()) {}
+    SnapshotStore(const SnapshotStore&) = delete;
+    SnapshotStore& operator=(const SnapshotStore&) = delete;
 
-    int publish(const ScratchPattern& pattern) noexcept
+    int publish(const Snapshot& pattern) noexcept
     {
         for (int index = 0; index < capacity; ++index) {
             auto& slot = (*slots)[static_cast<size_t>(index)];
@@ -95,7 +96,7 @@ public:
         (void) previous;
     }
 
-    const ScratchPattern& get(int index) const noexcept
+    const Snapshot& get(int index) const noexcept
     {
         assert(index >= 0 && index < capacity);
         const auto& slot = (*slots)[static_cast<size_t>(index)];
@@ -106,7 +107,7 @@ public:
 private:
     struct Slot {
         std::atomic<int> references {0};
-        ScratchPattern pattern;
+        Snapshot pattern;
     };
     using Slots = std::array<Slot, capacity>;
     // Keep the fixed snapshot bank off the processor's stack. Allocation occurs
@@ -114,5 +115,17 @@ private:
     std::unique_ptr<Slots> slots;
     std::atomic<int> latest {None};
 };
+
+using EditedPatternStore = SnapshotStore<ScratchPattern, 32>;
+
+// Pattern slots B-H (slot A is the main pattern: factory, generated or edited).
+// Each slot holds a normalized one-beat geometry like an edited pattern; an
+// empty slot plays dry input.
+struct SlotBank {
+    static constexpr int count = 7;
+    std::array<ScratchPattern, count> patterns {};
+    std::array<bool, count> filled {};
+};
+using SlotBankStore = SnapshotStore<SlotBank, 6>;
 
 } // namespace backScratch

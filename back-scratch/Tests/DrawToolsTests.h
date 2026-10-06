@@ -106,7 +106,10 @@ inline void runDrawToolsTests()
 
     // Shape previews are the exact same geometry used by the processor. Each
     // contour has genuine reverse motion and smooth arrival/departure speeds.
-    for (int shape = 0; shape < scratchShapeCount; ++shape) {
+    // The first ten are rounded turntable contours; the five 0.11 roll/tape
+    // starters are checked separately below (rolls jump by design).
+    constexpr int roundedShapes = 10;
+    for (int shape = 0; shape < roundedShapes; ++shape) {
         require(scratchShapeName(shape)[0] != '\0', "every scratch starter has a readable name");
         for (const double beats : {1.0 / 6.0, 0.5, 4.0, 12.0, 64.0, 384.0}) {
             auto source = original;
@@ -136,6 +139,46 @@ inline void runDrawToolsTests()
                     "selected scratch starters remain fully drawable and erasable");
         }
     }
+    for (int shape = roundedShapes; shape < scratchShapeCount; ++shape) {
+        require(scratchShapeName(shape)[0] != '\0', "every roll starter has a readable name");
+        for (const double beats : {1.0 / 6.0, 0.5, 4.0, 12.0, 64.0, 384.0}) {
+            auto source = original;
+            source.beats = beats;
+            source.gridOffset = shape % patternGridDivisions;
+            auto contour = makeScratchShape(source, shape);
+            require(contour.beats == beats && contour.gridOffset == source.gridOffset && validateEditedPattern(contour),
+                    "roll and tape starters keep length and shift and stay inside the speed and causality limits");
+            analyticRates(contour);
+            const double shifted = patternOffsetBeats(contour);
+            require(evaluatePattern(contour, 0.25 * beats + shifted).wet == 0.0f
+                        && evaluatePattern(contour, 0.75 * beats + shifted).wet > 0.0f,
+                    "roll and tape starters leave the first half live and act on the second half");
+            require(erasePatternGridCells(contour, 10, 12), "roll starters remain erasable");
+        }
+    }
+    // The roll tool replaces only the dragged span and re-reads one slice.
+    {
+        auto rolled = original;
+        require(drawPatternRoll(rolled, 0.5, 0.75, 1.0 / 32.0, RollStyle::repeat) && validateEditedPattern(rolled),
+                "a dragged sixteenth roll is valid geometry");
+        preservedOutside(original, rolled, original.beats * 0.5, original.beats * 0.75);
+        for (int pass = 1; pass < 8; ++pass) {
+            const double at = (0.5 + pass / 32.0 + 1.0 / 64.0) * rolled.beats;
+            const auto value = evaluatePattern(rolled, at);
+            require(value.wet > 0.0f && std::abs(at - value.delayBeats - (0.5 + 1.0 / 64.0) * rolled.beats) < 1.0e-9,
+                    "each roll pass re-reads the slice where the roll began");
+        }
+        for (const auto style : {RollStyle::reverse, RollStyle::accelerate, RollStyle::chopped}) {
+            auto other = original;
+            require(drawPatternRoll(other, 0.25, 0.5, 1.0 / 16.0, style) && validateEditedPattern(other),
+                    "reverse, accelerating and chopped rolls are valid geometry");
+            analyticRates(other);
+        }
+        auto unchangedRoll = original;
+        require(!drawPatternRoll(unchangedRoll, 0.3, 0.3, 0.1, RollStyle::repeat)
+                    && !drawPatternRoll(unchangedRoll, 0.1, 0.2, 0.0, RollStyle::repeat),
+                "empty rolls are rejected without changing the pattern");
+    }
 
     // Aggressive slopes are constrained in their actual analytic geometry,
     // and invalid events never corrupt an otherwise valid preview.
@@ -152,7 +195,7 @@ inline void runDrawToolsTests()
     preservedOutside(unchanged, a, -1.0, -0.5);
     require(!dense.append(0.5, std::numeric_limits<double>::infinity()) && dense.render(b),
             "invalid freehand event preserves the previous complete stroke");
-    std::cout << "Drawing tools: event-independent freehand, fractional/reversed lines, eased curves, exact shifted clipping and 10 musical shapes passed\n";
+    std::cout << "Drawing tools: event-independent freehand, fractional/reversed lines, eased curves, exact shifted clipping, 10 musical shapes, 5 roll/tape starters and the roll tool passed\n";
 }
 
 } // namespace backScratch

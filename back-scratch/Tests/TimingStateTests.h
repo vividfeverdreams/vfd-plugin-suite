@@ -214,7 +214,7 @@ inline void checkTimingRecall()
             const auto expected = source.currentPattern();
             require(source.savePreset(preset.file).wasOk(), "timing and shifted phrase preset saves");
             const auto xml = juce::XmlDocument::parse(preset.file);
-            require(xml != nullptr && xml->getIntAttribute("version") == 9
+            require(xml != nullptr && xml->getIntAttribute("version") == 10
                         && xml->getIntAttribute("phraseTiming", -1) == timing
                         && xml->getIntAttribute("patternShift", -1) == timing + 5,
                     "version seven preset explicitly stores timing mode and pattern grid shift");
@@ -234,7 +234,7 @@ inline void checkTimingRecall()
             juce::MemoryBlock state;
             source.getStateInformation(state);
             const auto stateXml = juce::AudioProcessor::getXmlFromBinary(state.getData(), static_cast<int>(state.getSize()));
-            require(stateXml != nullptr && stateXml->getIntAttribute("engineVersion") == 9,
+            require(stateXml != nullptr && stateXml->getIntAttribute("engineVersion") == 10,
                     "project state declares the new timing-compatible schema");
             BackScratchProcessor restoredProject;
             restoredProject.setPhraseTimingChoice((timing + 1) % 3);

@@ -50,9 +50,18 @@ private:
     bool active = false;
 };
 
+// Rolls drawn across [fromPhase, toPhase] of the visible graph. grain is a
+// fraction of the phrase. Repeat re-reads the slice at fromPhase; Reverse
+// plays it backwards after one live pass; Accelerate halves the grain twice;
+// Chopped repeats with a short crossfader gap. Delays may widen the graph's
+// editing range so the whole roll stays visible.
+enum class RollStyle { repeat, reverse, accelerate, chopped };
+bool drawPatternRoll(ScratchPattern&, double fromPhase, double toPhase, double grain, RollStyle) noexcept;
+
 // Small starting contours, separate from the factory preset bank. They keep
 // the current timing and shift, and become ordinary editable custom geometry.
-constexpr int scratchShapeCount = 10;
+// The last five are roll/tape starters (0.11).
+constexpr int scratchShapeCount = 15;
 const char* scratchShapeName(int index) noexcept;
 ScratchPattern makeScratchShape(const ScratchPattern& templatePattern, int index) noexcept;
 

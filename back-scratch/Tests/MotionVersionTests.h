@@ -1,6 +1,9 @@
 #pragma once
 #include "EditedProcessorTests.h"
 #include "TimingStateTests.h"
+#include "PresetBank.h"
+#include <map>
+#include <string>
 
 namespace backScratch::motionVersionTests {
 inline void compare(const ScratchPattern& expected, const ScratchPattern& actual)
@@ -108,21 +111,33 @@ inline void exportFactoryBank(const juce::File& directory)
 {
     using playbackAlignmentTests::require;
     require(directory.createDirectory().wasOk(), "factory preset directory created");
-    BackScratchProcessor processor, restored;
-    processor.setPhraseLocked(false);
-    for (int i = 0; i < factoryPresetCount; ++i) {
-        processor.selectFactoryPreset(i); processor.setPhraseLocked(true);
-        const auto file = directory.getChildFile(juce::File::createLegalFileName(juce::String(i + 1).paddedLeft('0', 2)
-            + " - " + juce::String(factoryPresets()[static_cast<size_t>(i)].name).replace(" / ", " and ") + ".backscratch"));
-        const auto saved = processor.savePreset(file);
-        require(saved.wasOk(), "rounded factory preset exports");
-        const auto loaded = restored.loadPreset(file);
-        if (loaded.failed()) std::cerr << "Factory " << i << ": " << loaded.getErrorMessage() << '\n';
-        require(loaded.wasOk(), "rounded factory preset reopens");
-        compare(processor.currentPattern(), restored.currentPattern());
+    // The whole factory bank as portable files, one folder per bank folder
+    // (Classic/Bass and so on become nested folders).
+    const auto& bank = bankPresets();
+    std::map<std::string, int> numbers;
+    for (int i = 0; i < static_cast<int>(bank.size()); ++i) {
+        const auto& entry = bank[static_cast<size_t>(i)];
+        BackScratchProcessor processor, restored;
+        // Unlocked, so the original recipes keep their native length; the
+        // file then records the lock on, as the 0.10 export did.
         processor.setPhraseLocked(false);
+        processor.selectBankPreset(i);
+        processor.setPhraseLocked(true);
+        juce::File folder = directory;
+        for (const auto& part : juce::StringArray::fromTokens(juce::String(entry.folder), "/", {}))
+            folder = folder.getChildFile(juce::File::createLegalFileName(part));
+        const auto file = folder.getChildFile(juce::File::createLegalFileName(juce::String(++numbers[entry.folder]).paddedLeft('0', 2)
+            + " - " + juce::String(entry.name).replace(" / ", " and ") + ".backscratch"));
+        const auto saved = processor.savePreset(file);
+        require(saved.wasOk(), "factory bank preset exports");
+        const auto loaded = restored.loadPreset(file);
+        if (loaded.failed()) std::cerr << entry.folder << " / " << entry.name << ": " << loaded.getErrorMessage() << '\n';
+        require(loaded.wasOk(), "factory bank preset reopens");
+        compare(processor.currentPattern(), restored.currentPattern());
+        require(processor.presetXml("x")->isEquivalentTo(restored.presetXml("x").get(), false),
+                "a reopened factory bank file restores every saved setting and slot");
     }
-    std::cout << "Exported and recalled75 schema9 rounded factory presets\n";
+    std::cout << "Exported and recalled " << bank.size() << " schema 10 factory bank presets in " << bankFolders().size() << " folders\n";
 }
 }
 inline void runMotionVersionTests()

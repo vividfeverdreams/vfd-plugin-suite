@@ -2,6 +2,7 @@
 
 #include "ScratchPattern.h"
 #include <array>
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
@@ -15,6 +16,13 @@ namespace backScratch {
 class LiveScratchEngine {
 public:
     static constexpr double crossoverHz = 200.0;
+    // Keep Sub split choices. Every choice uses the same filter length, so the
+    // reported latency never changes. Index defaultSplit is the 0.10 filter.
+    static constexpr std::array<double, 4> splitFrequencies {120.0, 160.0, 200.0, 300.0};
+    static constexpr int defaultSplit = 2;
+    // Depth can push a stroke past the 2x drawing limit. The resampler's
+    // anti-aliasing table covers source speeds up to this value.
+    static constexpr double maximumSpeed = 4.0;
     static constexpr int maximumHistorySeconds = 128;
     static constexpr int defaultHistorySeconds = 16;
     static constexpr int interpolationGuardSamples = 32;
@@ -25,9 +33,16 @@ public:
     static constexpr double tempoGlideDrift = 0.25;
     static constexpr double tempoSnapFraction = 0.005;
 
-    // Allocate only when the host prepares playback. Production uses the full
-    // 128 seconds: a stretched 16-bar phrase at 20 BPM can look back 120 s.
-    // A smaller budget remains useful for short standalone renders/tests.
+    // Per-sample output shaping. The defaults reproduce 0.10 exactly.
+    struct Shaping {
+        double mix = 1.0;          // 0 = dry, 1 = fully scratched
+        double gain = 1.0;         // output trim (linear); dry/bypass stays unity
+        int split = defaultSplit;  // index into splitFrequencies
+        double speedLimit = 2.0;   // 2 for drawn/recipe motion, up to 4 with Depth
+    };
+
+    // Allocate only when the host prepares playback. A stretched 16-bar phrase
+    // at 20 BPM can look back 120 s; the processor sizes the history to need.
     // Never throws. If the memory is unavailable it retains 64, 32, 16, 8, 4,
     // 2 or 1 seconds, and finally only the latency pipeline (0 s); the
     // reported latency is unchanged in every case.
@@ -39,8 +54,9 @@ public:
     // scratch fades out over the usual 3 ms instead of stopping abruptly.
     void invalidateHistory() noexcept;
     int latencySamples() const noexcept { return crossoverDelay + interpolationGuardSamples; }
-    // Seconds of lookback actually retained by the last prepare().
-    double historySeconds() const noexcept { return retainedSeconds; }
+    // Seconds of lookback currently retained.
+    double historySeconds() const noexcept { return retainedSeconds.load(); }
+    double sampleRate() const noexcept { return rate; }
     // Test/diagnostic hook: treat history allocations above this size as failed.
     void setHistoryMemoryLimit(std::size_t bytes) noexcept { memoryLimit = bytes; }
     // Number of readhead discontinuities that started a jump crossfade.
@@ -49,8 +65,25 @@ public:
     // A requested stroke can lack history immediately after a start or seek.
     bool isHistoryReady() const noexcept { return historyReady; }
     bool isScratchActive() const noexcept { return scratchActive; }
+    std::array<float, 2> process(float left, float right, const PatternSample& sample,
+                               double samplesPerBeat, bool keepSub, bool bypass) noexcept
+    {
+        return process(left, right, sample, samplesPerBeat, keepSub, bypass, Shaping {});
+    }
     std::array<float, 2> process(float left, float right, const PatternSample&,
-                               double samplesPerBeat, bool keepSub, bool bypass) noexcept;
+                               double samplesPerBeat, bool keepSub, bool bypass, const Shaping&) noexcept;
+
+    // Resizing the retained history while audio runs. The message thread
+    // allocates the new ring (requestHistory) and later frees the old one
+    // (collectRetiredHistory). Between callbacks the audio thread adopts it
+    // (adoptRequestedHistory) by copying only the last few thousand frames, so
+    // the dry path continues. Older audio is no longer stored and is never
+    // read; strokes reaching that far fall back to live input until the new
+    // history has filled.
+    bool requestHistory(double seconds) noexcept;
+    void collectRetiredHistory() noexcept;
+    void adoptRequestedHistory() noexcept;
+    bool isHistoryRequestPending() const noexcept { return historyHandoff.load() != 0; }
 
 private:
     // Symmetric FIR with a duplicated ring: paired samples share one multiply,
@@ -69,20 +102,33 @@ private:
             bool even = true;
         };
         std::array<Stage, maximumStages> stages;
-        LinearPhaseFilter base;
+        // One base filter per split choice. All run continuously, so a change
+        // blends between two already-settled filters instead of restarting one.
+        std::array<LinearPhaseFilter, splitFrequencies.size()> bases;
         int stageCount = 0, delay = 0;
+        int selected = defaultSplit, previous = defaultSplit;
+        double blend = 1.0, blendStep = 0.004;
         void prepare(double sampleRate);
         void reset() noexcept;
+        void select(int split) noexcept;
         double process(double input, int level = 0) noexcept;
     };
     std::array<std::vector<float>, 4> history; // Full L/R, complementary upper L/R.
+    std::array<std::vector<float>, 4> spareHistory;
+    std::atomic<int> historyHandoff {0}; // 0 idle, 1 new ring ready, 2 old ring awaiting release
+    int spareCapacity = 0;
+    double spareSeconds = 0.0;
     std::array<BassExtractor, 2> bass;
-    std::int64_t writeFrame = 0, validFrom = 0;
+    // validFrom: start of the current musical history (seek/start/restore).
+    // storedFrom: oldest frame still stored after a history resize.
+    std::int64_t writeFrame = 0, validFrom = 0, storedFrom = 0;
     int capacity = 0, busChannels = 2, crossoverDelay = 0;
-    double rate = 48000.0, retainedSeconds = 0.0;
+    double rate = 48000.0;
+    std::atomic<double> retainedSeconds {0.0};
     std::size_t memoryLimit = std::numeric_limits<std::size_t>::max();
     double fadeStep = 1.0 / 144.0, controlCoefficient = 0.01;
     double wetAmount = 0, gateAmount = 1, motionAmount = 1, subAmount = 1;
+    double mixAmount = 1, gainAmount = 1;
     double previousTarget = 0, previousRate = 1;
     double previousDelayBeats = 0, previousSamplesPerBeat = 0, glideSamplesPerBeat = 0;
     double outgoingFrame = 0, outgoingRate = 1, jumpFade = 1;
@@ -92,6 +138,7 @@ private:
     bool haveTarget = false, freezeOutgoing = false, firstSample = true, fallbackActive = false;
     bool historyReady = false, scratchActive = false;
 
+    std::size_t framesFor(double seconds) const noexcept;
     bool allocateHistory(double seconds) noexcept;
     // Audio that is still physically stored in the ring.
     bool available(double frame) const noexcept;

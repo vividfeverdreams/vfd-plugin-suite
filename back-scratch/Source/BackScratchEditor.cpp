@@ -1,6 +1,8 @@
 #include "BackScratchEditor.h"
 #include "ScratchPattern.h"
 #include "PatternEditing.h"
+#include "PhraseBuilder.h"
+#include "PresetBank.h"
 #include "BinaryData.h"
 #include "VfdInfo.h"
 #include <algorithm>
@@ -140,15 +142,18 @@ private:
 
 class DurationKnobLookAndFeel final : public juce::LookAndFeel_V4 {
 public:
-    DurationKnobLookAndFeel() {
+    explicit DurationKnobLookAndFeel(juce::Typeface::Ptr typeface) : face(std::move(typeface)) {
         setColour(juce::PopupMenu::backgroundColourId, deep);
         setColour(juce::PopupMenu::textColourId, cream);
+        setColour(juce::PopupMenu::headerTextColourId, cyan);
         setColour(juce::PopupMenu::highlightedBackgroundColourId, burgundy.brighter(0.35f));
         setColour(juce::PopupMenu::highlightedTextColourId, cyan);
         setColour(juce::TooltipWindow::backgroundColourId, deep);
         setColour(juce::TooltipWindow::textColourId, cream);
         setColour(juce::TooltipWindow::outlineColourId, cream.withAlpha(0.35f));
     }
+    // Menus use the device's Chakra Petch lettering, like the screen.
+    juce::Font getPopupMenuFont() override { return juce::Font(juce::FontOptions(face).withHeight(16.0f)); }
     void drawRotarySlider(juce::Graphics& g, int x, int y, int width, int height,
                           float position, float startAngle, float endAngle, juce::Slider& slider) override
     {
@@ -180,6 +185,8 @@ public:
             g.drawEllipse(bounds.reduced(radius * 0.15f), 1.3f);
         }
     }
+private:
+    juce::Typeface::Ptr face;
 };
 }
 
@@ -192,7 +199,7 @@ BackScratchEditor::BackScratchEditor(BackScratchProcessor& owner)
                                                               BinaryData::ChakraPetchSemiBold_ttfSize);
     italicTypeface = juce::Typeface::createSystemTypefaceFor(BinaryData::ChakraPetchBoldItalic_ttf,
                                                              BinaryData::ChakraPetchBoldItalic_ttfSize);
-    knobLookAndFeel = std::make_unique<DurationKnobLookAndFeel>();
+    knobLookAndFeel = std::make_unique<DurationKnobLookAndFeel>(regularTypeface);
     setLookAndFeel(knobLookAndFeel.get());
     durationKnob.setLookAndFeel(knobLookAndFeel.get());
     durationKnob.setName("Phrase length");
@@ -225,7 +232,17 @@ BackScratchEditor::BackScratchEditor(BackScratchProcessor& owner)
     setResizeLimits(minimumEditorWidth, minimumEditorWidth * editorHeight / editorWidth,
                     maximumEditorWidth, maximumEditorWidth * editorHeight / editorWidth);
     if (auto* constrainer = getConstrainer()) constrainer->setFixedAspectRatio(double(editorWidth) / editorHeight);
-    const int width = initialEditorWidth();
+    int width = initialEditorWidth();
+    // A size chosen from the Size menu is saved with the project. Reopen at it,
+    // or at the largest choice below it that fits this display.
+    if (const float saved = owner.editorScale(); saved > 0.0f) {
+        const auto* display = juce::Desktop::getInstance().getDisplays().getPrimaryDisplay();
+        for (auto choice = sizeChoices.rbegin(); choice != sizeChoices.rend(); ++choice) {
+            if (*choice > saved || (display != nullptr && !sizeFits(*choice, display->userBounds))) continue;
+            width = juce::roundToInt(editorWidth * *choice);
+            break;
+        }
+    }
     setSize(width, juce::roundToInt(width * double(editorHeight) / editorWidth));
     setWantsKeyboardFocus(true);
     setTitle("BACK-SCRATCH — live scratch variations");
@@ -237,6 +254,9 @@ BackScratchEditor::~BackScratchEditor()
     stopTimer();
     closeEditMenu();
     finishGridGesture(false);
+    if (draggingBar != Control::none)
+        if (const auto bar = barFor(draggingBar))
+            if (auto* parameter = scratchProcessor.parameters().getParameter(bar->id)) parameter->endChangeGesture();
     durationKnob.finishDrag();
     durationAttachment.reset();
     durationKnob.setLookAndFeel(nullptr);
@@ -265,9 +285,94 @@ juce::Rectangle<float> BackScratchEditor::controlBounds(Control control) noexcep
         case Control::eraser:   return rectangle(736, 195, 42, 38);
         case Control::undo:     return rectangle(804, 195, 42, 38);
         case Control::redo:     return rectangle(852, 195, 42, 38);
+        // Screen soft keys below the display, where the 0.10 "01 / 75" counter sat.
+        case Control::pagePattern: return rectangle(618, 519, 134, 30);
+        case Control::pagePerform: return rectangle(758, 519, 136, 30);
+        // PERFORM page, inside the graph area (230, 314, 664, 180).
+        case Control::engage:   return rectangle(236, 318, 150, 52);
+        case Control::quantize: return rectangle(394, 318, 118, 52);
+        case Control::retrigger: return rectangle(520, 318, 116, 52);
+        case Control::every:    return rectangle(644, 318, 118, 52);
+        case Control::lookback: return rectangle(770, 318, 118, 52);
+        case Control::mix:      return rectangle(236, 378, 212, 52);
+        case Control::depth:    return rectangle(456, 378, 212, 52);
+        case Control::output:   return rectangle(676, 378, 212, 52);
+        case Control::slotA: case Control::slotB: case Control::slotC: case Control::slotD:
+        case Control::slotE: case Control::slotF: case Control::slotG: case Control::slotH: {
+            const int slot = static_cast<int>(control) - static_cast<int>(Control::slotA);
+            return rectangle(236.0f + slot * 38.0f, 438, 34, 52);
+        }
+        case Control::chain:    return rectangle(546, 438, 108, 52);
+        case Control::split:    return rectangle(662, 438, 110, 52);
+        case Control::history:  return rectangle(780, 438, 108, 52);
         case Control::none:     break;
     }
     return {};
+}
+
+bool BackScratchEditor::isControlVisible(Control control) const noexcept
+{
+    // Drawing tools belong to the PATTERN page; the performance controls sit
+    // in the same screen area on the PERFORM page.
+    const auto drawing = {Control::pencil, Control::drawOptions, Control::shapes, Control::eraser, Control::undo, Control::redo};
+    if (std::find(drawing.begin(), drawing.end(), control) != drawing.end()) return !performPage;
+    if (control >= Control::engage && control <= Control::history) return performPage;
+    return true;
+}
+
+bool BackScratchEditor::sizeFits(float scale, juce::Rectangle<float> userArea) noexcept
+{
+    const float width = std::round(editorWidth * scale), height = std::round(editorHeight * scale);
+    return width <= userArea.getWidth() && height + 60.0f <= userArea.getHeight();
+}
+
+void BackScratchEditor::applyScale(float scale)
+{
+    setSize(juce::roundToInt(editorWidth * scale), juce::roundToInt(editorHeight * scale));
+    scratchProcessor.setEditorScale(scale);
+}
+
+void BackScratchEditor::showSizeMenu()
+{
+    juce::PopupMenu menu;
+    menu.addSectionHeader("SIZE");
+    const auto* display = juce::Desktop::getInstance().getDisplays().getDisplayForRect(getScreenBounds());
+    const float current = static_cast<float>(getWidth()) / editorWidth;
+    for (std::size_t index = 0; index < sizeChoices.size(); ++index) {
+        const float scale = sizeChoices[index];
+        const bool fits = display == nullptr || sizeFits(scale, display->userBounds);
+        menu.addItem(static_cast<int>(index) + 1, juce::String(juce::roundToInt(scale * 100.0f)) + "%", fits,
+                     std::abs(current - scale) < 0.01f);
+    }
+    const auto safe = juce::Component::SafePointer<BackScratchEditor>(this);
+    showEditMenu(menu, Control::none, [safe](int result) {
+        if (safe == nullptr || result < 1 || result > static_cast<int>(sizeChoices.size())) return;
+        safe->applyScale(sizeChoices[static_cast<std::size_t>(result - 1)]);
+    });
+}
+
+void BackScratchEditor::showSlotMenu(int slot)
+{
+    slot = std::clamp(slot, 0, BackScratchProcessor::slotCount - 1);
+    const auto letter = juce::String::charToString(static_cast<juce::juce_wchar>('A' + slot));
+    const int selected = scratchProcessor.selectedSlot();
+    const auto selectedLetter = juce::String::charToString(static_cast<juce::juce_wchar>('A' + selected));
+    juce::PopupMenu menu;
+    menu.addSectionHeader("SLOT " + letter);
+    menu.addItem(1, "Select slot " + letter, true, selected == slot);
+    menu.addItem(2, "Copy slot " + selectedLetter + " here", selected != slot);
+    if (slot != 0) menu.addItem(3, "Copy slot A here", selected != 0);
+    if (slot != 0) menu.addItem(4, "Clear slot " + letter, scratchProcessor.slotFilled(slot));
+    const auto safe = juce::Component::SafePointer<BackScratchEditor>(this);
+    showEditMenu(menu, static_cast<Control>(static_cast<int>(Control::slotA) + slot), [safe, slot, selected](int result) {
+        if (safe == nullptr) return;
+        auto& processor = safe->scratchProcessor;
+        if (result == 1) processor.selectSlot(slot);
+        else if (result == 2) processor.copyPatternToSlot(selected, slot);
+        else if (result == 3) processor.copyPatternToSlot(0, slot);
+        else if (result == 4) processor.clearSlot(slot);
+        safe->repaint();
+    });
 }
 
 juce::Rectangle<float> BackScratchEditor::patternBounds() noexcept
@@ -319,9 +424,35 @@ BackScratchEditor::Control BackScratchEditor::controlAt(juce::Point<float> p) co
     for (const auto control : { Control::randomize, Control::keepSub, Control::phraseLock,
                                Control::dotted, Control::triplet, Control::shiftLeft, Control::shiftRight,
                                Control::previous, Control::next, Control::presets, Control::save, Control::load,
-                               Control::pencil, Control::eraser, Control::undo, Control::redo, Control::drawOptions, Control::shapes })
-        if (controlBounds(control).contains(p)) return control;
+                               Control::pencil, Control::eraser, Control::undo, Control::redo, Control::drawOptions, Control::shapes,
+                               Control::pagePattern, Control::pagePerform, Control::engage, Control::quantize,
+                               Control::retrigger, Control::every, Control::lookback, Control::mix, Control::depth,
+                               Control::output, Control::slotA, Control::slotB, Control::slotC, Control::slotD,
+                               Control::slotE, Control::slotF, Control::slotG, Control::slotH,
+                               Control::chain, Control::split, Control::history })
+        if (isControlVisible(control) && controlBounds(control).contains(p)) return control;
     return Control::none;
+}
+
+std::optional<BackScratchEditor::Bar> BackScratchEditor::barFor(Control control) noexcept
+{
+    if (control == Control::mix) return Bar {"wetMix", 0.0f, 100.0f, 100.0f};
+    if (control == Control::depth) return Bar {"depth", 0.0f, 200.0f, 100.0f};
+    if (control == Control::output) return Bar {"outputTrim", -12.0f, 12.0f, 0.0f};
+    return std::nullopt;
+}
+
+void BackScratchEditor::dragBar(Control control, juce::Point<float> point)
+{
+    const auto bar = barFor(control);
+    if (!bar) return;
+    const float width = controlBounds(control).getWidth() - 24.0f;
+    const float fine = juce::ModifierKeys::currentModifiers.isShiftDown() ? 0.25f : 1.0f;
+    const float value = std::clamp(barStartValue + (point.x - barStartPoint.x) / width * (bar->high - bar->low) * fine,
+                                   bar->low, bar->high);
+    if (auto* parameter = scratchProcessor.parameters().getParameter(bar->id))
+        parameter->setValueNotifyingHost(parameter->convertTo0to1(value));
+    repaint();
 }
 
 void BackScratchEditor::drawText(juce::Graphics& g, const juce::String& text, juce::Rectangle<float> box,
@@ -363,8 +494,10 @@ void BackScratchEditor::paint(juce::Graphics& g)
     g.addTransform(designToEditor());
     const auto display = scratchProcessor.displayState();
     drawPresetBrowser(g, display);
-    drawEditTools(g);
+    if (!performPage) drawEditTools(g);
     drawPattern(g, display);
+    if (performPage) drawPerformPage(g, display);
+    drawPageTabs(g, display);
     drawPhraseControls(g);
     drawRandomize(g);
     drawSubChoice(g);
@@ -387,14 +520,30 @@ void BackScratchEditor::drawPresetBrowser(juce::Graphics& g, const BackScratchPr
     const bool generated = display.generated;
     const auto& preset = factoryPresets()[static_cast<size_t>(display.factoryIndex)];
     const bool usingLiveInput = display.playing && display.scratchActive && !display.historyReady;
-    const auto category = display.edited || editPreview.has_value() ? juce::String("EDITED PATTERN")
-        : generated ? juce::String("GENERATED PATTERN") : juce::String(preset.category) + " / FACTORY";
+    const int bankIndex = scratchProcessor.selectedBankPreset();
+    const auto& bank = bankPresets();
+    const bool bankNamed = bankIndex >= 0 && bankIndex < static_cast<int>(bank.size()) && !editPreview
+        && scratchProcessor.currentPresetName() == juce::String(bank[static_cast<size_t>(bankIndex)].name);
+    const int selectedSlot = scratchProcessor.selectedSlot();
+    const auto slotName = [](int slot) { return juce::String::charToString(static_cast<juce::juce_wchar>('A' + slot)); };
+    const auto category = selectedSlot > 0 ? "SLOT " + slotName(selectedSlot) + (scratchProcessor.slotFilled(selectedSlot) ? "" : " / EMPTY")
+        : bankNamed ? juce::String(bank[static_cast<size_t>(bankIndex)].folder).replace("/", " / ").toUpperCase()
+        : display.edited || editPreview.has_value() ? juce::String("EDITED PATTERN")
+        : generated ? juce::String("GENERATED PATTERN")
+        : juce::String(preset.category) + " / " + juce::String(display.factoryIndex + 1).paddedLeft('0', 2) + " OF 75";
+    const auto rollNames = std::array<const char*, 4> {"1/8", "1/16", "1/32", "1/16T"};
     const auto eyebrow = statusLine.isNotEmpty() ? statusLine
-        : editTool == Control::pencil ? (drawMode == DrawMode::free ? "FREE DRAW / FOLLOW YOUR HAND"
-            : drawMode == DrawMode::line ? "LINE / DRAG TWO POINTS" : "CURVE / DRAG A SWEEP")
-        : editTool == Control::eraser ? "ERASE / DRAG TO RESTORE AUDIO"
-        : category + (usingLiveInput ? " / LIVE INPUT" : "");
-    drawText(g, eyebrow, rectangle(230, 207, 232, 26), 15,
+        : editTool == Control::pencil && !performPage ? (drawMode == DrawMode::free ? juce::String("FREE DRAW / FOLLOW YOUR HAND")
+            : drawMode == DrawMode::line ? juce::String("LINE / DRAG TWO POINTS")
+            : drawMode == DrawMode::curve ? juce::String("CURVE / DRAG A SWEEP")
+            : (rollStyle == RollStyle::accelerate ? juce::String("ACCELERATING ROLL")
+               : (rollStyle == RollStyle::reverse ? juce::String("REVERSE ROLL ") : rollStyle == RollStyle::chopped
+                    ? juce::String("CHOPPED ROLL ") : juce::String("ROLL "))
+                 + rollNames[static_cast<size_t>(std::clamp(rollRate, 0, 3))]) + " / DRAG ACROSS")
+        : editTool == Control::eraser && !performPage ? juce::String("ERASE / DRAG TO RESTORE AUDIO")
+        : category + (usingLiveInput ? " / LIVE INPUT" : "")
+            + (display.chainLength > 1 ? " / CHAIN PLAYING " + slotName(display.slot) : juce::String {});
+    drawText(g, eyebrow, rectangle(230, 207, performPage ? 664.0f : 232.0f, 26), 15,
              statusLine.isNotEmpty() && statusIsError ? juce::Colour::fromRGB(255, 164, 153) : cyan,
              juce::Justification::centredLeft);
     const bool sameIdentity = display.edited == scratchProcessor.hasCustomPattern()
@@ -405,7 +554,8 @@ void BackScratchEditor::drawPresetBrowser(juce::Graphics& g, const BackScratchPr
         && display.durationChoice == scratchProcessor.phraseDurationChoice()
         && display.timingChoice == scratchProcessor.phraseTimingChoice()
         && display.pattern.gridOffset == scratchProcessor.patternShiftSteps();
-    auto name = editPreview ? juce::String("Edited Scratch") : sameIdentity ? scratchProcessor.currentPresetName()
+    auto name = editPreview ? juce::String("Edited Scratch") : selectedSlot > 0 ? scratchProcessor.currentPresetName()
+                            : sameIdentity ? scratchProcessor.currentPresetName()
                             : display.edited ? juce::String("Edited Scratch")
                             : generated ? juce::String("New Scratch") : juce::String(preset.name);
     if (generated && name.startsWith("New Scratch /")) name = "New Scratch";
@@ -484,6 +634,14 @@ void BackScratchEditor::drawEditTools(juce::Graphics& g)
                 symbol.closeSubPath();
                 symbol.startNewSubPath(c.x + 2, c.y - 7);
                 symbol.lineTo(c.x + 7, c.y - 2);
+            } else if (drawMode == DrawMode::roll) {
+                // A small staircase: the same slice read again and again.
+                symbol.startNewSubPath(c.x - 10, c.y + 7);
+                for (int step = 0; step < 4; ++step) {
+                    const float x = c.x - 10 + step * 5.0f;
+                    symbol.lineTo(x + 5.0f, c.y + 7 - (step + 1) * 4.0f);
+                    symbol.lineTo(x + 5.0f, c.y + 7);
+                }
             } else {
                 symbol.startNewSubPath(c.x - 9, c.y + 6);
                 if (drawMode == DrawMode::curve)
@@ -492,7 +650,8 @@ void BackScratchEditor::drawEditTools(juce::Graphics& g)
                 g.fillEllipse(c.x - 11, c.y + 4, 4, 4);
                 g.fillEllipse(c.x + 7, c.y - 8, 4, 4);
             }
-            drawText(g, drawMode == DrawMode::free ? "FREE" : drawMode == DrawMode::line ? "LINE" : "CURVE",
+            drawText(g, drawMode == DrawMode::free ? "FREE" : drawMode == DrawMode::line ? "LINE"
+                        : drawMode == DrawMode::curve ? "CURVE" : "ROLL",
                      box.withTrimmedLeft(38).withTrimmedRight(7), 16, colour);
         } else if (control == Control::eraser) {
             symbol.startNewSubPath(c.x - 10, c.y + 2);
@@ -521,6 +680,7 @@ void BackScratchEditor::drawEditTools(juce::Graphics& g)
 
 void BackScratchEditor::drawPattern(juce::Graphics& g, const BackScratchProcessor::DisplayState& display)
 {
+    if (performPage) return;
     const auto& pattern = editPreview ? *editPreview : display.pattern;
     const double phraseBeats = pattern.beats;
     const auto plot = patternBounds();
@@ -607,6 +767,27 @@ void BackScratchEditor::drawPattern(juce::Graphics& g, const BackScratchProcesso
             }
         }
     }
+    // Play Every and Engage: a resting phrase is dimmed, so it is obvious the
+    // pattern is waiting rather than broken.
+    const bool resting = !display.engaged || (display.playing && !display.cycleActive);
+    if (resting) {
+        g.setColour(deep.withAlpha(0.55f));
+        g.fillRect(graph);
+    }
+    if (resting || display.every > 1) {
+        const auto text = !display.engaged ? juce::String("STANDBY / PRESS ENGAGE")
+            : (display.playing && !display.cycleActive ? juce::String("WAITING / ") : juce::String())
+              + "PLAYS LAST OF " + juce::String(display.every);
+        // A small screen label on its own dark plate, readable over any curve.
+        const juce::Font font(juce::FontOptions(regularTypeface).withHeight(14.0f));
+        const float width = juce::GlyphArrangement::getStringWidth(font, text) + 18.0f;
+        const auto plate = rectangle(graph.getRight() - width - 6.0f, graph.getY() + 6.0f, width, 22.0f);
+        g.setColour(deep.withAlpha(0.88f));
+        g.fillRoundedRectangle(plate, 5.0f);
+        g.setColour((resting ? cream : cyan).withAlpha(0.3f));
+        g.drawRoundedRectangle(plate, 5.0f, 1.0f);
+        drawText(g, text, plate, 14, resting ? cream.withAlpha(0.85f) : cyan.withAlpha(0.85f));
+    }
     if (display.playing) {
         const float phase = std::clamp(display.phase, 0.0f, 1.0f);
         const float x = graph.getX() + phase * graph.getWidth();
@@ -636,16 +817,33 @@ void BackScratchEditor::drawPattern(juce::Graphics& g, const BackScratchProcesso
             g.setColour(cyan);
             g.drawEllipse(x - 4.0f, y - 4.0f, 8.0f, 8.0f, 1.3f);
         }
+        if (drawMode == DrawMode::roll && editTool == Control::pencil && graphHovered && !editPreview) {
+            // Preview the slice a roll would repeat.
+            const double grain = rollGrainPhase();
+            const float x = std::clamp(graphHover.x, graph.getX(), graph.getRight());
+            g.setColour(cyan.withAlpha(0.12f));
+            g.fillRect(rectangle(x, graph.getY(), static_cast<float>(grain) * graph.getWidth(), graph.getHeight()));
+        }
     }
+}
+
+void BackScratchEditor::drawPageTabs(juce::Graphics& g, const BackScratchProcessor::DisplayState& display)
+{
     g.setColour(cyan.withAlpha(0.17f));
     g.drawHorizontalLine(519, 230, 894);
     drawText(g, "PHRASE", rectangle(230, 522, 89, 25), 15, cream.withAlpha(0.55f), juce::Justification::centredLeft);
     drawText(g, BackScratchProcessor::durationLabel(display.durationChoice, display.timingChoice).toUpperCase(),
              rectangle(327, 520, 183, 27), 18, cyan, juce::Justification::centredLeft);
-    const juce::String identity = display.edited || editPreview ? "EDITED" : display.generated
-        ? "SEED " + juce::String(display.seed)
-        : juce::String(display.factoryIndex + 1).paddedLeft('0', 2) + " / 75";
-    drawText(g, identity, rectangle(683, 522, 211, 25), 15, cream.withAlpha(0.55f), juce::Justification::centredRight);
+    // Two screen soft keys: the pattern graph and the PERFORM controls.
+    for (const auto control : {Control::pagePattern, Control::pagePerform}) {
+        const auto box = controlBounds(control).reduced(2.0f, 3.0f);
+        const bool on = (control == Control::pagePerform) == performPage;
+        g.setColour(cyan.withAlpha(on ? 0.16f : hovered == control ? 0.09f : 0.03f));
+        g.fillRoundedRectangle(box, 6.0f);
+        g.setColour((on ? cyan : cream).withAlpha(on ? 0.6f : 0.18f));
+        g.drawRoundedRectangle(box, 6.0f, 1.0f);
+        drawText(g, control == Control::pagePattern ? "PATTERN" : "PERFORM", box, 15, on ? cyan : cream.withAlpha(0.7f));
+    }
     for (const auto control : {Control::shiftLeft, Control::shiftRight}) {
         const auto box = controlBounds(control);
         if (hovered == control || pressed == control) {
@@ -662,6 +860,122 @@ void BackScratchEditor::drawPattern(juce::Graphics& g, const BackScratchProcesso
         g.strokePath(arrow, juce::PathStrokeType(2.0f, juce::PathStrokeType::curved,
                                                juce::PathStrokeType::rounded));
     }
+}
+
+void BackScratchEditor::drawPerformPage(juce::Graphics& g, const BackScratchProcessor::DisplayState& display)
+{
+    auto& processor = scratchProcessor;
+    const auto plate = [&](Control control) {
+        const auto box = controlBounds(control);
+        const bool over = hovered == control, down = pressed == control && over;
+        g.setColour(cyan.withAlpha(down ? 0.15f : over ? 0.09f : 0.04f));
+        g.fillRoundedRectangle(box, 7.0f);
+        g.setColour(cream.withAlpha(over ? 0.34f : 0.16f));
+        g.drawRoundedRectangle(box.reduced(0.5f), 6.5f, 1.0f);
+        return box;
+    };
+    const auto labelled = [&](Control control, const juce::String& label, const juce::String& value, bool dim = false) {
+        const auto box = plate(control);
+        drawText(g, label, box.withTrimmedTop(5).withHeight(17).reduced(8, 0), 14, cream.withAlpha(0.55f));
+        drawText(g, value, box.withTrimmedTop(21).withHeight(27).reduced(6, 0), 19, dim ? cream.withAlpha(0.35f) : cyan);
+    };
+    const auto led = [&](juce::Point<float> centre, juce::Colour colour, bool glow) {
+        g.setColour(burgundy.withAlpha(0.8f));
+        g.fillEllipse(centre.x - 6.3f, centre.y - 6.3f, 12.6f, 12.6f);
+        if (glow) {
+            g.setColour(colour.withAlpha(0.25f));
+            g.fillEllipse(centre.x - 10.0f, centre.y - 10.0f, 20.0f, 20.0f);
+        }
+        g.setColour(colour);
+        g.fillEllipse(centre.x - 5.0f, centre.y - 5.0f, 10.0f, 10.0f);
+    };
+    const auto choice = [&](const char* id) { return juce::roundToInt(processor.parameterValue(id)); };
+
+    // ENGAGE: lime when heard, amber while waiting for the snap point.
+    {
+        const auto box = plate(Control::engage);
+        const bool wanted = processor.isEngaged();
+        const bool heard = display.engaged;
+        const bool waiting = wanted != heard;
+        const auto amber = juce::Colour::fromRGB(255, 176, 64);
+        led({box.getX() + 22.0f, box.getCentreY()}, waiting ? (blink < 8 ? amber : burgundy.brighter(0.2f)) : heard ? lime : burgundy.brighter(0.15f),
+            heard || waiting);
+        drawText(g, "ENGAGE", rectangle(box.getX() + 38, box.getY() + 6, box.getWidth() - 44, 24), 19,
+                 heard ? cream : cream.withAlpha(0.7f), juce::Justification::centredLeft);
+        drawText(g, waiting ? (wanted ? "SNAPS IN" : "SNAPS OUT") : heard ? "PLAYING" : "STANDBY",
+                 rectangle(box.getX() + 38, box.getY() + 28, box.getWidth() - 44, 18), 14,
+                 waiting ? amber : heard ? lime : cream.withAlpha(0.5f), juce::Justification::centredLeft);
+    }
+    static constexpr std::array<const char*, 5> snaps {"1/16", "1/8", "1/4", "1/2", "1 BAR"};
+    labelled(Control::quantize, "SNAP", snaps[static_cast<size_t>(std::clamp(choice("engageQuantize"), 0, 4))]);
+    {
+        const bool on = processor.parameterValue("retrigger") > 0.5f;
+        const auto box = plate(Control::retrigger);
+        led({box.getX() + 18.0f, box.getCentreY()}, on ? lime : burgundy.brighter(0.15f), on);
+        drawText(g, "RETRIG", rectangle(box.getX() + 30, box.getY() + 6, box.getWidth() - 34, 22), 17,
+                 cream.withAlpha(on ? 1.0f : 0.7f), juce::Justification::centredLeft);
+        drawText(g, on ? "RESTARTS" : "OFF", rectangle(box.getX() + 30, box.getY() + 28, box.getWidth() - 34, 18), 14,
+                 on ? lime : cream.withAlpha(0.5f), juce::Justification::centredLeft);
+    }
+    static constexpr std::array<const char*, 4> plays {"EVERY", "LAST OF 2", "LAST OF 4", "LAST OF 8"};
+    labelled(Control::every, "PLAY", plays[static_cast<size_t>(std::clamp(choice("phraseEvery"), 0, 3))]);
+    static constexpr std::array<const char*, 5> looks {"OFF", "1 BEAT", "1 BAR", "2 BARS", "4 BARS"};
+    labelled(Control::lookback, "LOOK BACK", looks[static_cast<size_t>(std::clamp(choice("lookback"), 0, 4))]);
+
+    // MIX, DEPTH, OUTPUT: drag sideways, Shift for fine, double-click resets.
+    for (const auto control : {Control::mix, Control::depth, Control::output}) {
+        const auto bar = *barFor(control);
+        const float value = processor.parameterValue(bar.id);
+        const auto box = plate(control);
+        const auto text = control == Control::output ? (value > 0.04f ? "+" : "") + juce::String(std::abs(value) < 0.05f ? 0.0f : value, 1) + " dB"
+                                                     : juce::String(juce::roundToInt(value)) + "%";
+        drawText(g, control == Control::mix ? "MIX" : control == Control::depth ? "DEPTH" : "OUTPUT",
+                 rectangle(box.getX() + 12, box.getY() + 5, 90, 22), 15, cream.withAlpha(0.6f), juce::Justification::centredLeft);
+        drawText(g, text, rectangle(box.getRight() - 112, box.getY() + 4, 100, 24), 19, cyan, juce::Justification::centredRight);
+        const auto track = rectangle(box.getX() + 12, box.getY() + 34, box.getWidth() - 24, 8);
+        g.setColour(cream.withAlpha(0.10f));
+        g.fillRoundedRectangle(track, 4.0f);
+        const float fraction = (value - bar.low) / (bar.high - bar.low);
+        const float origin = (bar.reset - bar.low) / (bar.high - bar.low);
+        const float from = control == Control::mix ? 0.0f : std::min(origin, fraction);
+        const float to = control == Control::mix ? fraction : std::max(origin, fraction);
+        g.setColour(cyan.withAlpha(0.85f));
+        g.fillRoundedRectangle(rectangle(track.getX() + from * track.getWidth(), track.getY(),
+                                         std::max(2.0f, (to - from) * track.getWidth()), track.getHeight()), 4.0f);
+        if (control != Control::mix) {
+            g.setColour(cream.withAlpha(0.45f));
+            g.fillRect(rectangle(track.getX() + origin * track.getWidth() - 0.75f, track.getY() - 3, 1.5f, track.getHeight() + 6));
+        }
+    }
+
+    // Slots A-H: the selected slot is outlined; filled slots light; the slot
+    // being heard glows.
+    const int selected = processor.selectedSlot();
+    for (int slot = 0; slot < BackScratchProcessor::slotCount; ++slot) {
+        const auto control = static_cast<Control>(static_cast<int>(Control::slotA) + slot);
+        const auto box = plate(control);
+        const bool heard = display.slot == slot && display.playing;
+        if (heard) {
+            g.setColour(cyan.withAlpha(0.20f));
+            g.fillRoundedRectangle(box, 7.0f);
+        }
+        if (slot == selected) {
+            g.setColour(cyan.withAlpha(0.85f));
+            g.drawRoundedRectangle(box.reduced(1.0f), 6.0f, 1.8f);
+        }
+        const bool filled = processor.slotFilled(slot);
+        drawText(g, juce::String::charToString(static_cast<juce::juce_wchar>('A' + slot)), box.withTrimmedTop(14), 21,
+                 filled ? cream : cream.withAlpha(0.35f));
+        g.setColour(filled ? lime : burgundy.brighter(0.25f));
+        g.fillEllipse(box.getCentreX() - 3.0f, box.getY() + 7.0f, 6.0f, 6.0f);
+    }
+    static constexpr std::array<const char*, 4> chains {"OFF", "A-B", "A-D", "A-H"};
+    labelled(Control::chain, "CHAIN", chains[static_cast<size_t>(std::clamp(choice("slotChain"), 0, 3))]);
+    static constexpr std::array<const char*, 4> splits {"120 HZ", "160 HZ", "200 HZ", "300 HZ"};
+    labelled(Control::split, "SUB SPLIT", splits[static_cast<size_t>(std::clamp(choice("subSplit"), 0, 3))], !processor.keepSub());
+    const int mode = processor.historyMode();
+    const auto seconds = juce::String(juce::roundToInt(processor.historySeconds())) + " S";
+    labelled(Control::history, "HISTORY", mode == 0 ? "AUTO " + seconds : seconds);
 }
 
 void BackScratchEditor::drawPhraseControls(juce::Graphics& g)
@@ -770,6 +1084,7 @@ void BackScratchEditor::timerCallback()
             finishGridGesture(false);
     }
     flash = std::max(0.0f, flash - static_cast<float>(getTimerInterval()) * 0.0024f);
+    blink = (blink + 1) % 16;
     // Very short triplet phrases need the faster display cadence. Keep using
     // the published audio frame; predicting a future playhead can run ahead
     // of playback or show an automation change before it reaches the output.
@@ -781,12 +1096,13 @@ void BackScratchEditor::timerCallback()
 void BackScratchEditor::updateHover(juce::Point<float> p)
 {
     graphHover = designPoint(p);
-    graphHovered = patternHitTest(graphHover);
+    graphHovered = !performPage && patternHitTest(graphHover);
     hovered = controlAt(graphHover);
     const bool disabled = (hovered == Control::undo && !scratchProcessor.canUndoPatternEdit())
         || (hovered == Control::redo && !scratchProcessor.canRedoPatternEdit());
     setMouseCursor(editTool != Control::none && (graphHovered || editPreview)
         ? juce::MouseCursor::CrosshairCursor
+        : barFor(hovered) ? juce::MouseCursor::LeftRightResizeCursor
         : hovered == Control::none || disabled ? juce::MouseCursor::NormalCursor
                                                : juce::MouseCursor::PointingHandCursor);
     repaint();
@@ -796,12 +1112,27 @@ void BackScratchEditor::mouseMove(const juce::MouseEvent& e) { updateHover(e.pos
 void BackScratchEditor::mouseExit(const juce::MouseEvent&) { hovered = Control::none; graphHovered = false; repaint(); }
 void BackScratchEditor::mouseDrag(const juce::MouseEvent& e)
 {
+    if (draggingBar != Control::none) {
+        dragBar(draggingBar, designPoint(e.position));
+        return;
+    }
     updateHover(e.position);
     if (editPreview) updateGridGesture(designPoint(e.position));
 }
 
 void BackScratchEditor::mouseDown(const juce::MouseEvent& e)
 {
+    if (e.mods.isPopupMenu()) {
+        // Right-click: slot keys offer copy/clear; the rest of the shell offers
+        // the editor size.
+        updateHover(e.position);
+        const auto control = controlAt(designPoint(e.position));
+        if (control >= Control::slotA && control <= Control::slotH)
+            showSlotMenu(static_cast<int>(control) - static_cast<int>(Control::slotA));
+        else if (control == Control::none && !editPreview)
+            showSizeMenu();
+        return;
+    }
     if (!e.mods.isLeftButtonDown()) return;
     if (isShowing()) grabKeyboardFocus();
     updateHover(e.position);
@@ -811,11 +1142,41 @@ void BackScratchEditor::mouseDown(const juce::MouseEvent& e)
         return;
     }
     pressed = controlAt(designPoint(e.position));
+    if (const auto bar = barFor(pressed)) {
+        draggingBar = pressed;
+        barStartValue = scratchProcessor.parameterValue(bar->id);
+        barStartPoint = designPoint(e.position);
+        if (auto* parameter = scratchProcessor.parameters().getParameter(bar->id)) parameter->beginChangeGesture();
+    }
+    repaint();
+}
+
+void BackScratchEditor::mouseDoubleClick(const juce::MouseEvent& e)
+{
+    if (const auto control = controlAt(designPoint(e.position)); const auto bar = barFor(control))
+        scratchProcessor.setValue(bar->id, bar->reset);
+}
+
+void BackScratchEditor::mouseWheelMove(const juce::MouseEvent& e, const juce::MouseWheelDetails& wheel)
+{
+    const auto control = controlAt(designPoint(e.position));
+    const auto bar = barFor(control);
+    if (!bar) { juce::AudioProcessorEditor::mouseWheelMove(e, wheel); return; }
+    const float step = (bar->high - bar->low) * (wheel.deltaY > 0.0f ? 0.02f : -0.02f) * (wheel.isReversed ? -1.0f : 1.0f);
+    scratchProcessor.setValue(bar->id, std::clamp(scratchProcessor.parameterValue(bar->id) + step, bar->low, bar->high));
     repaint();
 }
 
 void BackScratchEditor::mouseUp(const juce::MouseEvent& e)
 {
+    if (draggingBar != Control::none) {
+        if (const auto bar = barFor(draggingBar))
+            if (auto* parameter = scratchProcessor.parameters().getParameter(bar->id)) parameter->endChangeGesture();
+        draggingBar = Control::none;
+        pressed = Control::none;
+        repaint();
+        return;
+    }
     if (editPreview) {
         if (e.mouseWasDraggedSinceMouseDown()) updateGridGesture(designPoint(e.position));
         finishGridGesture(true);
@@ -849,12 +1210,20 @@ void BackScratchEditor::beginGridGesture(juce::Point<float> point)
     editDelayRange = patternEditingDelayRange(*editPreview);
     const auto graph = patternBounds();
     anchorPhase = strokePhase = std::clamp(static_cast<double>((point.x - graph.getX()) / graph.getWidth()), 0.0, 1.0);
+    // Grid snap moves Line, Curve and Roll endpoints onto the sixteen cells.
+    const bool snap = scratchProcessor.snapToGrid() && drawMode != DrawMode::free;
+    if (snap || drawMode == DrawMode::roll)
+        anchorPhase = strokePhase = snap ? std::round(strokePhase * patternGridDivisions) / patternGridDivisions : strokePhase;
     anchorDelay = strokeDelay = std::clamp(static_cast<double>((graph.getBottom() - point.y) / graph.getHeight()), 0.0, 1.0)
         * editDelayRange;
     const int cell = std::clamp(static_cast<int>(strokePhase * patternGridDivisions), 0, patternGridDivisions - 1);
     auto candidate = *editPreview;
     bool changed = false;
-    if (editTool == Control::pencil) {
+    if (editTool == Control::pencil && drawMode == DrawMode::roll) {
+        // A click lays down one grain; dragging extends the roll.
+        const double grain = rollGrainPhase();
+        changed = drawPatternRoll(candidate, anchorPhase, std::min(1.0, anchorPhase + grain), grain, rollStyle);
+    } else if (editTool == Control::pencil) {
         if (drawMode == DrawMode::free) {
             changed = freeDrawStroke.begin(*gestureOriginal, strokePhase, strokeDelay)
                 && freeDrawStroke.render(candidate, &strokeDelay);
@@ -871,11 +1240,20 @@ void BackScratchEditor::beginGridGesture(juce::Point<float> point)
     }
     if (changed && scratchProcessor.previewPatternEdit(candidate)) {
         editPreview = candidate;
+        editDelayRange = std::max(editDelayRange, patternEditingDelayRange(candidate));
         statusLine.clear();
     } else {
         finishGridGesture(false);
     }
     repaint();
+}
+
+double BackScratchEditor::rollGrainPhase() const noexcept
+{
+    // Note values in quarter-note beats: 1/8, 1/16, 1/32 and 1/16 triplet.
+    static constexpr std::array<double, 4> beats {0.5, 0.25, 0.125, 1.0 / 6.0};
+    const double phrase = std::max(1.0e-3, scratchProcessor.phraseBeats());
+    return std::clamp(beats[static_cast<size_t>(std::clamp(rollRate, 0, 3))] / phrase, 1.0e-3, 1.0);
 }
 
 void BackScratchEditor::updateGridGesture(juce::Point<float> point)
@@ -888,11 +1266,23 @@ void BackScratchEditor::updateGridGesture(juce::Point<float> point)
         return;
     }
     const auto graph = patternBounds();
-    const double position = std::clamp(static_cast<double>((point.x - graph.getX()) / graph.getWidth()), 0.0, 1.0);
+    double position = std::clamp(static_cast<double>((point.x - graph.getX()) / graph.getWidth()), 0.0, 1.0);
+    if (scratchProcessor.snapToGrid() && drawMode != DrawMode::free && editTool == Control::pencil)
+        position = std::round(position * patternGridDivisions) / patternGridDivisions;
     const double depth = std::clamp(static_cast<double>((graph.getBottom() - point.y) / graph.getHeight()), 0.0, 1.0)
         * editDelayRange;
     auto candidate = *editPreview;
-    if (editTool == Control::eraser) {
+    if (editTool == Control::pencil && drawMode == DrawMode::roll) {
+        // Always rebuilt from the untouched phrase: dragging back shortens it.
+        candidate = *gestureOriginal;
+        const double grain = rollGrainPhase();
+        const double end = std::abs(position - anchorPhase) < grain ? std::min(1.0, anchorPhase + grain) : position;
+        if (drawPatternRoll(candidate, anchorPhase, end, grain, rollStyle) && scratchProcessor.previewPatternEdit(candidate)) {
+            editPreview = candidate;
+            strokePhase = position;
+            editDelayRange = std::max(editDelayRange, patternEditingDelayRange(candidate));
+        }
+    } else if (editTool == Control::eraser) {
         const int cell = std::clamp(static_cast<int>(position * patternGridDivisions), 0, patternGridDivisions - 1);
         if (erasePatternGridCells(candidate, std::min(eraseCell, cell), std::max(eraseCell, cell))
             && scratchProcessor.previewPatternEdit(candidate)) {
@@ -969,15 +1359,65 @@ void BackScratchEditor::activate(Control control)
         stepPreset(control == Control::next ? 1 : -1);
     } else if (control == Control::presets) chooseFactoryPreset();
     else if (control == Control::save || control == Control::load) choosePresetFile(control == Control::save);
+    else if (control == Control::pagePattern || control == Control::pagePerform) {
+        finishGridGesture(false);
+        performPage = control == Control::pagePerform;
+        statusLine.clear();
+    } else if (control == Control::engage) {
+        scratchProcessor.setEngaged(!scratchProcessor.isEngaged());
+    } else if (control == Control::retrigger) {
+        scratchProcessor.setValue("retrigger", scratchProcessor.parameterValue("retrigger") > 0.5f ? 0.0f : 1.0f);
+    } else if (control == Control::quantize || control == Control::every || control == Control::lookback
+               || control == Control::chain || control == Control::split || control == Control::history) {
+        chooseChoice(control);
+    } else if (control >= Control::slotA && control <= Control::slotH) {
+        scratchProcessor.selectSlot(static_cast<int>(control) - static_cast<int>(Control::slotA));
+        statusLine.clear();
+    }
     repaint();
+}
+
+void BackScratchEditor::chooseChoice(Control control)
+{
+    struct Spec { const char* title; const char* id; std::vector<juce::String> items; };
+    const auto spec = [control]() -> Spec {
+        if (control == Control::quantize) return {"ENGAGE SNAPS TO", "engageQuantize", {"Next 1/16", "Next 1/8", "Next beat", "Next half bar", "Next bar"}};
+        if (control == Control::every) return {"PLAY THE PATTERN", "phraseEvery", {"Every phrase", "Last of every 2", "Last of every 4", "Last of every 8"}};
+        if (control == Control::lookback) return {"LOOK BACK", "lookback", {"Off", "1 beat", "1 bar", "2 bars", "4 bars"}};
+        if (control == Control::chain) return {"SLOT CHAIN", "slotChain", {"Off (selected slot)", "A-B, one per phrase", "A-D, one per phrase", "A-H, one per phrase"}};
+        if (control == Control::split) return {"KEEP SUB SPLIT", "subSplit", {"120 Hz", "160 Hz", "200 Hz (classic)", "300 Hz"}};
+        return {"HISTORY", "", {"Automatic", "16 seconds", "32 seconds", "64 seconds", "128 seconds"}};
+    }();
+    juce::PopupMenu menu;
+    menu.addSectionHeader(spec.title);
+    const bool history = control == Control::history;
+    const int current = history ? 0 : juce::roundToInt(scratchProcessor.parameterValue(spec.id));
+    const int mode = scratchProcessor.historyMode();
+    for (std::size_t index = 0; index < spec.items.size(); ++index) {
+        const bool ticked = history ? std::array<int, 5>{0, 16, 32, 64, 128}[index] == mode : static_cast<int>(index) == current;
+        menu.addItem(static_cast<int>(index) + 1, spec.items[index], true, ticked);
+    }
+    const auto safe = juce::Component::SafePointer<BackScratchEditor>(this);
+    const juce::String id(spec.id);
+    showEditMenu(menu, control, [safe, id, history](int result) {
+        if (safe == nullptr || result < 1) return;
+        if (history) safe->scratchProcessor.setHistoryMode(std::array<int, 5>{0, 16, 32, 64, 128}[static_cast<size_t>(std::clamp(result - 1, 0, 4))]);
+        else safe->scratchProcessor.setChoice(id.toRawUTF8(), result - 1);
+        safe->repaint();
+    });
 }
 
 void BackScratchEditor::stepPreset(int direction)
 {
-    const int current = scratchProcessor.selectedFactoryPreset();
-    const int next = current < 0 ? (direction > 0 ? 0 : factoryPresetCount - 1)
-                                : (current + direction + factoryPresetCount) % factoryPresetCount;
-    scratchProcessor.selectFactoryPreset(next);
+    // The arrows walk the whole factory browser in menu order, folder by
+    // folder. Without a browsed preset they start from the Classic entry of
+    // the current original recipe (what an older project is playing).
+    const auto& presets = bankPresets();
+    const int count = static_cast<int>(presets.size());
+    int current = scratchProcessor.selectedBankPreset();
+    if (current < 0 || current >= count) current = classicBankIndex(scratchProcessor.selectedFactoryPreset());
+    const int next = current < 0 ? (direction > 0 ? 0 : count - 1) : (current + direction + count) % count;
+    scratchProcessor.selectBankPreset(next);
     statusLine.clear();
 }
 
@@ -997,7 +1437,8 @@ void BackScratchEditor::showEditMenu(juce::PopupMenu& menu, Control control, std
 {
     closeEditMenu();
     const auto generation = menuGeneration;
-    const auto bounds = controlBounds(control).transformedBy(designToEditor());
+    const auto bounds = (control == Control::none ? rectangle(graphHover.x, graphHover.y, 2, 2) : controlBounds(control))
+        .transformedBy(designToEditor());
     const auto target = localAreaToGlobal(bounds.toNearestInt());
     // JUCE's popup placement dereferences the display even for an embedded
     // menu. Plugin scanners may create an editor without a window server.
@@ -1015,7 +1456,9 @@ void BackScratchEditor::showEditMenu(juce::PopupMenu& menu, Control control, std
     auto* popup = juce::Component::getCurrentlyModalComponent();
     editMenu = popup != nullptr && isParentOf(popup) ? popup : nullptr;
     if (editMenu != nullptr)
-        editMenu->setName(control == Control::drawOptions ? "Scratch drawing tools" : "Scratch starting shapes");
+        editMenu->setName(control == Control::drawOptions ? "Scratch drawing tools"
+                          : control == Control::shapes ? "Scratch starting shapes"
+                          : control == Control::none ? "Editor size" : "Screen menu");
 }
 
 void BackScratchEditor::chooseDrawMode()
@@ -1027,11 +1470,46 @@ void BackScratchEditor::chooseDrawMode()
         menu.addCustomItem(mode + 1, std::make_unique<EditMenuRow>(titles[static_cast<size_t>(mode)],
             details[static_cast<size_t>(mode)], mode, std::nullopt, static_cast<int>(drawMode) == mode, regularTypeface),
             nullptr, titles[static_cast<size_t>(mode)]);
+    // Rolls: drag across the graph to repeat the slice where you pressed.
+    struct RollItem { int id; const char* title; const char* detail; int rate; RollStyle style; };
+    static constexpr std::array<RollItem, 7> rolls {{
+        {11, "Roll 1/8", "Repeat eighth notes", 0, RollStyle::repeat},
+        {12, "Roll 1/16", "Repeat sixteenths", 1, RollStyle::repeat},
+        {13, "Roll 1/32", "Repeat thirty-seconds", 2, RollStyle::repeat},
+        {14, "Roll 1/16 Triplet", "Repeat sixteenth triplets", 3, RollStyle::repeat},
+        {15, "Accelerating Roll", "1/8, then 1/16, then 1/32", 0, RollStyle::accelerate},
+        {16, "Reverse Roll", "The slice repeats backwards", 1, RollStyle::reverse},
+        {17, "Chopped Roll", "Sixteenths with a gap", 1, RollStyle::chopped}}};
+    menu.addSeparator();
+    for (const auto& roll : rolls) {
+        PhraseBuilder preview;
+        const double grain = std::array<double, 4>{0.125, 0.0625, 0.03125, 1.0 / 24.0}[static_cast<size_t>(roll.rate)];
+        if (roll.style == RollStyle::accelerate) preview.accelerate(0.25, 1.0, {grain, grain * 0.5, grain * 0.25});
+        else if (roll.style == RollStyle::reverse) preview.reverseRoll(0.25, 1.0, grain);
+        else preview.roll(0.25, 1.0, grain, roll.style == RollStyle::chopped ? 0.35 : 0.0);
+        const bool selected = drawMode == DrawMode::roll && rollRate == roll.rate && rollStyle == roll.style;
+        menu.addCustomItem(roll.id, std::make_unique<EditMenuRow>(roll.title, roll.detail, -1, preview.finish(), selected, regularTypeface),
+                           nullptr, roll.title);
+    }
+    menu.addSeparator();
+    menu.addItem(31, "Snap to grid (Line, Curve, Roll)", true, scratchProcessor.snapToGrid());
     const auto safe = juce::Component::SafePointer<BackScratchEditor>(this);
     showEditMenu(menu, Control::drawOptions, [safe](int result) {
-        if (safe == nullptr || result < 1 || result > 3) return;
-        safe->drawMode = static_cast<DrawMode>(result - 1);
-        safe->editTool = Control::pencil;
+        if (safe == nullptr) return;
+        if (result == 31) {
+            safe->scratchProcessor.setSnapToGrid(!safe->scratchProcessor.snapToGrid());
+        } else if (result >= 1 && result <= 3) {
+            safe->drawMode = static_cast<DrawMode>(result - 1);
+            safe->editTool = Control::pencil;
+        } else {
+            for (const auto& roll : rolls) {
+                if (roll.id != result) continue;
+                safe->drawMode = DrawMode::roll;
+                safe->rollRate = roll.rate;
+                safe->rollStyle = roll.style;
+                safe->editTool = Control::pencil;
+            }
+        }
         safe->statusLine.clear();
         safe->repaint();
     });
@@ -1061,61 +1539,182 @@ void BackScratchEditor::chooseScratchShape()
     });
 }
 
+void BackScratchEditor::addUserPresets(juce::PopupMenu& menu, std::vector<juce::File>& files)
+{
+    // Folders below the user preset root, each listing its .backscratch files.
+    // Only reads the disk; the root is created when something is saved.
+    const auto root = BackScratchProcessor::userPresetRoot();
+    auto folders = root.findChildFiles(juce::File::findDirectories, false);
+    std::sort(folders.begin(), folders.end(), [](const juce::File& a, const juce::File& b) {
+        return a.getFileName().compareNatural(b.getFileName()) < 0; });
+    bool any = false;
+    const auto addFolder = [&](const juce::File& folder, juce::PopupMenu& into) {
+        auto presets = folder.findChildFiles(juce::File::findFiles, false, "*.backscratch");
+        std::sort(presets.begin(), presets.end(), [](const juce::File& a, const juce::File& b) {
+            return a.getFileName().compareNatural(b.getFileName()) < 0; });
+        for (const auto& file : presets) {
+            files.push_back(file);
+            into.addItem(10000 + static_cast<int>(files.size()) - 1, file.getFileNameWithoutExtension());
+        }
+        return !presets.isEmpty();
+    };
+    for (const auto& folder : folders) {
+        juce::PopupMenu group;
+        if (addFolder(folder, group)) { menu.addSubMenu(folder.getFileName(), std::move(group)); any = true; }
+    }
+    juce::PopupMenu loose;
+    if (root.isDirectory() && addFolder(root, loose)) { menu.addSubMenu("Unfiled", std::move(loose)); any = true; }
+    if (!any) menu.addItem(-1, "No saved presets yet", false);
+}
+
 void BackScratchEditor::chooseFactoryPreset()
 {
     juce::PopupMenu menu;
-    const auto& presets = factoryPresets();
-    for (const auto* category : {"Bass", "Drums", "Vocals"}) {
+    const int slot = scratchProcessor.selectedSlot();
+    if (slot > 0)
+        menu.addSectionHeader("LOADS INTO SLOT " + juce::String::charToString(static_cast<juce::juce_wchar>('A' + slot)));
+    const auto& presets = bankPresets();
+    const int selected = scratchProcessor.selectedBankPreset();
+    // Folders in browser order; "Classic/Bass" style names become submenus.
+    std::vector<std::pair<juce::String, juce::PopupMenu>> groups;
+    juce::PopupMenu classic;
+    bool classicSelected = false;
+    for (const auto& folderName : bankFolders()) {
         juce::PopupMenu group;
         bool containsSelection = false;
-        for (int index = 0; index < factoryPresetCount; ++index) {
-            const auto& preset = presets[static_cast<size_t>(index)];
-            if (!juce::String(preset.category).equalsIgnoreCase(category)) continue;
-            const bool selected = index == scratchProcessor.selectedFactoryPreset()
-                && !scratchProcessor.isGenerated() && scratchProcessor.variationSeed() == 0;
-            group.addItem(index + 1, preset.name, true, selected);
-            containsSelection = containsSelection || selected;
+        for (std::size_t index = 0; index < presets.size(); ++index) {
+            if (presets[index].folder != folderName) continue;
+            const bool ticked = static_cast<int>(index) == selected;
+            group.addItem(static_cast<int>(index) + 1, presets[index].name, true, ticked);
+            containsSelection = containsSelection || ticked;
         }
-        menu.addSubMenu(category, std::move(group), true, juce::Image(), containsSelection);
+        const juce::String folder(folderName);
+        if (folder.startsWith("Classic/")) {
+            classic.addSubMenu(folder.fromFirstOccurrenceOf("/", false, false), std::move(group), true, juce::Image(), containsSelection);
+            classicSelected = classicSelected || containsSelection;
+        } else {
+            menu.addSubMenu(folder, std::move(group), true, juce::Image(), containsSelection);
+        }
     }
+    menu.addSeparator();
+    menu.addSubMenu("Classic (0.10 originals)", std::move(classic), true, juce::Image(), classicSelected);
+    menuFiles.clear();
+    juce::PopupMenu user;
+    addUserPresets(user, menuFiles);
+    menu.addSubMenu("User Presets", std::move(user));
     auto safe = juce::Component::SafePointer<BackScratchEditor>(this);
     auto bounds = controlBounds(Control::presets);
     bounds = bounds.transformedBy(designToEditor());
-    menu.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(this)
+    menu.setLookAndFeel(knobLookAndFeel.get());
+    menu.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(this).withParentComponent(this)
                        .withTargetScreenArea(localAreaToGlobal(bounds.toNearestInt())).withMaximumNumColumns(1),
         [safe](int result) {
             if (safe == nullptr || result <= 0) return;
-            safe->scratchProcessor.selectFactoryPreset(result - 1);
-            safe->statusLine.clear();
+            if (result >= 10000) {
+                const auto index = static_cast<std::size_t>(result - 10000);
+                if (index < safe->menuFiles.size()) {
+                    const auto file = safe->menuFiles[index];
+                    const auto loaded = safe->scratchProcessor.loadPreset(file);
+                    safe->statusIsError = loaded.failed();
+                    safe->statusLine = loaded.failed() ? loaded.getErrorMessage() : "LOADED: " + file.getFileNameWithoutExtension();
+                }
+            } else {
+                safe->scratchProcessor.selectBankPreset(result - 1);
+                safe->statusLine.clear();
+            }
             safe->repaint();
         });
+    if (auto* popup = juce::Component::getCurrentlyModalComponent(); popup != nullptr && isParentOf(popup)) {
+        editMenu = popup;
+        popup->setName("Preset browser");
+    }
+}
+
+void BackScratchEditor::saveToFolder(const juce::File& folder)
+{
+    if (fileChooser != nullptr) return;
+    // The native dialog starts in the chosen folder; it can also make a new one.
+    const auto suggested = folder.getChildFile(juce::File::createLegalFileName(scratchProcessor.currentPresetName()) + ".backscratch");
+    fileChooser = std::make_unique<juce::FileChooser>("Save BACK-SCRATCH preset", suggested, "*.backscratch", true);
+    auto safe = juce::Component::SafePointer<BackScratchEditor>(this);
+    const int flags = juce::FileBrowserComponent::canSelectFiles | juce::FileBrowserComponent::saveMode
+        | juce::FileBrowserComponent::warnAboutOverwriting;
+    fileChooser->launchAsync(flags, [safe](const juce::FileChooser& chooser) {
+        if (safe == nullptr) return;
+        auto file = chooser.getResult();
+        if (file != juce::File()) {
+            file = file.withFileExtension("backscratch");
+            const auto result = safe->scratchProcessor.savePreset(file);
+            safe->statusIsError = result.failed();
+            safe->statusLine = result.failed() ? result.getErrorMessage() : "SAVED: " + file.getFileNameWithoutExtension();
+            safe->repaint();
+        }
+        // Do not destroy the chooser from inside its own callback.
+        juce::MessageManager::callAsync([safe] { if (safe != nullptr) safe->fileChooser.reset(); });
+    });
 }
 
 void BackScratchEditor::choosePresetFile(bool save)
 {
     if (fileChooser != nullptr) return;
-    const auto folder = juce::File::getSpecialLocation(juce::File::userDocumentsDirectory);
-    const auto suggested = save ? folder.getChildFile(juce::File::createLegalFileName(scratchProcessor.currentPresetName())
-                                                      + ".backscratch") : folder;
-    fileChooser = std::make_unique<juce::FileChooser>(save ? "Save BACK-SCRATCH preset" : "Load BACK-SCRATCH preset",
-                                                     suggested, "*.backscratch", true);
-    auto safe = juce::Component::SafePointer<BackScratchEditor>(this);
-    const int flags = juce::FileBrowserComponent::canSelectFiles | (save
-        ? juce::FileBrowserComponent::saveMode | juce::FileBrowserComponent::warnAboutOverwriting
-        : juce::FileBrowserComponent::openMode);
-    fileChooser->launchAsync(flags, [safe, save](const juce::FileChooser& chooser) {
-        if (safe == nullptr) return;
-        auto file = chooser.getResult();
-        if (file != juce::File()) {
-            if (save) file = file.withFileExtension("backscratch");
-            const auto result = save ? safe->scratchProcessor.savePreset(file) : safe->scratchProcessor.loadPreset(file);
-            safe->statusIsError = result.failed();
-            safe->statusLine = result.failed() ? result.getErrorMessage()
-                                              : (save ? "SAVED: " : "LOADED: ") + file.getFileNameWithoutExtension();
-            safe->repaint();
+    const auto root = BackScratchProcessor::userPresetRoot();
+    juce::PopupMenu menu;
+    menuFiles.clear();
+    std::vector<juce::File> folders;
+    if (save) {
+        menu.addSectionHeader("SAVE TO FOLDER");
+        auto existing = root.findChildFiles(juce::File::findDirectories, false);
+        std::sort(existing.begin(), existing.end(), [](const juce::File& a, const juce::File& b) {
+            return a.getFileName().compareNatural(b.getFileName()) < 0; });
+        for (const auto& folder : existing) {
+            folders.push_back(folder);
+            menu.addItem(static_cast<int>(folders.size()), folder.getFileName());
         }
-        // Do not destroy the chooser from inside its own callback.
-        juce::MessageManager::callAsync([safe] { if (safe != nullptr) safe->fileChooser.reset(); });
+        if (folders.empty()) {
+            folders.push_back(root.getChildFile("My Presets"));
+            menu.addItem(1, "My Presets");
+        }
+        menu.addSeparator();
+        menu.addItem(900, "New folder or another place...");
+    } else {
+        menu.addSectionHeader("USER PRESETS");
+        addUserPresets(menu, menuFiles);
+        menu.addSeparator();
+        menu.addItem(901, "Browse files...");
+    }
+    const auto safe = juce::Component::SafePointer<BackScratchEditor>(this);
+    showEditMenu(menu, save ? Control::save : Control::load, [safe, folders, root](int result) {
+        if (safe == nullptr) return;
+        if (result >= 10000) {
+            const auto index = static_cast<std::size_t>(result - 10000);
+            if (index >= safe->menuFiles.size()) return;
+            const auto file = safe->menuFiles[index];
+            const auto loaded = safe->scratchProcessor.loadPreset(file);
+            safe->statusIsError = loaded.failed();
+            safe->statusLine = loaded.failed() ? loaded.getErrorMessage() : "LOADED: " + file.getFileNameWithoutExtension();
+        } else if (result == 900 || (result >= 1 && result <= static_cast<int>(folders.size()))) {
+            const auto folder = result == 900 ? root : folders[static_cast<std::size_t>(result - 1)];
+            // Creating the folder is the first write to the preset root, and
+            // only happens because the user asked to save there.
+            folder.createDirectory();
+            safe->saveToFolder(folder);
+        } else if (result == 901) {
+            safe->fileChooser = std::make_unique<juce::FileChooser>("Load BACK-SCRATCH preset",
+                root.isDirectory() ? root : juce::File::getSpecialLocation(juce::File::userDocumentsDirectory), "*.backscratch", true);
+            safe->fileChooser->launchAsync(juce::FileBrowserComponent::canSelectFiles | juce::FileBrowserComponent::openMode,
+                [safe](const juce::FileChooser& chooser) {
+                    if (safe == nullptr) return;
+                    const auto file = chooser.getResult();
+                    if (file != juce::File()) {
+                        const auto loaded = safe->scratchProcessor.loadPreset(file);
+                        safe->statusIsError = loaded.failed();
+                        safe->statusLine = loaded.failed() ? loaded.getErrorMessage() : "LOADED: " + file.getFileNameWithoutExtension();
+                        safe->repaint();
+                    }
+                    juce::MessageManager::callAsync([safe] { if (safe != nullptr) safe->fileChooser.reset(); });
+                });
+        }
+        safe->repaint();
     });
 }
 
@@ -1134,6 +1733,13 @@ bool BackScratchEditor::keyPressed(const juce::KeyPress& key)
     if (key.getModifiers().isAnyModifierKeyDown()) return false;
     if (key.getKeyCode() == juce::KeyPress::escapeKey) {
         closeEditMenu();
+        if (draggingBar != Control::none) {
+            if (const auto bar = barFor(draggingBar)) {
+                scratchProcessor.setHostParameter(bar->id, barStartValue);
+                if (auto* parameter = scratchProcessor.parameters().getParameter(bar->id)) parameter->endChangeGesture();
+            }
+            draggingBar = Control::none;
+        }
         finishGridGesture(false);
         pressed = Control::none;
         editTool = Control::none;
@@ -1147,9 +1753,25 @@ bool BackScratchEditor::keyPressed(const juce::KeyPress& key)
 juce::String BackScratchEditor::getTooltip()
 {
     switch (hovered) {
-        case Control::pencil: return "Draw with the selected tool. The small arrow chooses Free Draw, Line or Curve. Click again to stop editing.";
-        case Control::drawOptions: return "Choose Free Draw to follow your hand, Line for straight ramps, or Curve for smooth sweeps.";
-        case Control::shapes: return "Start from a scratch shape, then draw over any part. Keeps your length and shift; one click to undo.";
+        case Control::pencil: return "Draw with the selected tool. The small arrow chooses Free Draw, Line, Curve or a Roll. Click again to stop editing.";
+        case Control::drawOptions: return "Free Draw, Line, Curve, Rolls (drag across to repeat a slice) and grid snap.";
+        case Control::shapes: return "Start from a scratch, roll or tape-stop shape, then draw over any part. Keeps your length and shift; one click to undo.";
+        case Control::pagePattern: return "Show the pattern graph and drawing tools.";
+        case Control::pagePerform: return "Show the performance controls: Engage, Play Every, slots, Mix, Depth and more.";
+        case Control::engage: return "Start or stop the pattern. The change waits for the next snap point and blends in or out without a click.";
+        case Control::quantize: return "Where Engage takes effect: the next 1/16, 1/8, quarter note, half note or bar.";
+        case Control::retrigger: return "When on, engaging restarts the pattern from its beginning instead of following song position.";
+        case Control::every: return "Play the pattern on every phrase, or only on the last of every 2, 4 or 8 phrases (a fill).";
+        case Control::lookback: return "Scratch audio from earlier: 1 beat to 4 bars back. Great for answering the previous phrase.";
+        case Control::mix: return "Blend between the dry track and the scratched sound. Drag sideways; Shift for fine; double-click for 100%.";
+        case Control::depth: return "Scale every stroke: shallower below 100%, deeper and faster (up to 4x) above. Double-click for 100%.";
+        case Control::output: return "Output level of the effect, -12 to +12 dB. Bypass stays at unity. Double-click for 0 dB.";
+        case Control::slotA: case Control::slotB: case Control::slotC: case Control::slotD:
+        case Control::slotE: case Control::slotF: case Control::slotG: case Control::slotH:
+            return "Pattern slots. Click to select and edit a slot; presets and Randomize load into it. Right-click to copy or clear.";
+        case Control::chain: return "Step through slots A-B, A-D or A-H, one slot per phrase.";
+        case Control::split: return "Where Keep Sub divides the sound: 120, 160, 200 (classic) or 300 Hz. The latency stays the same.";
+        case Control::history: return "How much past audio is kept. Automatic grows with your pattern; fixed lengths use a set amount of memory.";
         case Control::eraser: return "Erase: drag over cells to restore the original audio. Click again to stop editing.";
         case Control::undo: return scratchProcessor.canUndoPatternEdit() ? "Undo the last drawing or erasing gesture." : "Nothing to undo yet.";
         case Control::redo: return scratchProcessor.canRedoPatternEdit() ? "Redo the last undone gesture." : "Nothing to redo yet.";
@@ -1160,16 +1782,17 @@ juce::String BackScratchEditor::getTooltip()
         case Control::phraseLock: return "Keep this length and timing when creating a new pattern.";
         case Control::randomize: return "Create a new scratch pattern.";
         case Control::keepSub: return "Preserve the original sub when on. Scratch the full signal when off.";
-        case Control::previous: return "Previous factory preset.";
-        case Control::next: return "Next factory preset.";
-        case Control::presets: return "Choose a factory preset.";
-        case Control::save: return "Save this pattern and its settings.";
-        case Control::load: return "Load a saved pattern.";
+        case Control::previous: return "Previous preset in the browser.";
+        case Control::next: return "Next preset in the browser.";
+        case Control::presets: return "Browse factory folders, the Classic originals and your own presets.";
+        case Control::save: return "Save this pattern and its settings into a preset folder.";
+        case Control::load: return "Load one of your presets, or browse for a file.";
         case Control::none: {
             if (graphHovered && editTool == Control::pencil)
                 return drawMode == DrawMode::free ? "Draw freely along the timeline. Small hand wobbles are smoothed. Escape cancels."
                     : drawMode == DrawMode::line ? "Drag between two points to draw a straight ramp. Escape cancels."
-                    : "Drag between two points to draw a smooth sweep. Escape cancels.";
+                    : drawMode == DrawMode::curve ? "Drag between two points to draw a smooth sweep. Escape cancels."
+                    : "Press where the roll starts and drag across. Each pass repeats the slice you pressed. Escape cancels.";
             if (graphHovered && editTool == Control::eraser)
                 return "Drag across cells to restore the original audio. Escape cancels.";
             const auto display = scratchProcessor.displayState();

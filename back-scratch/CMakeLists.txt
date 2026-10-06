@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.22)
-project(BackScratch VERSION 0.10.2 LANGUAGES C CXX)
+project(BackScratch VERSION 0.11.0 LANGUAGES C CXX)
 
 if (APPLE)
     enable_language(OBJCXX)
@@ -23,7 +23,7 @@ juce_add_plugin(BackScratch
     BUNDLE_ID com.yoiboi.backscratch
     PLUGIN_MANUFACTURER_CODE Yoib
     PLUGIN_CODE Bsc1
-    FORMATS VST3
+    FORMATS VST3 AU
     PRODUCT_NAME "BACK-SCRATCH"
     ICON_BIG "${CMAKE_CURRENT_SOURCE_DIR}/Assets/AppIcon.png"
     ICON_SMALL "${CMAKE_CURRENT_SOURCE_DIR}/Assets/AppIcon.png"
@@ -41,7 +41,9 @@ target_sources(BackScratch PRIVATE
     Source/PatternEditing.cpp
     Source/BackScratchEditor.cpp
     Source/ScratchPattern.cpp
-    Source/LiveScratchEngine.cpp)
+    Source/LiveScratchEngine.cpp
+    Source/PhraseBuilder.cpp
+    Source/PresetBank.cpp)
 target_include_directories(BackScratch PRIVATE Source ../shared)
 target_link_libraries(BackScratch PRIVATE
     BackScratchAssets
@@ -56,14 +58,17 @@ target_compile_definitions(BackScratch PUBLIC
     JUCE_VST3_CAN_REPLACE_VST2=0)
 
 if (APPLE)
-    add_custom_command(TARGET BackScratch_VST3 POST_BUILD
-        COMMAND /usr/bin/codesign --force --deep --sign - "$<TARGET_BUNDLE_DIR:BackScratch_VST3>"
-        COMMAND /usr/bin/codesign --verify --deep --strict "$<TARGET_BUNDLE_DIR:BackScratch_VST3>"
-        VERBATIM)
+    foreach(format_target BackScratch_VST3 BackScratch_AU)
+        add_custom_command(TARGET ${format_target} POST_BUILD
+            COMMAND /usr/bin/codesign --force --deep --sign - "$<TARGET_BUNDLE_DIR:${format_target}>"
+            COMMAND /usr/bin/codesign --verify --deep --strict "$<TARGET_BUNDLE_DIR:${format_target}>"
+            VERBATIM)
+    endforeach()
 endif()
 
 juce_add_console_app(BackScratchTests PRODUCT_NAME "BACK-SCRATCH Tests")
-target_sources(BackScratchTests PRIVATE Tests/ScratchTests.cpp Source/ScratchPattern.cpp Source/LiveScratchEngine.cpp Source/PatternEditing.cpp)
+target_sources(BackScratchTests PRIVATE Tests/ScratchTests.cpp Source/ScratchPattern.cpp Source/LiveScratchEngine.cpp Source/PatternEditing.cpp
+    Source/PhraseBuilder.cpp Source/PresetBank.cpp)
 target_include_directories(BackScratchTests PRIVATE Source)
 target_link_libraries(BackScratchTests PRIVATE
     juce::juce_dsp
@@ -82,3 +87,15 @@ target_link_libraries(BackScratchHostSmoke PRIVATE
     juce::juce_recommended_warning_flags)
 target_compile_definitions(BackScratchHostSmoke PRIVATE
     JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0 JUCE_PLUGINHOST_VST3=1)
+
+# A plain VST3/AU host without BACK-SCRATCH code, for the 0.10.2 project
+# compatibility check (it loads the old release's plug-in, read-only) and the
+# in-process AU check (nothing is installed).
+juce_add_console_app(BackScratchCompatHost PRODUCT_NAME "BACK-SCRATCH Compat Host")
+target_sources(BackScratchCompatHost PRIVATE Tests/CompatHost.cpp)
+target_include_directories(BackScratchCompatHost PRIVATE Tests)
+target_link_libraries(BackScratchCompatHost PRIVATE
+    juce::juce_audio_utils
+    juce::juce_recommended_config_flags)
+target_compile_definitions(BackScratchCompatHost PRIVATE
+    JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0 JUCE_PLUGINHOST_VST3=1 JUCE_PLUGINHOST_AU=1)

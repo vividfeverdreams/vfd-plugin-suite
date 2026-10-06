@@ -314,23 +314,39 @@ inline void runInteractionTests(backScratch::BackScratchProcessor& processor)
     click(*editor, Control::shiftLeft);
     check(processor.patternShiftSteps() == patternGridDivisions - 1,
           "bottom left arrow shifts the current factory pattern");
+    // Since 0.11 the arrows walk the whole factory browser in menu order. With
+    // nothing browsed yet they start from the Classic entry of the current
+    // original recipe.
+    const auto& bank = bankPresets();
+    const int bankSize = static_cast<int>(bank.size());
+    const int classicStart = classicBankIndex(0);
+    check(classicStart > 0, "the original Sub Tug has an exact Classic entry");
     click(*editor, Control::previous);
-    check(processor.selectedFactoryPreset() == factoryPresetCount - 1 && processor.patternShiftSteps() == 0,
-          "previous wraps to the last factory preset at its original grid position");
+    check(processor.selectedBankPreset() == classicStart - 1 && processor.patternShiftSteps() == 0,
+          "previous steps to the preceding browser entry at its original grid position");
     click(*editor, Control::shiftRight);
     check(processor.patternShiftSteps() == 1,
-          "bottom right arrow shifts the current factory pattern");
+          "bottom right arrow shifts the current pattern");
     click(*editor, Control::next);
-    check(processor.selectedFactoryPreset() == 0 && processor.patternShiftSteps() == 0,
-          "next wraps to the first factory preset at its original grid position");
-    for (int index = 1; index < factoryPresetCount; ++index) {
+    check(processor.selectedBankPreset() == classicStart && processor.selectedFactoryPreset() == 0
+              && processor.patternShiftSteps() == 0 && !processor.hasCustomPattern(),
+          "next returns to the exact Classic recipe at its original grid position");
+    for (int step = 1; step <= bankSize; ++step) {
+        const int expected = (classicStart + step) % bankSize;
         click(*editor, Control::shiftRight);
         click(*editor, Control::next);
-        check(processor.selectedFactoryPreset() == index && processor.variationSeed() == 0
-                  && processor.patternShiftSteps() == 0,
-              "every factory preset is reachable and restores its original pattern and grid position");
+        const auto& preset = bank[static_cast<size_t>(expected)];
+        check(processor.selectedBankPreset() == expected && processor.patternShiftSteps() == 0,
+              "every browser preset is reachable in order and restores its original grid position");
+        if (preset.classic >= 0)
+            check(processor.selectedFactoryPreset() == preset.classic && processor.variationSeed() == 0 && !processor.hasCustomPattern(),
+                  "classic entries select their original recipe");
+        else
+            check(processor.hasCustomPattern() && processor.currentPresetName() == juce::String(preset.name),
+                  "new entries load their own drawn pattern and name");
         check(processor.currentPattern().count > 0, "every selected preset has a live time pattern");
     }
+    check(processor.selectedBankPreset() == classicStart, "the arrows wrap around the whole browser");
 
     seed = processor.generationSeed();
     const auto button = BackScratchEditor::controlBounds(Control::randomize).getCentre();

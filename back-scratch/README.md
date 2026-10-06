@@ -1,108 +1,173 @@
-# BACK-SCRATCH 0.10.1
+# BACK-SCRATCH 0.11.0
 
 A live scratch-pattern effect for bass, drums and vocals. Insert it on a track, start playback, and click **Randomize**. A repeating time-warp pattern processes fresh incoming audio; no capture is needed.
 
-The **700 × 940** interface retains its translucent red shell, recessed smoked-glass display, frosted coral control plates and sculpted ivory controls. Small illuminated **Dotted** and **Triplet** buttons sit beside the length control. A second pair of arrows, centered along the bottom of the display, shifts the pattern across its grid.
+The **700 × 940** interface keeps its translucent red shell, recessed smoked-glass display, frosted coral control plates and sculpted ivory controls. Version 0.11 adds a **PERFORM** page to the same display, so nothing new hangs off the hardware.
 
-Version 0.10.1 fixes factory preset navigation: each selection restores the preset’s original grid position, rather than inheriting the previous pattern’s arrow offset. Saved user presets and projects still recall their intentionally stored offsets.
+## What's new in 0.11
 
-Version 0.10 adds **Free Draw, Line and Curve** tools in a split pencil button, plus **10 Scratch Shapes** with miniature previews. The tools and shape picker sit in the existing screen beside Eraser, Undo and Redo. New factory and generated patterns use rounded motion so their source speed accelerates through the scratch instead of holding a shifted pitch and changing direction abruptly.
+- **PERFORM page.** Two soft keys at the bottom of the display switch between **PATTERN** (the graph and drawing tools) and **PERFORM**.
+- **Engage with snap.** Start and stop the pattern on the next 1/16, 1/8, 1/4, 1/2 note or bar line, without a click. Optional **Retrigger** starts the phrase from its beginning when it engages.
+- **Play Every.** Play the pattern only on the last of every 2, 4 or 8 phrases, so a fill can stay on the track.
+- **Rolls.** A roll tool (1/8, 1/16, 1/32, 1/16 triplet, accelerating, reverse, chopped), five roll and tape-stop starter shapes, and a Snap to grid switch.
+- **Pattern slots A–H** with **Chain** (A–B, A–D, A–H): a different pattern on each bar, selectable from host automation.
+- **Mix, Output, Depth, Sub Split and Look Back.** Wet/dry blend, output trim, stroke depth up to 200% (and up to 4× speed), Keep Sub split at 120, 160, 200 or 300 Hz, and scratching from up to four bars back.
+- **History size.** Automatic (sized to what the pattern needs) or fixed 16, 32, 64 or 128 seconds.
+- **230 built-in presets in 17 folders**, including 80 new ones and the 75 originals exactly as 0.10 had them in **Classic**. See **PRESETS.md**.
+- **Preset folders.** Your presets save into folders you choose and browse as folders.
+- **Size menu.** Right-click an empty part of the shell for 90%, 100%, 125% or 150%.
+- **Audio Unit.** BACK-SCRATCH now also builds as an AU, alongside the VST3.
+- **Fixes** (also in 0.11, from the same work): no more dropouts when the tempo slows inside a block (half-time drops), host bypass stays in time with the reported latency, no 15 ms hole after seeks and loop wraps, a click-free Bypass, no automation gestures for unchanged values, and safer memory handling. See **Fixed in 0.11** below.
 
-The physical **INFO** key introduced in 0.8.1 remains in the lower shell. It opens the Vivid Fever Dreams logo and credits, executive producer profiles, music website, and Dream Sequence donation link. Close the page with **X** or **Escape**.
-
-Version 0.8 aligned the displayed curve and playhead with the audio engine’s delayed playback context, showed gate cuts in the curve, and preserved incoming audio history across normal host loops. The bank still contains **75 presets**, alongside independent pattern generation and the Keep Sub switch.
+Projects and presets from 0.10 open with every setting intact and sound the same. See **Updating**.
 
 ## Start here
 
-1. Quit your audio apps, open **Install BACK-SCRATCH.app**, and choose **Install / Update**. Rescan VST3 plug-ins in Live if necessary.
+1. Quit your audio apps, open the installer and choose **Install / Update**. Rescan plug-ins in your DAW if necessary.
 2. Insert BACK-SCRATCH and start the track. Keep Sub starts on; phrase length starts at one bar, locked.
 3. Drag the **Phrase Length** knob up or down to select **½ beat, 1 beat, 2 beats, 1 bar, 2 bars, 4 bars, 8 bars or 16 bars**. The wheel also changes its value; Shift-drag makes finer movements, and double-click restores one bar.
 4. Click **Dotted** to multiply the base length by **1.5**, or **Triplet** to multiply it by **⅔**. Only one can be active; click the lit button again for straight timing.
-5. Click **Randomize** to compose a new pattern. Each click builds scratch gestures, placements, cuts and rests independently of the factory bank. The length lock holds the base knob setting; unlock it to let Randomize choose that base length too. Timing mode and grid shift stay as you set them. Manual adjustments always remain available.
-6. Browse the **75 factory patterns** with the preset menu or **upper arrows**. The centered **bottom arrows** move the current pattern one visible grid cell left or right, wrapping across the edges. Selecting a factory preset resets this offset to its original position.
-7. Click the screen's **Pencil** button to draw. Its small arrow opens **Free Draw, Line and Curve**. Drag on the graph; choose **Eraser** to restore clean input in selected cells. Click the selected tool again to stop editing.
-8. Open **Shapes** for ten scratch contours. Selecting one replaces the phrase with an editable starting shape; Undo brings back the previous phrase.
-9. **Save** stores a `.backscratch` preset, including your drawing; **Load** restores it. Host projects preserve the same settings and custom pattern.
+5. Click **Randomize** to compose a new pattern. The length lock holds the base knob setting; unlock it to let Randomize choose that base length too. Timing mode and grid shift stay as you set them.
+6. Browse the presets with the **⌄** menu beside the name or the **upper arrows**. The centered **bottom arrows** move the current pattern one grid cell left or right, wrapping across the edges.
+7. Click the screen's **Pencil** button to draw. Its small arrow opens **Free Draw, Line, Curve** and the **rolls**. Choose **Eraser** to restore clean input in selected cells. Click the selected tool again to stop editing.
+8. Open **Shapes** for 15 starting contours. Selecting one replaces the phrase with an editable starting shape; Undo brings back the previous phrase.
+9. Click **PERFORM** for Engage, Play Every, slots, Mix, Depth and the other 0.11 controls.
+10. **Save** stores a `.backscratch` preset in a folder you choose; **Load** restores it. Host projects keep everything, including slots.
 
-## Draw, shape and erase
+## The PERFORM page
+
+Every control has a tooltip. Click a choice to open its menu; drag the Mix, Depth and Output bars, or use the mouse wheel over them; double-click a bar to reset it.
+
+| Control | What it does | Host control |
+| --- | --- | --- |
+| **ENGAGE** | Starts or stops the pattern. While playing, the change waits for the next **SNAP** point, then blends in or out over 3 ms. With the transport stopped it applies at once. The light shows PLAYING or STANDBY, and SNAPS IN / SNAPS OUT while a change waits for its snap point. When disengaged, the track passes through clean (still with the 730-sample latency, so nothing moves). | Engage |
+| **SNAP** | Where Engage changes land: **1/16, 1/8, 1/4, 1/2** note or **1 Bar** (bars follow the host meter). Default 1/16. | Engage Quantize |
+| **RETRIG** | Off (default): the pattern follows song position, as before. On: the phrase restarts from its beginning at the moment Engage takes effect. | Retrigger |
+| **PLAY** | **Every** phrase (default), or only the **last of 2, 4 or 8** phrases. Phrases are counted from the start of the song (or from the engage point with Retrigger on). In the other phrases the track passes clean, the graph dims and shows WAITING. | Play Every |
+| **LOOK BACK** | Off (default), **1 beat, 1 bar, 2 bars or 4 bars**: while the pattern is scratching, it reads audio from that much earlier, so a fill can replay a line from bars ago. Clean passages stay live. | Look Back |
+| **MIX** | Blend of scratched and clean sound, 0–100%. Default 100%, the 0.10 sound. | Mix |
+| **DEPTH** | Scales every stroke, 0–200%. At 0% the source stays in place (gate cuts still apply); 100% (default) is the drawn pattern; above 100% strokes travel further and can reach **4×** source speed (0.10 stopped at 2×). | Depth |
+| **OUTPUT** | Output trim, −12 to +12 dB. Default 0 dB. | Output |
+| **A–H** | Pattern slots. Click a slot to see and edit its pattern: drawing, Shapes, Randomize and preset loading then work on that slot. Right-click a slot to copy the selected slot or slot A into it, or clear it. Slot A is the main pattern; an empty slot plays clean. A lime dot marks a slot that holds a pattern, the outlined key is the one you are editing, and the glowing key is the one playing. | Pattern Slot |
+| **CHAIN** | Off (default): the selected slot plays. **A–B, A–D, A–H**: slot A plays on the first phrase, B on the second, and so on, then repeats. | Slot Chain |
+| **SUB SPLIT** | Where Keep Sub divides the clean lows from the scratched highs: **120, 160, 200 or 300 Hz**. Default 200 Hz, the 0.10 sound. All four keep the same 730-sample latency. | Keep Sub Split |
+| **HISTORY** | How much incoming audio is kept for scratches to reach back into: **Auto** or **16, 32, 64, 128 s**. Saved with the project; not automatable. See **Memory** below. | (not a host control) |
+
+**Automating slots.** Pattern Slot is an ordinary host parameter, so a Live automation lane or clip envelope can switch patterns per bar. Slots are not selected by MIDI notes: adding a MIDI input would have added dozens of extra MIDI-CC controls to the VST3 and changed how the AU is registered, so it was left out.
+
+## Draw, roll, shape and erase
 
 The pencil is a split button: click its main area to arm or disarm the selected drawing tool, or its arrow to choose a different tool. The selected tool lights up and the display gives a short instruction.
 
-- **Free Draw** follows the path of your hand across the graph. It no longer restarts from the baseline in every grid cell. Strokes are sampled by distance across the display, so a slower mouse-event rate does not create larger steps. Light smoothing reduces tiny hand wobbles. Retracing an area redraws that area.
-- **Line** stretches a straight line from the point where you press to the point where you release. Moving the endpoint back shortens the preview cleanly.
-- **Curve** draws a rounded transition between those two points. This varies the source speed smoothly instead of sustaining a single shifted pitch.
+- **Free Draw** follows the path of your hand across the graph. Strokes are sampled by distance, so a slower mouse-event rate does not create larger steps. Light smoothing reduces tiny hand wobbles. Retracing an area redraws that area.
+- **Line** stretches a straight line from the point where you press to the point where you release. **Curve** draws a rounded transition between those two points.
+- **Rolls**: Roll 1/8, 1/16, 1/32, 1/16 Triplet, Accelerating, Reverse and Chopped. Drag across the graph: the slice where you press repeats at that rate until you release. Hovering previews where the roll lands.
+- **Snap to grid** (bottom of the same menu) makes Line, Curve and Roll start and end on the 16-cell grid. Free Draw is never snapped.
 
-The graph is continuous for drawing; the 16-cell grid remains a timing guide. Line and Curve start at the height where you press, and Free Draw keeps the same precise cursor anchor. Steep gestures are constrained to the engine's forward/reverse speed range of **2×**; the displayed endpoint shows the applied result. Drawing on the baseline or right edge also works.
+Steep Free Draw, Line and Curve gestures are kept within the engine's **2×** forward/reverse speed; the displayed endpoint shows the applied result.
 
-**Shapes** opens a menu of ten miniature scratch contours. Selecting one replaces the current phrase, retains length, timing and grid shift, and arms Free Draw for further edits. It is one undoable action. These starting shapes are separate from the 75 complete factory patterns.
+**Shapes** opens 15 miniature contours: the 10 scratch shapes from 0.10 plus Accelerating Roll, Triplet Roll, Reverse Roll, Tape Stop and Half-Time Drag. Selecting one replaces the current phrase, keeps length, timing and grid shift, and arms Free Draw. It is one undoable action.
 
-Click **Eraser**, then click or drag across cells to restore original clean input there. Erasing does not mute the track. Both tools change only the selected interval; curves and cuts elsewhere keep their sound. The graph retains its editing scale, including after erasing everything.
+Click **Eraser**, then click or drag across cells to restore original clean input there. Erasing does not mute the track.
 
-The **Undo** and **Redo** icons restore whole mouse gestures or shape selections, with up to **64 actions** in history. While a tool is armed, **Cmd+Z** undoes and **Cmd+Shift+Z** redoes. **Escape** cancels an unfinished gesture and disarms the tool; closing the editor also cancels an unfinished drag. Click the active drawing tool or Eraser again to disarm it without changing completed work.
+The **Undo** and **Redo** icons restore whole mouse gestures, shape selections, slot copies and clears, and presets loaded into a slot, with up to **64 actions** in history. While a tool is armed, **Cmd+Z** undoes and **Cmd+Shift+Z** redoes. **Escape** cancels an unfinished gesture and disarms the tool; closing the editor also cancels an unfinished drag.
 
-Length, Dotted, Triplet and the bottom shift arrows retain your edits. **Randomize** or choosing a factory pattern starts a new pattern and clears drawing history. Loading a preset also begins a new history. Save a drawing before replacing it if you want to keep it; presets and host projects preserve the finished geometry, while undo history is local to the editing session.
+Length, Dotted, Triplet and the bottom shift arrows keep your edits. **Randomize** or choosing a preset starts a new pattern and clears drawing history. Save a drawing before replacing it if you want to keep it.
 
 ## Smooth scratch motion
 
-A straight time-delay ramp produces a constant playback speed. Several previous recipes therefore held a higher pitch on their return stroke and switched speeds sharply at the turn. New recipes use curved time trajectories with acceleration and release; their gates clip the same underlying curve without restarting it. The graph and audio evaluate the same trajectory and exact playback derivative.
-
-This changes the movement of the sound rather than filtering away its high frequencies. Keep Sub, the phase-aligned crossover and the full-range interpolation path retain their existing design. Drawing a straight line intentionally still produces a constant playback speed; choose Curve or a Scratch Shape for rounded motion.
-
-Older saved presets and projects keep their original recipe version. Pressing Randomize or selecting a factory pattern chooses the revised motion for new work. Saved hand-drawn shapes retain their exact geometry.
+Factory and generated patterns use curved time trajectories with acceleration and release (motion recipe version 2), so a stroke speeds up and slows down instead of holding one shifted pitch and turning sharply. The graph and audio evaluate the same trajectory. A straight Line still produces a constant speed on purpose; choose Curve or a Shape for rounded motion. Older saved presets and projects keep their original recipe version.
 
 ## One pattern, different durations
 
-Turning the length knob changes how long it takes to traverse the pattern already displayed. It **never repeats, adds, removes or regenerates its gestures**. A pattern with three scratches still has three scratches when moved from one bar to four bars; the whole phrase unfolds four times more slowly. Changing it to half a beat compresses the same phrase into half a beat.
-
-The time and source-offset coordinates scale together. This preserves the contour, stroke order, cuts and source playback speeds while changing the duration of each gesture. **Dotted** and **Triplet** apply the same scaling to the selected base length: a one-beat pattern becomes 1½ beats or ⅔ beat. Only **Randomize** composes a new pattern. For generated patterns, the seed, original composition duration and original meter remain part of the saved identity. The composer stores the unmodified base duration, so changing timing modes or recalling a preset retimes the same composition.
-
-Beat choices mean quarter-note beats. Bar choices follow the host’s time signature: one bar is three quarter-note beats in 3/4. Factory selection retains the chosen base duration when locked; when unlocked, it selects the closest supported base duration to the factory recipe’s original length. Timing mode remains unchanged during factory navigation and Randomize. Factory navigation resets the grid shift to zero; Randomize retains the current shift. See **PRESETS.md** for the complete bank.
+Turning the length knob changes how long it takes to play the pattern already displayed. It **never repeats, adds, removes or regenerates its gestures**: a pattern with three scratches still has three scratches from one bar to four bars. **Dotted** and **Triplet** apply the same scaling to the selected base length. Only **Randomize** composes a new pattern. Beat choices mean quarter-note beats; bar choices follow the host's time signature.
 
 ## Move the pattern and follow playback
 
-The display has **16 equal grid cells** at every duration. Its bottom arrows move the entire effect one cell earlier or later; material passing one edge reappears at the opposite edge. Curves, gate cuts and gesture order remain intact. Sixteen clicks in one direction return to the starting position. A length change preserves the shift as a fraction of the phrase.
+The display has **16 equal grid cells** at every duration. Its bottom arrows move the entire effect one cell earlier or later, wrapping at the edges. The curve and moving playhead share the same delayed playback context as the audio, including the plug-in's latency and timed parameter changes. Closed scratch gates appear dimmer.
 
-The curve and moving playhead share the same playback context, including the plug-in’s latency and timed parameter changes. Closed scratch gates appear dimmer, so a silent cut no longer looks like a fully audible stroke. The editable curve shows the time effect; it is not an audio waveform, and the result still depends on the incoming track.
-
-Patterns follow song position. Normal loop wraps reported by the host retain the rolling audio history, including when a processing buffer crosses the loop boundary. Starting playback or manually seeking resets history. **LIVE INPUT** appears when an active gesture needs past audio that is unavailable, and the engine fades to the original input for that portion.
+Patterns follow song position. Host loop wraps keep the rolling audio history. Starting playback or seeking clears what the plug-in may read (it never reads audio from before the jump). **LIVE INPUT** appears when an active gesture needs past audio that is not there yet, and that part fades to the original input.
 
 ## Keep Sub and audio quality
 
-**On:** the original low layer stays at its original pitch and rhythm beneath the scratched upper layer. The complementary split is centered at **200 Hz**, with a gradual transition.
+**On:** the original low layer stays at its original pitch and rhythm beneath the scratched upper layer. The split is set on the PERFORM page (default **200 Hz**). **Off:** the entire signal is scratched, including the bass.
 
-**Off:** the entire signal is scratched, including the bass. It does not remove the sub. Randomizing or selecting a factory pattern preserves this switch; loading a saved preset restores its saved setting.
+The plug-in reports **730 samples of latency at 48 kHz**, about **15.2 ms**, at every split, so the host compensates. Dry audio, preserved sub and scratching share this timing.
 
-The phase-aligned audio path from 0.5.0 is retained. It reports **730 samples of latency at 48 kHz**, about **15.2 ms**, so the host can compensate. Dry audio, preserved sub and scratching share this timing.
+## Memory
 
-A **128-second rolling history** stores incoming audio. It uses approximately **98 MB at 48 kHz stereo** or **393 MB at 192 kHz stereo**, per instance, plus processing overhead. After startup or a manual seek, unavailable history fades to dry audio until enough material has arrived. Long settings can also exceed the window: some **dotted 16-bar patterns in 4/4 at 20 BPM** already need more history, and larger host meters can extend the lookback further. Those portions fade to dry and show **LIVE INPUT**; the plug-in never reads invalid audio. Shortening the phrase or choosing a shallower pattern reduces the lookback.
+The rolling history stores incoming audio for scratches to reach back into. Per instance at 48 kHz stereo it uses about **12 MB for 16 s, 25 MB for 32 s, 49 MB for 64 s and 98 MB for 128 s** (four times that at 192 kHz), plus processing overhead.
+
+- **Auto** (default for new instances) starts at 16 s, or more if the current settings need it, and steps up to 32, 64 or 128 s when a longer pattern, slower tempo, more Depth or Look Back needs more. The larger buffer is allocated away from the audio thread. It does not shrink while playing; it starts small again the next time the host prepares the plug-in.
+- **16, 32, 64 or 128 s** fixes the size.
+- Projects saved before 0.11 keep the fixed **128 s** they always had.
+
+When the history grows or changes size, the older audio is not copied across (that would be too much work for the audio thread). For a moment, gestures that reach further back than the new history holds fade to the clean input and show **LIVE INPUT**, exactly as after a seek. Some extreme settings (for example dotted 16-bar patterns in 4/4 at 20 BPM) need more than 128 s; those portions also fade to dry. The plug-in never reads invalid audio. If memory for a large history cannot be found, it falls back to a shorter one rather than failing.
+
+## Presets
+
+**230 built-in presets in 17 folders**: the 75 original recipes (tuned in Bass, Drums and Vocals; exactly as 0.10 in Classic) and 80 new presets in Fills, Rolls, Stutters, Scratches, Tape Stops, Builds, Halftime, Vocal Chops, Riddim, Space Bass and Chains. **PRESETS.md** lists every one.
+
+**Save** offers your preset folders in **~/Library/Application Support/BACK-SCRATCH/Presets/**, or **New folder or another place...**. **Load** lists the same folders plus **Browse files...**. The preset menu has a **User Presets** submenu. Existing preset files are never moved or changed.
+
+## Window size
+
+Right-click an empty part of the shell to open **SIZE: 90%, 100%, 125%, 150%**. Sizes that would not fit on the current screen are greyed out. The choice is saved with the project (not as an automatable parameter). The editor reopens at that size when it fits the screen, otherwise at the largest smaller choice that fits; if none fits, or no size was ever chosen, it opens at the usual fit-to-screen size.
 
 ## Save, automate and print
 
-Saved presets and host projects retain your custom drawing and its graph scale, generated identity and seed, original composition duration and meter, the selected factory recipe and variation where applicable, base playback duration, straight/dotted/triplet timing, grid shift, length lock and Keep Sub. The same pattern repeats over fresh incoming audio rather than drawing new randomness on each pass.
+Saved presets and host projects keep your drawing, slots, generated identity and seed, recipe and variation, length, timing, grid shift, length lock, Keep Sub and the 0.11 settings. The same pattern repeats over fresh incoming audio.
 
-Host controls include **Pattern Motion Version** (1 for original recipes, 2 for rounded recipes), **Edited Pattern**, **Generated Pattern**, **Pattern Seed**, **Phrase Length**, **Phrase Timing**, **Pattern Grid Shift**, **Phrase Length Lock**, **Keep Sub** and **Bypass**, plus **Scratch Pattern** and **Variation** for factory mode. **Edited Pattern** selects the saved custom geometry. Individual drawing points are saved with presets and projects; mouse coordinates are not separate automation parameters, and drawing does not record a sequence of gestures into a Live automation lane. The current Phrase Length parameter uses the ID `phraseDuration`; the old `phraseLength` ID remains as **Legacy Phrase Length** and no longer controls duration. Timing uses `phraseTiming` (0 straight, 1 dotted, 2 triplet), and `patternShift` stores 0–15 grid steps. **Pattern Original Length** and **Pattern Original Meter** preserve generated composition identity.
+Host controls from 0.10 are unchanged: **Pattern Motion Version**, **Edited Pattern**, **Generated Pattern**, **Pattern Seed**, **Phrase Length**, **Phrase Timing**, **Pattern Grid Shift**, **Phrase Length Lock**, **Keep Sub**, **Bypass**, **Scratch Pattern** and **Variation**, plus the retired Legacy entries. Version 0.11 appends **Engage, Engage Quantize, Retrigger, Play Every, Pattern Slot, Slot Chain, Mix, Output, Keep Sub Split, Depth** and **Look Back**. The new Mix has its own ID (`wetMix`); the retired 0.3 control stays as **Legacy Mix** and does nothing. Drawing points are saved with presets and projects but are not automation parameters.
 
-Record controls with Live’s automation recording. Use Live’s resampling, freeze or export to print audio. Space remains available for host transport.
+Record controls with your DAW's automation recording. Use resampling, freeze or export to print audio.
+
+## Fixed in 0.11
+
+- Slowing the tempo inside a block (for example into a half-time drop) was mistaken for a seek and reset the engine every block, which could leave long silences. Real seeks are still detected.
+- Host bypass now stays aligned with the reported 730-sample latency, and un-bypassing no longer resets the engine.
+- Seeks, loop wraps, start/stop and project restore no longer zero the clean signal path, so there is no 15 ms hole; audio from before the jump is never read.
+- Turning Bypass on fades instead of clicking. Writing a value that is already set no longer sends automation gestures, so Live keeps your Bypass and Grid Shift automation.
+- Each instance has its own automation queue, with no per-thread allocation on the audio thread. The bundled JUCE source is unchanged.
+- History allocation falls back to shorter lengths instead of failing; history-loss fades follow the moving readhead; gentle tempo ramps glide long delays instead of crossfading.
+
+Steady-tempo, uninterrupted playback sounds exactly as it did in 0.10.
 
 ## Updating
 
-Version 0.10 writes **preset/project schema 9**, including custom geometry, graph scale and recipe motion version. **Schemas 4–8** remain supported and retain their original recipe motion. Schema 8 also retains saved drawings. Schema 7 retains its timing mode and grid shift; schemas 4, 5 and 6 load with **straight timing and zero shift**, including files saved by 0.6 and 0.7. Schemas 4–7 start without a custom drawing. Invalid timing or custom geometry is rejected before settings change.
+Version 0.11 writes **preset/project schema 10**. Everything 0.10 saved still loads:
 
-Original factory IDs 0–24 retain their names and recipes; the expanded bank appends 50 patterns. Factory length stretches one complete motif, replacing the earlier repeated-motif behavior, so older factory phrases can sound different. Version 0.5 generated states retain their original bar count and use the actual host meter for their composition, matching the older meter behavior; the knob then retimes that graph. New patterns freeze their original composition meter when Randomize is pressed. Review existing factory-selection automation from the 25-preset releases: expanding the host parameter to 75 choices can change the meaning of old normalized automation values. Re-record old duration automation against the current Phrase Length control if needed.
+- **0.10 projects** (schema 9 and older) open with every setting intact, with all 0.11 controls at neutral values (Engage on, snap 1/16, Retrigger off, every phrase, slot A, no chain, Mix 100%, Output 0 dB, 200 Hz split, Depth 100%, no Look Back) and a fixed 128-second history. They render the same audio as 0.10.2; this was checked by saving projects with the actual 0.10.2 release build and reopening them in 0.11 (see **VALIDATION.md**).
+- **0.10 preset files** load the same way. Engage and Output stay as you have them, as for any preset.
+- **Parameter IDs** are unchanged; the new ones are appended. Existing automation keeps working.
+- **Factory selection by number** (the Scratch Pattern control) still selects the same 75 recipes.
+- **Arrows:** the upper arrows now walk the whole 230-preset bank in menu order. From a project made in 0.10 they start at the Classic entry of its recipe, then step through Classic in folder order (bass, then drums, then vocals) instead of the old 1–75 numbering.
+- **History:** new instances use Auto; older projects keep 128 s.
+- Schemas 4–8 still load with their original motion; see PRESETS.md for older migration details. Versions 0.1–0.3 used captured audio and wheel gestures; those states open bypassed.
 
-The former 0.4 Remove Sub setting means **Keep Sub off: full-range scratching**. Versions 0.1–0.3 used captured audio and wheel gestures; those states open bypassed. Choose a factory pattern or Randomize to start the live engine. Keep an earlier release for old wheel performances. Retired parameter identities remain as Legacy entries; the plug-in identity is unchanged.
+The plug-in identity is unchanged (VST3 and the new AU share the bundle ID `com.yoiboi.backscratch`; AU type `aufx`, subtype `Bsc1`, manufacturer `Yoib`).
 
 ## Build and verification
 
-Apple Silicon macOS 12+, VST3. Plug-in and installer are locally ad hoc signed. See **VALIDATION.md** for automated audio, VST3, preset, transport and interface checks. Actual Ableton session recording and subjective listening remain unverified.
+Apple Silicon macOS 12+, VST3 and Audio Unit. Plug-ins are locally ad hoc signed. See **VALIDATION.md** for the automated checks and what was not verified (actual DAW sessions, listening, and AU validation with Apple's `auval`, which needs the AU installed).
 
 Build with C++20, CMake and the included patched JUCE tree. Keep the source archive's `back-scratch` and `shared` directories beside each other: the shared folder supplies the VFD logo and Info interface. Run these commands from `back-scratch`:
 
 ```sh
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_ARCHITECTURES=arm64
-cmake --build build --target BackScratch_VST3 BackScratchTests BackScratchHostSmoke --parallel 4
+cmake --build build --target BackScratch_VST3 BackScratch_AU BackScratchTests BackScratchHostSmoke BackScratchCompatHost --parallel 2
 build/BackScratchTests_artefacts/Release/BackScratchTests
 build/BackScratchHostSmoke_artefacts/Release/BackScratchHostSmoke
 ```
 
-`Installer/build-installer.sh` accepts the absolute VST3 path, a fresh output directory, and version `0.10.1`.
+The compatibility check runs in two steps with an older release's VST3 (read-only):
+
+```sh
+build/BackScratchCompatHost_artefacts/Release/BackScratchCompatHost --save  <0.10.2 BACK-SCRATCH.vst3> <scratch folder>
+build/BackScratchCompatHost_artefacts/Release/BackScratchCompatHost --check build/BackScratch_artefacts/Release/VST3/BACK-SCRATCH.vst3 <scratch folder>
+build/BackScratchCompatHost_artefacts/Release/BackScratchCompatHost --au build/BackScratch_artefacts/Release/AU/BACK-SCRATCH.component build/BackScratch_artefacts/Release/VST3/BACK-SCRATCH.vst3
+```
+
+`Installer/build-installer.sh` accepts the absolute VST3 path, a fresh output directory, and version `0.11.0`.
+
+The physical **INFO** key in the lower shell opens the Vivid Fever Dreams logo and credits, executive producer profiles, music website, and Dream Sequence donation link. Close it with **X** or **Escape**.
