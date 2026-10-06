@@ -123,7 +123,9 @@ void test(Bundle& bundle,Host& host){
     const ParamID outputDb=juce::String("outputDb").hashCode()&0x7fffffff;
     ParamID bypass=0;std::set<ParamID> ids;
     for(int i=0;i<controller->getParameterCount();++i){ParameterInfo info{};controller->getParameterInfo(i,info);ids.insert(info.id);if(info.flags&ParameterInfo::kIsBypass)bypass=info.id;}
-    pass(ids.size()==12&&ids.count(gate)&&ids.count(time)&&ids.count(fx)&&ids.count(bypass)&&ids.count(outputDb),"eleven named controls including stable original IDs plus VST3 host bypass");
+    bool originals=true;for(const char* id:{"harvest","spinUpMs","fxAmount","fxPan","fxChorus","fxPhaser","fxFlanger","fxWashout","syncMode","syncDivision","outputDb"})originals=originals&&ids.count(ParamID(juce::String(id).hashCode()&0x7fffffff));
+    // 0.4.0 appends twelve controls; the original eleven keep their IDs.
+    pass(ids.size()==24&&originals&&ids.count(bypass),"23 named controls (original eleven IDs unchanged, twelve appended) plus VST3 host bypass");
     constexpr int block=1024;ProcessSetup setup{};setup.maxSamplesPerBlock=block;setup.sampleRate=48000;setup.symbolicSampleSize=kSample32;setup.processMode=kRealtime;
     require(component->activateBus(kAudio,kInput,0,true)==kResultOk&&component->activateBus(kAudio,kOutput,0,true)==kResultOk,"main buses activation");
     require(processor->setupProcessing(setup)==kResultOk&&component->setActive(true)==kResultOk&&processor->setProcessing(true)==kResultOk,"processor activation");
@@ -267,8 +269,92 @@ void regressions(Bundle& bundle){
     if(failed)throw std::runtime_error(std::to_string(failed)+" VST3 regression check(s) failed");
     std::cout<<"PASS 0.3.2 VST3 regression suite\n";
 }
+// --compat <0.3.2 bundle> <new bundle>: a state saved by the shipped 0.3.2 plug-in must render identically here.
+class Stream final:public IBStream {
+public:
+    std::vector<char> bytes;int64 position=0;
+    tresult PLUGIN_API queryInterface(const TUID id,void** object) override {*object=nullptr;if(juce::doUIDsMatch(id,FUnknown::iid)||juce::doUIDsMatch(id,IBStream::iid)){*object=this;return kResultOk;}return kNoInterface;}
+    uint32 PLUGIN_API addRef() override {return 1;} uint32 PLUGIN_API release() override {return 1;}
+    tresult PLUGIN_API read(void* buffer,int32 count,int32* done) override {const auto n=std::max<int64>(0,std::min<int64>(count,int64(bytes.size())-position));
+        if(n>0)std::memcpy(buffer,bytes.data()+position,size_t(n));position+=n;if(done)*done=int32(n);return kResultOk;}
+    tresult PLUGIN_API write(void* buffer,int32 count,int32* done) override {if(position+count>int64(bytes.size()))bytes.resize(size_t(position+count));
+        std::memcpy(bytes.data()+position,buffer,size_t(count));position+=count;if(done)*done=count;return kResultOk;}
+    tresult PLUGIN_API seek(int64 to,int32 mode,int64* result) override {position=mode==kIBSeekSet?to:mode==kIBSeekCur?position+to:int64(bytes.size())+to;if(result)*result=position;return kResultOk;}
+    tresult PLUGIN_API tell(int64* at) override {*at=position;return kResultOk;}
+};
+struct Instance {
+    Host host;IComponent* component=nullptr;IEditController* controller=nullptr;IAudioProcessor* processor=nullptr;IConnectionPoint *a=nullptr,*b=nullptr;
+    juce::AudioBuffer<float> audio{2,512};Steinberg::int64 position=0;
+    explicit Instance(Bundle& bundle){
+        for(int32 i=0;i<bundle.factory->countClasses();++i){PClassInfo info{};bundle.factory->getClassInfo(i,&info);if(std::strcmp(info.category,kVstAudioEffectClass)==0)bundle.factory->createInstance(info.cid,IComponent::iid,reinterpret_cast<void**>(&component));}
+        require(component!=nullptr,"compat component");TUID controllerId{};
+        require(component->initialize(static_cast<IHostApplication*>(&host))==kResultOk&&component->getControllerClassId(controllerId)==kResultOk,"compat component initialisation");
+        require(bundle.factory->createInstance(controllerId,IEditController::iid,reinterpret_cast<void**>(&controller))==kResultOk,"compat controller");
+        controller->initialize(static_cast<IHostApplication*>(&host));controller->setComponentHandler(&host);
+        a=query<IConnectionPoint>(component);b=query<IConnectionPoint>(controller);a->connect(b);b->connect(a);processor=query<IAudioProcessor>(component);
+        ProcessSetup setup{};setup.maxSamplesPerBlock=512;setup.sampleRate=48000;setup.symbolicSampleSize=kSample32;setup.processMode=kRealtime;
+        require(component->activateBus(kAudio,kInput,0,true)==kResultOk&&component->activateBus(kAudio,kOutput,0,true)==kResultOk&&processor->setupProcessing(setup)==kResultOk
+                &&component->setActive(true)==kResultOk&&processor->setProcessing(true)==kResultOk,"compat activation");
+    }
+    ~Instance(){processor->setProcessing(false);component->setActive(false);a->disconnect(b);b->disconnect(a);a->release();b->release();controller->setComponentHandler(nullptr);
+        controller->terminate();component->terminate();processor->release();controller->release();component->release();}
+    void block(Changes* changes,int count,const std::function<float(Steinberg::int64,int)>& input,std::vector<float>* out){
+        for(int s=0;s<count;++s){audio.setSample(0,s,input(position+s,0));audio.setSample(1,s,input(position+s,1));}
+        AudioBusBuffers in{},outBus{};in.numChannels=outBus.numChannels=2;float* ch[]{audio.getWritePointer(0),audio.getWritePointer(1)};in.channelBuffers32=outBus.channelBuffers32=ch;
+        ProcessContext context{};context.sampleRate=48000;context.state=ProcessContext::kPlaying|ProcessContext::kTempoValid|ProcessContext::kTimeSigValid;context.tempo=140;
+        context.timeSigNumerator=4;context.timeSigDenominator=4;context.projectTimeSamples=position;
+        ProcessData data{};data.processMode=kRealtime;data.symbolicSampleSize=kSample32;data.numSamples=count;data.numInputs=data.numOutputs=1;data.inputs=&in;data.outputs=&outBus;data.inputParameterChanges=changes;data.processContext=&context;
+        require(processor->process(data)==kResultOk,"compat processing");
+        if(out)for(int s=0;s<count;++s){out->push_back(audio.getSample(0,s));out->push_back(audio.getSample(1,s));}
+        position+=count;
+    }
+};
+int compat(const juce::File& oldPath,const juce::File& newPath){
+    Bundle old(oldPath),current(newPath);
+    const auto pid=[](const char* name){return ParamID(juce::String(name).hashCode()&0x7fffffff);};
+    const auto ms=[](double v){return std::log(v/80.)/std::log(100.);};
+    struct Scenario{const char* name;std::vector<std::pair<const char*,double>> values;bool retrigger;};
+    const std::vector<Scenario> scenarios{
+        {"defaults (800 ms, FX 45 %, phaser)",{},false},
+        {"2.5 s, FX 100 %, all five effects, +6 dB",{{"spinUpMs",ms(2500)},{"fxAmount",1},{"fxPan",1},{"fxChorus",1},{"fxPhaser",1},{"fxFlanger",1},{"fxWashout",1},{"outputDb",(6+18)/36.}},false},
+        {"SYNC 1 bar at 140 BPM, washout + chorus, cancel and relaunch",{{"syncMode",1},{"syncDivision",3/5.},{"fxAmount",.7},{"fxPhaser",0},{"fxChorus",1},{"fxWashout",1}},true},
+        {"80 ms, FX 0 %, -12 dB",{{"spinUpMs",0},{"fxAmount",0},{"outputDb",(-12+18)/36.}},false},
+        {"1.2 s, flanger + panning at 85 %",{{"spinUpMs",ms(1200)},{"fxAmount",.85},{"fxPhaser",0},{"fxFlanger",1},{"fxPan",1}},true},
+    };
+    const auto input=[](Steinberg::int64 n,int channel){const double t=double(n)/48000;
+        return float(.3*std::sin(2*juce::MathConstants<double>::pi*49*t)+.18*std::sin(2*juce::MathConstants<double>::pi*(98+channel*3)*t)*(.5+.5*std::sin(9.4*t))
+            +.08*std::sin(2*juce::MathConstants<double>::pi*1760*t)*std::exp(-std::fmod(t,.2142857)*20));};
+    int failed=0;
+    for(const auto& scenario:scenarios){
+        Stream saved;
+        {Instance source(old);Changes setup;setup.add(pid("harvest"),{{0,0}});for(auto [id,value]:scenario.values)setup.add(pid(id),{{0,value}});
+            source.block(&setup,512,[](Steinberg::int64,int){return 0.f;},nullptr);require(source.component->getState(&saved)==kResultOk,"0.3.2 getState");}
+        const auto session=[&](Instance& instance){
+            saved.position=0;require(instance.component->setState(&saved)==kResultOk,"setState");saved.position=0;instance.controller->setComponentState(&saved);
+            std::vector<float> out;const int total=48000*3;
+            while(instance.position<total){const int count=int(std::min<Steinberg::int64>(512,total-instance.position));Changes events;std::vector<std::pair<int32,ParamValue>> gate;
+                for(auto [at,value]:std::vector<std::pair<Steinberg::int64,double>>{{24000,1},{43200,scenario.retrigger?0.:1.},{45600,1}})
+                    if(at>=instance.position&&at<instance.position+count)gate.push_back({int32(at-instance.position),value});
+                if(!gate.empty())events.add(pid("harvest"),gate);instance.block(gate.empty()?nullptr:&events,count,input,&out);}
+            return out;};
+        std::vector<float> before,after;bool legacy=false;
+        {Instance reference(old);before=session(reference);}
+        {Instance updated(current);after=session(updated);
+            auto* concrete=query<juce::JuceVST3EditController>(updated.controller);auto* actual=static_cast<EnergyHarvesterProcessor*>(concrete->getPluginInstance());
+            legacy=actual->apvts.getRawParameterValue("latestSound")->load()<.5f&&actual->apvts.getRawParameterValue("mode")->load()==0;concrete->release();}
+        double worst=0;size_t identical=0;
+        for(size_t i=0;i<before.size();++i){worst=std::max(worst,double(std::abs(before[i]-after[i])));identical+=before[i]==after[i]?1:0;}
+        const bool ok=before.size()==after.size()&&worst<=1e-6&&legacy;if(!ok)++failed;
+        std::cout<<(ok?"PASS ":"FAIL ")<<"0.3.2 state renders the same in 0.4.0: "<<scenario.name<<" ("<<identical<<"/"<<before.size()<<" samples bit-identical, max difference "<<worst
+                 <<", Latest Sound "<<(legacy?"off":"on")<<")\n";
+    }
+    if(failed)throw std::runtime_error(std::to_string(failed)+" compatibility scenario(s) failed");
+    std::cout<<"ENERGY HARVESTER 0.3.2 compatibility checks passed\n";return 0;
 }
-int main(int argc,char** argv){try{juce::ScopedJuceInitialiser_GUI gui;require(argc>=2,"Supply VST3 bundle path");Bundle bundle(juce::File(juce::String::fromUTF8(argv[1])));
+}
+int main(int argc,char** argv){try{juce::ScopedJuceInitialiser_GUI gui;require(argc>=2,"Supply VST3 bundle path");
+    if(juce::String(argv[1])=="--compat"){require(argc>=4,"--compat <0.3.2 bundle> <new bundle>");return compat(juce::File(juce::String::fromUTF8(argv[2])),juce::File(juce::String::fromUTF8(argv[3])));}
+    Bundle bundle(juce::File(juce::String::fromUTF8(argv[1])));
     std::vector<std::unique_ptr<Bundle>> siblings;for(int i=2;i<argc;++i)siblings.push_back(std::make_unique<Bundle>(juce::File(juce::String::fromUTF8(argv[i]))));
     if(!siblings.empty())std::cout<<"PASS ENERGY loads while "<<siblings.size()<<" sibling VST3 modules remain loaded\n";
     Host host;test(bundle,host);regressions(bundle);

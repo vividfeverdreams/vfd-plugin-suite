@@ -1,5 +1,6 @@
 #include "Dsp/HarvestEngine.h"
 #include "Timing.h"
+#include "BassLoop.h"
 #include <iostream>
 #include <stdexcept>
 #include <chrono>
@@ -164,5 +165,101 @@ void regressions(){
     std::cout<<"PASS 0.3.2 DSP regression suite\n";
 }
 
+// 0.4.0 feature suite: modes, True Tape, curve, depth, filter, Sub Keep, landing and mix.
+struct Render { std::vector<float> left,right,dryL,dryR,speed; std::vector<int> state; int launch=0,deadline=0; };
+Render runEngine(energy::HarvestEngine& e,double fs,float ms,double seconds,double offAt=-1,bool tone=false,double hz=880,bool countAllocations=false){
+    Render r;r.launch=int(.25*fs);r.deadline=r.launch+spinSamples(ms,fs);const int total=int(seconds*fs);
+    for(auto* x:{&r.left,&r.right,&r.dryL,&r.dryR,&r.speed})x->reserve(size_t(total));r.state.reserve(size_t(total));  // launch point fixed at 0.25 s
+    track=countAllocations;
+    for(int i=0;i<total;++i){
+        if(i==r.launch)e.setGate(true);
+        if(offAt>=0&&i==int(offAt*fs))e.setGate(false);
+        std::pair<float,float> x=tone?std::pair<float,float>{float(.4*std::sin(6.283185307179586*hz*i/fs)),float(.4*std::sin(6.283185307179586*hz*i/fs))}:energy::test::bassLoop(i,fs);
+        const auto y=e.process({x.first,x.second});
+        r.left.push_back(y.left);r.right.push_back(y.right);r.dryL.push_back(x.first);r.dryR.push_back(x.second);r.speed.push_back(e.speed());r.state.push_back(int(e.state()));
+    }
+    track=false;
+    return r;
 }
-int main(){try{matrix();lifecycle();maximum();fixtures();rack();outputLevel();regressions();return 0;}catch(const std::exception& e){track=false;std::cerr<<"FAIL "<<e.what()<<'\n';return 1;}}
+double windowRms(const std::vector<float>& x,int from,int length){double e=0;for(int i=from;i<from+length;++i)e+=double(x[size_t(i)])*x[size_t(i)];return std::sqrt(e/length);}
+double windowDb(const std::vector<float>& x,int from,int length,const std::vector<float>& ref){return 20*std::log10(windowRms(x,from,length)/std::max(1e-12,windowRms(ref,from,length))+1e-15);}
+bool exactFrom(const Render& r,int from,int to){for(int i=from;i<to;++i)if(r.left[size_t(i)]!=r.dryL[size_t(i)]||r.right[size_t(i)]!=r.dryR[size_t(i)])return false;return true;}
+double peakOf(const Render& r){double p=0;for(size_t i=0;i<r.left.size();++i)p=std::max({p,double(std::abs(r.left[i])),double(std::abs(r.right[i]))});return p;}
+int spectralPeak(const std::vector<float>& x,int begin,int length,int lo,int hi,double fs){double best=0;int hz=0;for(int f=lo;f<=hi;f+=2){double re=0,im=0;
+    for(int i=0;i<length;++i){const double w=.5-.5*std::cos(i*6.283185307179586/(length-1)),a=i*6.283185307179586*f/fs;re+=x[size_t(begin+i)]*w*std::cos(a);im+=x[size_t(begin+i)]*w*std::sin(a);}
+    if(re*re+im*im>best){best=re*re+im*im;hz=f;}}return hz;}
+
+void features(){
+    Verdicts v;const double fs=48000;
+    const char* modeNames[]{"Tape Start","Tape Stop","Brake","Stop-Start","Rewind"};
+    // Every mode and both engines render finite, bounded audio and finish where they should.
+    for(int mode=0;mode<5;++mode)for(int tape=0;tape<(mode==0?2:1);++tape){
+        energy::HarvestEngine e;e.setTime(1000);e.setFx(0);e.setEffects(0);e.setMode(mode);e.setTrueTape(tape==1);e.prepare(fs,2);
+        auto r=runEngine(e,fs,1000,3,2.5,false,880,true);
+        bool finite=true;for(size_t i=0;i<r.left.size();++i)finite=finite&&std::isfinite(r.left[i])&&std::isfinite(r.right[i]);
+        const double peak=peakOf(r);float lowest=1;for(float s:r.speed)lowest=std::min(lowest,s);
+        std::string name=std::string(modeNames[mode])+(tape?" (True Tape)":"");
+        if(mode==1||mode==2){
+            const double end=windowDb(r.left,r.deadline-int(.02*fs),int(.02*fs),r.dryL);
+            const bool held=r.state[size_t(r.deadline+int(.3*fs))]==int(energy::State::stopped)&&windowDb(r.left,r.deadline+int(.1*fs),int(.3*fs),r.dryL)<-90;
+            v.check(finite&&peak<1.2&&end<-45&&held&&exactFrom(r,int(2.5*fs)+int(.012*fs),int(3*fs))&&allocations==0,
+                name+" powers down to silence, holds it while ON and returns exactly dry after OFF (last 20 ms "+db(end)+" dB, peak "+std::to_string(peak)+")");
+        } else {
+            v.check(finite&&peak<1.2&&exactFrom(r,r.deadline+1,int(2.5*fs))&&allocations==0&&(mode!=4||lowest<-2.9f),
+                name+" lands exactly dry at the deadline (peak "+std::to_string(peak)+", lowest playback ratio "+std::to_string(lowest)+")");
+        }
+    }
+    // True Tape: continuous varispeed, so no two-head grain flutter early in the climb.
+    {double flutter[2]{};int early[2]{},late[2]{};
+        for(int tape=0;tape<2;++tape){energy::HarvestEngine e;e.setTime(1600);e.setFx(0);e.setTrueTape(tape==1);e.prepare(fs,1);auto r=runEngine(e,fs,1600,2.2,-1,true,880);
+            const int a=r.launch+int(.15*fs),b=r.launch+int(.45*fs);std::vector<double> env;for(int i=a;i<b;i+=int(.004*fs))env.push_back(windowRms(r.left,i,int(.004*fs)));
+            double worst=0;for(size_t i=2;i<env.size();++i)worst=std::max(worst,std::abs(env[i]-.5*(env[i-1]+env[i-2]))/std::max(1e-9,env[i]));flutter[tape]=worst;
+            early[tape]=spectralPeak(r.left,r.launch+int(.05*fs),4000,100,1000,fs);late[tape]=spectralPeak(r.left,r.deadline-int(.15*fs),4000,100,1000,fs);}
+        v.check(flutter[1]<flutter[0]*.5&&early[1]>=180&&early[1]<=300&&late[1]>=780,"True Tape climbs from "+std::to_string(early[1])+" Hz to "+std::to_string(late[1])+" Hz on 880 Hz without grain flutter (envelope jitter "+std::to_string(flutter[1])+" vs Classic "+std::to_string(flutter[0])+")");}
+    // Curve and depth reshape the climb.
+    {float mid[3]{};int k=0;for(float curve:{-1.f,0.f,1.f}){energy::HarvestEngine e;e.setTime(1000);e.setCurve(curve);e.prepare(fs,2);auto r=runEngine(e,fs,1000,1.5);mid[k++]=r.speed[size_t(r.launch+int(.5*fs))];}
+        v.check(mid[0]>mid[1]&&mid[1]>mid[2],"curve reshapes the climb: half-way ratio log "+std::to_string(mid[0])+" > S "+std::to_string(mid[1])+" > slam-late "+std::to_string(mid[2]));
+        float first[2]{};k=0;for(float depth:{12.f,48.f}){energy::HarvestEngine e;e.setTime(1000);e.setDepth(depth);e.prepare(fs,2);auto r=runEngine(e,fs,1000,.4);first[k++]=r.speed[size_t(r.launch+8)];}
+        v.check(std::abs(first[0]-.5f)<.01f&&std::abs(first[1]-.0625f)<.002f,"start depth sets the opening speed (-12 st "+std::to_string(first[0])+", -48 st "+std::to_string(first[1])+")");}
+    // Filter: resonance 0 is the original sweep bit for bit; resonance adds a peak and stays bounded.
+    {energy::HarvestEngine plain,zero,peaked,band;plain.setFx(0);zero.setFx(0);peaked.setFx(0);band.setFx(0);zero.setFilter(1,0,350);peaked.setFilter(0,.85f,350);band.setFilter(2,.6f,350);
+        for(auto* e:{&plain,&zero,&peaked,&band})e->prepare(fs,2);auto a=runEngine(plain,fs,1000,1.5),b=runEngine(zero,fs,1000,1.5),c=runEngine(peaked,fs,1000,1.5),d=runEngine(band,fs,1000,1.5);
+        bool same=a.left==b.left&&a.right==b.right;double change=0;for(size_t i=0;i<a.left.size();++i)change=std::max(change,double(std::abs(a.left[i]-c.left[i])));
+        v.check(same&&change>.02&&peakOf(c)<1.6&&peakOf(d)<1.6,"resonance 0 keeps the original one-pole sweep exactly; resonant LP and BP sweeps stay bounded (peaks "+std::to_string(peakOf(c))+", "+std::to_string(peakOf(d))+")");}
+    // Sub Keep: the band below the split stays the dry input through a Tape Stop.
+    {double sub[2]{},top[2]{};for(int keep=0;keep<2;++keep){energy::HarvestEngine e;e.setTime(1000);e.setFx(0);e.setMode(1);e.setSubKeep(keep?90.f:0.f);e.prepare(fs,2);
+            Render r;r.launch=int(.25*fs);r.deadline=r.launch+spinSamples(1000,fs);for(int i=0;i<int(1.6*fs);++i){if(i==r.launch)e.setGate(true);
+                const float x=float(.3*std::sin(6.283185307179586*50*i/fs)+.2*std::sin(6.283185307179586*1000*i/fs));const auto y=e.process({x,x});r.left.push_back(y.left);r.dryL.push_back(x);}
+            const size_t at=size_t(r.launch+int(.8*fs)),n=size_t(.1*fs);sub[keep]=20*std::log10(tone(r.left,at,n,50,fs)/.3);top[keep]=20*std::log10(tone(r.left,at,n,1000,fs)/.2+1e-12);}
+        v.check(std::abs(sub[1])<1&&top[1]<-12&&sub[0]<-6,"Sub Keep 90 Hz holds 50 Hz at "+db(sub[1])+" dB while 1 kHz stops ("+db(top[1])+" dB); without it 50 Hz falls to "+db(sub[0])+" dB");}
+    // Landing options and parallel mix.
+    {energy::HarvestEngine e;e.setTime(1000);e.setFx(100);e.setEffects(energy::washout);e.setLanding(1);e.prepare(fs,2);auto r=runEngine(e,fs,1000,14);
+        double diff=0;for(int i=r.deadline;i<r.deadline+int(.2*fs);++i)diff+=std::abs(double(r.left[size_t(i)])-r.dryL[size_t(i)]);
+        int settled=-1;for(int i=int(r.left.size())-1;i>r.deadline;--i)if(r.left[size_t(i)]!=r.dryL[size_t(i)]){settled=i;break;}
+        v.check(diff>1&&settled>0&&settled<int(13.5*fs),"Tail landing lets the Washout hall ring on after the deadline, then returns exactly dry ("+std::to_string((settled-r.deadline)/fs)+" s of tail)");}
+    {energy::HarvestEngine e;e.setTime(800);e.setFx(45);e.setLanding(2);e.prepare(fs,2);auto r=runEngine(e,fs,800,2.4,2.0);
+        double held=0;for(int i=r.deadline+int(.1*fs);i<int(1.9*fs);++i)held+=std::abs(double(r.left[size_t(i)])-r.dryL[size_t(i)]);
+        v.check(held>1&&r.state[size_t(int(1.5*fs))]==int(energy::State::atSpeed)&&exactFrom(r,int(2.0*fs)+int(.012*fs),int(2.4*fs)),"Hold keeps the effect engaged at speed until OFF, then lands exactly dry");}
+    {energy::HarvestEngine full,half,none;for(auto* e:{&full,&half,&none}){e->setTime(1000);e->setFx(45);}half.setMix(.5f);none.setMix(0);for(auto* e:{&full,&half,&none})e->prepare(fs,2);
+        auto a=runEngine(full,fs,1000,1.6),b=runEngine(half,fs,1000,1.6),c=runEngine(none,fs,1000,1.6);double da=0,dbb=0;
+        for(int i=a.launch+int(.05*fs);i<a.launch+int(.5*fs);++i){da+=std::abs(double(a.left[size_t(i)])-a.dryL[size_t(i)]);dbb+=std::abs(double(b.left[size_t(i)])-b.dryL[size_t(i)]);}
+        v.check(exactFrom(c,0,int(c.left.size()))&&std::abs(dbb/da-.5)<.05,"parallel Mix: 0 % is exactly dry throughout, 50 % halves the effected difference (ratio "+std::to_string(dbb/da)+")");}
+    // Clicks: random launches, releases and bypass across every mode stay smooth.
+    {double worst=0,natural=0;int bad=0;
+        for(int seed=0;seed<30;++seed){uint32_t g=uint32_t(seed)*2654435761u+1;const auto rnd=[&g]{g=g*1664525u+1013904223u;return g>>8;};
+            energy::HarvestEngine e;e.setTime(float(100+rnd()%2500));e.setFx(float(rnd()%100));e.setEffects(rnd()%32);e.setMode(int(rnd()%5));e.setTrueTape(rnd()%2);e.setLanding(int(rnd()%3));
+            e.setSubKeep(rnd()%2?90.f:0.f);e.setFilter(int(rnd()%3),float(rnd()%100)/100,float(80+rnd()%800));e.prepare(fs,2);bool gate=false,bypass=false;float last=0;int since=1000;
+            for(int i=0;i<int(fs*4);++i){if(rnd()%2400==0){if(rnd()%3==0){bypass=!bypass;}else{gate=!gate;e.setGate(gate);}since=0;}
+                const double t=i/fs;const float x=float(.5*std::sin(6.283185307179586*60*t+1.1)+.2*std::sin(6.283185307179586*200*t));
+                const float y=e.process({x,x},bypass).left;if(!std::isfinite(y))++bad;const double step=std::abs(double(y)-last);last=y;
+                if(i>0&&since<480)worst=std::max(worst,step);else if(i>0)natural=std::max(natural,step);++since;}}
+        v.check(bad==0&&worst<.06,"30 random sessions across all modes: no non-finite output, max step within 10 ms of an event "+std::to_string(worst)+" (largest step elsewhere "+std::to_string(natural)+")");}
+    {energy::HarvestEngine e;e.setTime(8000);e.setFx(100);e.setEffects(31);e.setMode(4);e.setFilter(1,.7f,200);e.setSubKeep(90);e.setLanding(1);e.prepare(fs,2);e.setGate(true);
+        const auto start=std::chrono::steady_clock::now();for(int i=0;i<int(fs*8);++i)e.process(energy::Frame{float(.3*std::sin(i*.01)),float(.3*std::sin(i*.011))});
+        const double s=std::chrono::duration<double>(std::chrono::steady_clock::now()-start).count();std::cout<<"8 s Rewind with all FX, resonant 24 dB filter, Sub Keep and Tail rendered in "<<s<<" s ("<<s/8*100<<" % of real time)\n";}
+    if(v.failed)throw std::runtime_error(std::to_string(v.failed)+" feature check(s) failed");
+    std::cout<<"PASS 0.4.0 feature suite\n";
+}
+
+}
+int main(){try{matrix();lifecycle();maximum();fixtures();rack();outputLevel();regressions();features();return 0;}catch(const std::exception& e){track=false;std::cerr<<"FAIL "<<e.what()<<'\n';return 1;}}

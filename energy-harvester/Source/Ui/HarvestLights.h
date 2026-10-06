@@ -8,17 +8,19 @@ namespace energy::ui {
 // Everything the light show reacts to. Read from the processor's atomics once per frame.
 struct LightInputs {
     bool gate = false;          // HARVEST as processed by the engine
-    int state = 0;              // 0 off, 1 spinning, 2 at speed, 3 releasing
-    float progress = 0;         // spin-up progress 0..1
+    int state = 0;              // 0 off, 1 spinning, 2 at speed, 3 releasing, 4 stopped (Tape Stop / Brake at rest)
+    float progress = 0;         // spin progress 0..1
+    float ratio = 1;            // engine playback ratio: 1 normal, 0 standstill, negative while rewinding
     float level = 0;            // output block peak, linear
     bool bypassed = false;
     bool reducedMotion = false;
     bool dimmed = false;        // INFO page covers the device
 };
 
-// The HARVEST reactor: a jog-wheel rotor that turns at the actual tape speed, energy running through the
-// board's real copper traces, a lip/rim glow that breathes with the audio, and a shockwave when the tape
-// reaches speed. Works in the editor's 560 x 720 design coordinates. Message thread only.
+// The HARVEST reactor: a jog-wheel rotor that turns at the engine's actual playback ratio (slowing to a stop
+// for Tape Stop, running backwards for Rewind), energy running through the board's real copper traces, a
+// lip/rim glow that breathes with the audio, a shockwave when the tape reaches speed and a soft power-down
+// fade when a stop comes to rest. Works in the editor's 560 x 720 design coordinates. Message thread only.
 class HarvestLights {
 public:
     HarvestLights();

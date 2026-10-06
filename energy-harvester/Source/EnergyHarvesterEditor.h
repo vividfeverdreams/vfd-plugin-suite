@@ -10,6 +10,8 @@ public:
     // Test hook: advance the live light show by `seconds`, as the timer would, reading the processor's state.
     void stepAnimationForTesting(double seconds);
     double measureAnimationPaint();
+    // Test hook: 0 FX page, 1 MODE page, 2 setup screen.
+    void showPageForTesting(int page);
 private:
     std::unique_ptr<HarvestCanvas> canvas;
 };

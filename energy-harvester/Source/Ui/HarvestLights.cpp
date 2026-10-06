@@ -6,7 +6,8 @@ namespace {
 const juce::Colour pink(0xffff52be), pearl(0xffffedf8), hot(0xffffc4e9), unlit(0xff6d244c);
 constexpr float twoPi = juce::MathConstants<float>::twoPi;
 constexpr int segments = 40, rotorHeads = 3;
-constexpr double riseSeconds = .12, fallSeconds = .32, shockSeconds = .85;
+constexpr double riseSeconds = .12, fallSeconds = .32, powerDownSeconds = .9, shockSeconds = .85;
+constexpr float restingCharge = .2f;  // a stopped deck keeps a faint standby glow while HARVEST stays on
 
 float smooth(float x) noexcept { x = juce::jlimit(0.f, 1.f, x); return x * x * (3 - 2 * x); }
 float follow(float value, float target, double seconds, double tau) noexcept {
@@ -76,15 +77,18 @@ void HarvestLights::advance(double seconds, const LightInputs& in) noexcept {
     still_ = in.reducedMotion || in.bypassed || in.dimmed;
     dim_ = in.dimmed; bypassed_ = in.bypassed;
 
-    const float target = in.gate ? 1.f : 0.f;
-    if (std::abs(target - fadeTarget_) > .5f) { fadeFrom_ = charge_; fadeTarget_ = target; fadeElapsed_ = 0; }
-    const double duration = target > fadeFrom_ ? riseSeconds : fallSeconds;
+    // A stop that has come to rest powers the board down softly instead of throwing a shockwave.
+    const bool resting = in.gate && in.state == 4;
+    const float target = in.gate ? (resting ? restingCharge : 1.f) : 0.f;
+    if (std::abs(target - fadeTarget_) > .01f) { fadeFrom_ = charge_; fadeTarget_ = target; fadeElapsed_ = 0; }
+    const double duration = target > fadeFrom_ ? riseSeconds : resting ? powerDownSeconds : fallSeconds;
     fadeElapsed_ = std::min(duration, fadeElapsed_ + seconds);
     charge_ = fadeFrom_ + (target - fadeFrom_) * smooth(float(fadeElapsed_ / duration));
 
-    // The rotor tracks the engine's tape speed while ON and coasts down like a platter when switched OFF.
-    const float ratio = in.gate ? (in.state == 1 ? tapeRatio(1, in.progress) : 1.f) : 0.f;
-    speed_ = follow(speed_, ratio, seconds, ratio > speed_ ? .035 : .22);
+    // The rotor follows the engine's playback ratio while ON (stopping for a stop, reversing for a rewind) and
+    // coasts down like a platter when switched OFF.
+    const float ratio = in.gate ? (std::isfinite(in.ratio) ? juce::jlimit(-4.f, 4.f, in.ratio) : 1.f) : 0.f;
+    speed_ = follow(speed_, ratio, seconds, std::abs(ratio) > std::abs(speed_) ? .035 : .22);
     fill_ = follow(fill_, in.gate ? (in.state == 1 ? in.progress : 1.f) : fill_, seconds, .05);
 
     // Audio level breathes the glow; silence still harvests at the base brightness.
@@ -98,7 +102,9 @@ void HarvestLights::advance(double seconds, const LightInputs& in) noexcept {
 
     if (!still_) {
         rotor_ = std::fmod(rotor_ + seconds * speed_ * twoPi * 1.15, double(twoPi));
-        flow_ = std::fmod(flow_ + seconds * (.18 + .72 * speed_), 1.0);
+        if (rotor_ < 0) rotor_ += twoPi;
+        flow_ += seconds * (.18 * (speed_ < 0 ? -1 : 1) + .72 * speed_);
+        flow_ -= std::floor(flow_);
         shockAge_ += seconds;
         igniteAge_ += seconds;
     } else {
@@ -108,7 +114,7 @@ void HarvestLights::advance(double seconds, const LightInputs& in) noexcept {
 }
 
 bool HarvestLights::needsFrames() const noexcept {
-    return !still_ && (charge_ > .0005f || speed_ > .001f || shockAge_ < shockSeconds);
+    return !still_ && (charge_ > .0005f || std::abs(speed_) > .001f || shockAge_ < shockSeconds);
 }
 
 float HarvestLights::intensity() const noexcept {
@@ -132,10 +138,11 @@ void HarvestLights::paintPackets(juce::Graphics& g, const Trace& trace, float li
         const float edge = smooth(u / .08f) * smooth((1 - u) / .10f);
         const float alpha = juce::jmin(1.f, lit * edge);
         if (alpha < .01f) continue;
-        const float head = u * trace.length, step = 2.6f * (.55f + .45f * speed_);
+        // Trails stream behind the head in the direction of travel (towards the source while rewinding).
+        const float head = u * trace.length, step = 2.6f * (.55f + .45f * std::abs(speed_)) * (speed_ < 0 ? -1.f : 1.f);
         for (int j = tail; j >= 1; --j) {
             const float at = head - float(j) * step;
-            if (at < 0) continue;
+            if (at < 0 || at > trace.length) continue;
             const auto p = trace.path.getPointAlongPath(at);
             const float fade = 1 - float(j) / float(tail + 1), r = .5f + 1.1f * fade;
             g.setColour(hot.withAlpha(alpha * fade * fade * .85f));
@@ -190,8 +197,9 @@ void HarvestLights::paintRing(juce::Graphics& g, float progress) const {
     }
 
     // Three rotor heads, one per blade of the HARVEST mark, sweep the LED segments like a jog-wheel ring.
-    const float rotorGain = still_ ? 0.f : juce::jmin(1.f, i) * juce::jlimit(0.f, 1.f, .25f + speed_ * 1.2f);
-    const float tailLength = .55f + .9f * speed_;
+    const float rotorGain = still_ ? 0.f : juce::jmin(1.f, i) * juce::jlimit(0.f, 1.f, .25f + std::abs(speed_) * 1.2f);
+    const float tailLength = .55f + .9f * juce::jmin(1.5f, std::abs(speed_));
+    const bool reverse = speed_ < 0;
     const float spacing = twoPi / segments, sector = twoPi / rotorHeads;
     for (int s = 0; s < segments; ++s) {
         // Arc angles run clockwise from 12 o'clock, so progress fills from the top.
@@ -199,7 +207,7 @@ void HarvestLights::paintRing(juce::Graphics& g, float progress) const {
         const auto segment = arc(segmentRadius, a + .025f, a + .125f);
         float highlight = 0;
         if (rotorGain > .001f) {
-            float behind = std::fmod(float(rotor_) - (a + .075f), sector);
+            float behind = std::fmod(reverse ? (a + .075f) - float(rotor_) : float(rotor_) - (a + .075f), sector);
             if (behind < 0) behind += sector;
             highlight = rotorGain * std::exp(-behind / tailLength) * (behind < sector * .92f ? 1.f : 0.f);
         }

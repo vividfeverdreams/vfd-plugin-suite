@@ -18,7 +18,7 @@ FxRack::Biquad FxRack::butterworth(double rate,double hz,bool highpass) noexcept
     q.b2=q.b0;q.a1=-2*cw/a0;q.a2=(1-alpha)/a0;return q;
 }
 void FxRack::prepare(double rate,int channels){
-    fs_=rate;channels_=channels;smoothing_=1-std::exp(-1/(.010*fs_));
+    fs_=rate;channels_=channels;smoothing_=1-std::exp(-1/(.010*fs_));subAlpha_=1-std::exp(-tau*120/fs_);
     // Two Butterworth high-pass passes form a 24 dB/oct Linkwitz-Riley high band for the modulation effects and
     // the hall send; one Butterworth low-pass at 150 Hz gives the in-phase low band Washout and panning keep.
     highpass_=butterworth(fs_,crossover,true);lowpass_=butterworth(fs_,keep,false);
@@ -30,12 +30,10 @@ void FxRack::prepare(double rate,int channels){
 }
 void FxRack::reset() noexcept {
     for(auto& d:chorus_)d.reset();for(auto& d:flanger_)d.reset();for(auto& d:hall_)d.reset();
-    phase_=panPhase_=0;tick_=0;apX_={};apY_={};phaserFeedback_={};highA_={};highB_={};lowZ_={};coefficients_={};feedback_={};
+    phase_=panPhase_=0;tick_=0;apX_={};apY_={};phaserFeedback_={};sub_={};washHighpass_={};highA_={};highB_={};lowZ_={};coefficients_={};feedback_={};
     for(int i=0;i<5;++i)enabled_[size_t(i)]=(mask_&(1u<<i))?1.:0.;
 }
-Frame FxRack::process(Frame input,double amount,double recede,double washReturn) noexcept {
-    const double intensity=std::clamp(amount,0.,1.),fade=std::clamp(recede,0.,1.),back=std::clamp(washReturn,0.,1.);
-    for(int i=0;i<5;++i)enabled_[size_t(i)]+=smoothing_*(((mask_&(1u<<i))?1.:0.)-enabled_[size_t(i)]);
+void FxRack::updateCoefficients(double intensity) noexcept {
     if((tick_++&15)==0){
         const double sweep=220*std::pow(2.,4.5*(.5+.5*std::sin(phase_*(.35+1.1*intensity))));
         const double ratios[]={.55,.78,1.,1.35,1.8,2.4};
@@ -43,6 +41,40 @@ Frame FxRack::process(Frame input,double amount,double recede,double washReturn)
         const double decay=1.4+4.1*intensity;hallAlpha_=1-std::exp(-tau*(700+6500*(1-intensity))/fs_);
         for(auto i=0u;i<8;++i)feedback_[i]=std::pow(10.,-3.0*double(hall_[i].samples.size())/(fs_*decay));
     }
+}
+// The 0.3.2 effect chain, kept operation-for-operation so legacy projects render exactly as they did.
+Frame FxRack::processLegacy(Frame input,double intensity,double* hall) noexcept {
+    std::array<double,2> signal{input.left,input.right};
+    const double chorusMix=.55*intensity*enabled_[1],phaserMix=.65*intensity*enabled_[2],flangerMix=.65*intensity*enabled_[3];
+    const double flangeDelay=(.4+3.7*(1+std::sin(phase_*.27)))*fs_*.001;
+    for(int ch=0;ch<channels_;++ch){const auto c=size_t(ch);auto& delay=chorus_[c];delay.push(signal[c]);double voices=0;
+        for(int v=0;v<3;++v){const double offset=channels_==2?ch*.9:0;double d=(16+v*5+(2+4*intensity)*std::sin(phase_*(.19+.083*v)+v*2.1+offset))*fs_*.001;voices+=delay.read(d)/3;}
+        const double ready=std::min(1.,delay.valid/(fs_*.036));signal[c]+=chorusMix*ready*(voices-signal[c]);
+        sub_[c]+=subAlpha_*(signal[c]-sub_[c]);double high=signal[c]-sub_[c],shifted=high+phaserFeedback_[c]*.28*intensity;
+        for(int stage=0;stage<6;++stage){auto j=size_t(stage);double y=coefficients_[j]*shifted+apX_[c][j]-coefficients_[j]*apY_[c][j];apX_[c][j]=shifted;apY_[c][j]=y;shifted=y;}
+        phaserFeedback_[c]=std::clamp(shifted,-3.,3.);signal[c]+=phaserMix*(shifted-high);
+        auto& flange=flanger_[c];double delayed=flange.read(flangeDelay);
+        flange.push(signal[c]-delayed*.52*intensity*enabled_[3]);signal[c]+=flangerMix*std::min(1.,flange.valid/(fs_*.009))*(delayed-signal[c]);
+        washHighpass_[c]+=subAlpha_*(signal[c]-washHighpass_[c]);
+    }
+    if(channels_==1){signal[1]=signal[0];washHighpass_[1]=washHighpass_[0];}
+    std::array<double,8> delayed{};double sum=0;
+    for(auto i=0u;i<8;++i){auto& d=hall_[i];const double value=d.valid>=int(d.samples.size())?d.samples[size_t(d.write)]:0.;d.damp+=hallAlpha_*(value-d.damp);delayed[i]=d.damp;sum+=delayed[i];}
+    const double left=signal[0]-washHighpass_[0],right=signal[1]-washHighpass_[1];
+    const double encodeL[]={1,1,-1,-1,1,1,-1,-1},encodeR[]={1,-1,1,-1,1,-1,1,-1};double wetL=0,wetR=0;
+    for(auto i=0u;i<8;++i){hall_[i].push((delayed[i]-.25*sum)*feedback_[i]+.25*(left*encodeL[i]+right*encodeR[i]));wetL+=delayed[i]*encodeL[i]*.25;wetR+=delayed[i]*encodeR[i]*.25;}
+    const double washMix=.90*intensity*intensity*enabled_[4];
+    if(hall==nullptr){signal[0]+=washMix*(wetL-signal[0]);signal[1]+=washMix*(wetR-signal[1]);}
+    else{signal[0]-=washMix*signal[0];signal[1]-=washMix*signal[1];hall[0]=washMix*wetL;hall[1]=washMix*(channels_==2?wetR:wetL);}
+    if(channels_==2){const double pan=.96*intensity*enabled_[0]*std::sin(panPhase_);signal[0]*=std::sqrt(1-pan);signal[1]*=std::sqrt(1+pan);}else signal[1]=signal[0];
+    phase_+=tau/fs_;panPhase_=std::fmod(panPhase_+tau*panRate_/fs_,tau);
+    return {std::isfinite(signal[0])?float(signal[0]):input.left,std::isfinite(signal[1])?float(signal[1]):input.right};
+}
+Frame FxRack::process(Frame input,double amount,double recede,double washReturn,double* hall) noexcept {
+    const double intensity=std::clamp(amount,0.,1.),fade=std::clamp(recede,0.,1.),back=std::clamp(washReturn,0.,1.);
+    for(int i=0;i<5;++i)enabled_[size_t(i)]+=smoothing_*(((mask_&(1u<<i))?1.:0.)-enabled_[size_t(i)]);
+    updateCoefficients(intensity);
+    if(legacy_)return processLegacy(input,intensity,hall);
     const std::array<double,2> x{input.left,input.right};
     std::array<double,2> high{},low{},y{};
     const double chorusMix=.55*intensity*enabled_[1]*fade,phaserMix=.65*intensity*enabled_[2]*fade,flangerMix=.65*intensity*enabled_[3]*fade;
@@ -67,8 +99,11 @@ Frame FxRack::process(Frame input,double amount,double recede,double washReturn)
     const double encodeL[]={1,1,-1,-1,1,1,-1,-1},encodeR[]={1,-1,1,-1,1,-1,1,-1};double wetL=0,wetR=0;
     for(auto i=0u;i<8;++i){hall_[i].push((delayed[i]-.25*sum)*feedback_[i]+.25*(sendL*encodeL[i]+sendR*encodeR[i]));wetL+=delayed[i]*encodeL[i]*.25;wetR+=delayed[i]*encodeR[i]*.25;}
     // Washout replaces the part above the low band with the hall; the hall return fades independently.
-    const double wash=.90*intensity*intensity*enabled_[4],duck=wash*fade,ret=wash*back;const double wet[]{wetL,wetR};
-    for(size_t c=0;c<2;++c)y[c]+=ret*wet[c]-duck*(y[c]-low[c]);
+    const double wash=.90*intensity*intensity*enabled_[4],duck=wash*fade,ret=wash*back;const double wet[]{wetL,channels_==2?wetR:wetL};
+    for(size_t c=0;c<2;++c){
+        if(hall==nullptr)y[c]+=ret*wet[c]-duck*(y[c]-low[c]);
+        else{y[c]-=duck*(y[c]-low[c]);hall[c]=ret*wet[c];}
+    }
     if(channels_==2){
         // Balance only attenuates, and only above the low band, so neither side exceeds unity and the sub stays centred.
         const double pan=.96*intensity*enabled_[0]*fade*std::sin(panPhase_);
