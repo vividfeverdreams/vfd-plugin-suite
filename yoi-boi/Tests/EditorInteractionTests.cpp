@@ -178,26 +178,33 @@ public:
         }
 
         beginTest ("Shape selectors change only the chosen pose and are undoable");
+        for (const bool latest : { true, false })
         {
             YoiBoiProcessor synth;
             auto callbacks = synth.makeEditorCallbacks();
+            if (! latest) callbacks.loadPreset ("factory:0"); // an original (engine 3) sound: five poses
             std::unique_ptr<juce::AudioProcessorEditor> editor (synth.createEditor());
+            pumpEditor();
             expect (clickControl (*editor, "SHAPE"));
             auto* selected = findControl<juce::ComboBox> (*editor, "Selected gesture point");
             auto* pose = findControl<juce::ComboBox> (*editor, "Vowel pose");
             expect (selected != nullptr && pose != nullptr);
             if (selected != nullptr && pose != nullptr)
             {
-                const auto originalStart = synth.parameters().getRawParameterValue ("start_pose")->load();
-                const auto originalBody = synth.parameters().getRawParameterValue ("body_pose")->load();
-                const auto changedStart = originalStart == 4.0f ? 0.0f : 4.0f;
+                // Engine 4 offers nine vowels in the vowel_* parameters; the originals keep five poses.
+                expectEquals (pose->getNumItems(), latest ? 9 : 5);
+                const char* startId = latest ? "vowel_start" : "start_pose";
+                const char* bodyId = latest ? "vowel_body" : "body_pose";
+                const auto originalStart = synth.parameters().getRawParameterValue (startId)->load();
+                const auto originalBody = synth.parameters().getRawParameterValue (bodyId)->load();
+                const auto changedStart = latest ? (originalStart == 7.0f ? 8.0f : 7.0f) : (originalStart == 4.0f ? 0.0f : 4.0f);
                 selected->setSelectedId (1, juce::sendNotificationSync);
                 pose->setSelectedId (static_cast<int> (changedStart) + 1, juce::sendNotificationSync);
-                expectEquals (synth.parameters().getRawParameterValue ("start_pose")->load(), changedStart);
-                expectEquals (synth.parameters().getRawParameterValue ("body_pose")->load(), originalBody);
+                expectEquals (synth.parameters().getRawParameterValue (startId)->load(), changedStart);
+                expectEquals (synth.parameters().getRawParameterValue (bodyId)->load(), originalBody);
                 expect (callbacks.canUndo());
                 callbacks.undo();
-                expectEquals (synth.parameters().getRawParameterValue ("start_pose")->load(), originalStart);
+                expectEquals (synth.parameters().getRawParameterValue (startId)->load(), originalStart);
             }
         }
 
@@ -232,8 +239,11 @@ public:
             YoiBoiProcessor synth;
             auto callbacks = synth.makeEditorCallbacks();
             for (int group = 0; group < 6; ++group) callbacks.setLock (group, false);
+            // Every generated parameter, including the engine-4 vowels, articulation and character.
             for (const auto* id : { "mouth", "size", "bite", "dirt", "sub", "length_ms", "length_division",
-                                   "start_pose", "body_pose", "end_pose", "body_time", "curve", "fmRatio", "fmIndex", "resonance" })
+                                   "start_pose", "body_pose", "end_pose", "body_time", "curve", "fmRatio", "fmIndex", "resonance",
+                                   "vowel_start", "vowel_body", "vowel_end", "onset_glide", "consonant", "consonant_level",
+                                   "pitch_env", "pitch_env_ms", "shaper", "squash" })
                 callbacks.setParameterLock (id, true);
             std::unique_ptr<juce::AudioProcessorEditor> editor (synth.createEditor());
             auto* generate = findControl<juce::Button> (*editor, "NEW YOI");
@@ -369,7 +379,8 @@ public:
             expect (point != nullptr && pose != nullptr);
             if (point != nullptr && pose != nullptr)
             {
-                callbacks.setParameterLock ("start_pose", true);
+                // Engine 4 edits the nine-vowel parameters; the original engines the five poses.
+                callbacks.setParameterLock (callbacks.soundEngine() >= 4 ? "vowel_start" : "start_pose", true);
                 point->setSelectedId (1, juce::sendNotificationSync);
                 expect (waitForEditor ([&] { return static_cast<bool> (pose->getProperties()["randomExcluded"]); }));
                 point->setSelectedId (2, juce::sendNotificationSync);

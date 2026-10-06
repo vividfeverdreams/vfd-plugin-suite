@@ -104,6 +104,20 @@ void preservePerformance (Patch& next, const Patch& current)
     next.lengthFeel = current.lengthFeel;
     next.freeLengthMilliseconds = next.lengthSeconds * 1000.0f;
     next.lengthDivision = nearestDivision (next.lengthSeconds);
+    // Engine-4 performance settings belong to the player, not the sound.
+    next.talkMode = current.talkMode;
+    next.talkDivision = current.talkDivision;
+    next.talkFeel = current.talkFeel;
+    next.bendRange = current.bendRange;
+    next.glideMode = current.glideMode;
+    next.width = current.width;
+    next.subPhaseReset = current.subPhaseReset;
+    next.velocityToMouth = current.velocityToMouth;
+    next.velocityToBite = current.velocityToBite;
+    next.velocityToDirt = current.velocityToDirt;
+    next.attackMilliseconds = current.attackMilliseconds;
+    next.releaseMilliseconds = current.releaseMilliseconds;
+    next.meterBars = current.meterBars;
 }
 
 void applyLocks (Patch& next, const Patch& current, const PatchLocks& locks)
@@ -114,6 +128,12 @@ void applyLocks (Patch& next, const Patch& current, const PatchLocks& locks)
         next.startPose = current.startPose;
         next.bodyPose = current.bodyPose;
         next.endPose = current.endPose;
+        next.vowelStart = current.vowelStart;
+        next.vowelBody = current.vowelBody;
+        next.vowelEnd = current.vowelEnd;
+        next.onsetGlide = current.onsetGlide;
+        next.consonant = current.consonant;
+        next.consonantLevel = current.consonantLevel;
     }
     if (locks[1])
         next.size = current.size;
@@ -123,9 +143,15 @@ void applyLocks (Patch& next, const Patch& current, const PatchLocks& locks)
         next.fmRatio = current.fmRatio;
         next.fmIndex = current.fmIndex;
         next.resonance = current.resonance;
+        next.pitchEnvSemitones = current.pitchEnvSemitones;
+        next.pitchEnvMilliseconds = current.pitchEnvMilliseconds;
     }
     if (locks[3])
+    {
         next.dirt = current.dirt;
+        next.shaper = current.shaper;
+        next.squash = current.squash;
+    }
     if (locks[4])
     {
         next.lengthSeconds = current.lengthSeconds;
@@ -137,6 +163,86 @@ void applyLocks (Patch& next, const Patch& current, const PatchLocks& locks)
     }
     if (locks[5])
         next.sub = current.sub;
+}
+
+// Engine-4 extras use their own stream, so the original fields keep exactly
+// the values the version-2 randomizer chose for the same seed.
+constexpr std::uint64_t latestStreamSalt = UINT64_C (0x4c4154455354594f);
+
+void randomizeLatest (Patch& next, std::uint64_t seed)
+{
+    Random random (seed ^ latestStreamSalt);
+    const auto chance = [&random] (float probability) { return random.unit() < probability; };
+    next.vowelStart = next.startPose;
+    next.vowelBody = next.bodyPose;
+    next.vowelEnd = next.endPose;
+    switch (next.family)
+    {
+        case Family::Rubber:
+            if (chance (.3f)) next.vowelBody = vowelUH;
+            if (chance (.2f)) next.vowelStart = vowelUH;
+            if (chance (.35f)) next.onsetGlide = chance (.6f) ? 2 : 1;
+            if (chance (.25f)) next.consonant = chance (.5f) ? 2 : 1;
+            next.shaper = chance (.3f) ? 1 : 0;
+            next.squash = random.between (0.0f, .35f);
+            break;
+        case Family::Metal:
+            if (chance (.3f)) next.vowelBody = vowelAE;
+            if (chance (.25f)) next.vowelEnd = vowelIH;
+            if (chance (.2f)) next.onsetGlide = 1;
+            if (chance (.3f)) next.consonant = chance (.5f) ? 1 : 3;
+            next.shaper = chance (.45f) ? 2 : chance (.25f) ? 3 : 0;
+            next.squash = random.between (.1f, .5f);
+            break;
+        case Family::Throat:
+            if (chance (.35f)) next.vowelBody = chance (.5f) ? vowelER : vowelUH;
+            if (chance (.3f)) next.onsetGlide = 1;
+            if (chance (.25f)) next.consonant = 2;
+            next.shaper = chance (.45f) ? 1 : 0;
+            next.squash = random.between (.05f, .4f);
+            break;
+        case Family::Squeak:
+            if (chance (.3f)) next.vowelEnd = vowelIH;
+            if (chance (.2f)) next.vowelStart = vowelIH;
+            if (chance (.4f)) next.onsetGlide = 2;
+            if (chance (.3f)) next.consonant = 1;
+            next.shaper = chance (.25f) ? 2 : 0;
+            next.squash = random.between (0.0f, .3f);
+            break;
+    }
+    next.consonantLevel = random.between (.3f, .7f);
+    if (chance (.3f))
+    {
+        const bool rise = next.family == Family::Squeak && chance (.4f);
+        next.pitchEnvSemitones = (rise ? -1.0f : 1.0f) * random.between (3.0f, 12.0f);
+        next.pitchEnvMilliseconds = random.between (40.0f, 220.0f);
+    }
+    else
+    {
+        next.pitchEnvSemitones = 0.0f;
+        next.pitchEnvMilliseconds = 120.0f;
+    }
+}
+
+void mutateLatest (Patch& next, const Patch& base, std::uint64_t seed, float amount)
+{
+    Random random (seed ^ latestStreamSalt);
+    next.squash = std::clamp (base.squash + random.centered() * amount * .4f, 0.0f, 1.0f);
+    next.consonantLevel = std::clamp (base.consonantLevel + random.centered() * amount * .5f, 0.0f, 1.0f);
+    if (std::abs (base.pitchEnvSemitones) > .01f)
+        next.pitchEnvSemitones = std::clamp (base.pitchEnvSemitones + random.centered() * amount * 8.0f, -24.0f, 24.0f);
+    if (random.unit() < amount * .3f)
+    {
+        // The poses may have changed above; carry them into the vowel list.
+        next.vowelStart = next.startPose;
+        next.vowelBody = next.bodyPose;
+        next.vowelEnd = next.endPose;
+    }
+    if (random.unit() < amount * .25f)
+    {
+        constexpr std::array<int, 4> extended { vowelIH, vowelUH, vowelAE, vowelER };
+        next.vowelBody = extended[static_cast<std::size_t> (random.index (4))];
+    }
 }
 
 juce::String generatedName (Family family, std::uint64_t seed, const char* action)
@@ -229,7 +335,27 @@ const char* familyName (Family family) noexcept
     return names[static_cast<std::size_t> (familyIndex (family))];
 }
 
+const char* vowelName (int vowel) noexcept
+{
+    constexpr std::array<const char*, vowelCount> names { "EE", "EH", "AH", "OH", "OO", "IH", "UH", "AE", "ER" };
+    return names[static_cast<std::size_t> (std::clamp (vowel, 0, vowelCount - 1))];
+}
+
 Patch makeDefaultPatch() { return {}; }
+
+Patch upgradedToLatestEngine (Patch patch)
+{
+    patch = sanitizedPatch (std::move (patch));
+    if (patch.soundEngine < Patch::firstExtendedEngine)
+    {
+        // The original five poses keep their index in the engine-4 vowel list.
+        patch.vowelStart = patch.startPose;
+        patch.vowelBody = patch.bodyPose;
+        patch.vowelEnd = patch.endPose;
+    }
+    patch.soundEngine = Patch::currentSoundEngine;
+    return patch;
+}
 
 Patch sanitizedPatch (Patch patch)
 {
@@ -261,6 +387,27 @@ Patch sanitizedPatch (Patch patch)
     patch.resonance = bounded (patch.resonance, 0.0f, 1.0f, fallback.resonance);
     patch.bodyTime = bounded (patch.bodyTime, .2f, .8f, fallback.bodyTime);
     patch.curve = bounded (patch.curve, 0.0f, 1.0f, fallback.curve);
+    patch.talkMode = std::clamp (patch.talkMode, 0, 3);
+    patch.talkDivision = std::clamp (patch.talkDivision, 0, 4);
+    patch.talkFeel = std::clamp (patch.talkFeel, 0, 2);
+    patch.bendRange = std::clamp (patch.bendRange, 1, 24);
+    patch.glideMode = std::clamp (patch.glideMode, 0, 1);
+    patch.pitchEnvSemitones = bounded (patch.pitchEnvSemitones, -24.0f, 24.0f, 0.0f);
+    patch.pitchEnvMilliseconds = bounded (patch.pitchEnvMilliseconds, 5.0f, 2000.0f, fallback.pitchEnvMilliseconds);
+    patch.width = bounded (patch.width, 0.0f, 1.0f, 0.0f);
+    patch.shaper = std::clamp (patch.shaper, 0, 3);
+    patch.squash = bounded (patch.squash, 0.0f, 1.0f, 0.0f);
+    patch.vowelStart = std::clamp (patch.vowelStart, 0, vowelCount - 1);
+    patch.vowelBody = std::clamp (patch.vowelBody, 0, vowelCount - 1);
+    patch.vowelEnd = std::clamp (patch.vowelEnd, 0, vowelCount - 1);
+    patch.onsetGlide = std::clamp (patch.onsetGlide, 0, 2);
+    patch.consonant = std::clamp (patch.consonant, 0, 3);
+    patch.consonantLevel = bounded (patch.consonantLevel, 0.0f, 1.0f, fallback.consonantLevel);
+    patch.velocityToMouth = bounded (patch.velocityToMouth, 0.0f, 1.0f, 0.0f);
+    patch.velocityToBite = bounded (patch.velocityToBite, 0.0f, 1.0f, 0.0f);
+    patch.velocityToDirt = bounded (patch.velocityToDirt, 0.0f, 1.0f, 0.0f);
+    patch.attackMilliseconds = bounded (patch.attackMilliseconds, 0.5f, 200.0f, fallback.attackMilliseconds);
+    patch.releaseMilliseconds = bounded (patch.releaseMilliseconds, 5.0f, 2000.0f, fallback.releaseMilliseconds);
     return patch;
 }
 
@@ -295,6 +442,8 @@ Patch newYoi (const Patch& current, const PatchLocks& locks, std::uint64_t seed,
     next.startPose = poses[0];
     next.bodyPose = poses[1];
     next.endPose = poses[2];
+    if (next.soundEngine >= Patch::firstExtendedEngine)
+        randomizeLatest (next, seed);
     preservePerformance (next, sanitizedPatch (current));
     applyLocks (next, sanitizedPatch (current), locks);
     return sanitizedPatch (std::move (next));
@@ -344,6 +493,8 @@ Patch mutatePatch (const Patch& current, const PatchLocks& locks, std::uint64_t 
     next.randomizerVersion = Patch::currentRandomizerVersion;
     next.name = generatedName (next.family, seed, "Mutant");
     next.presetId.clear();
+    if (next.soundEngine >= Patch::firstExtendedEngine)
+        mutateLatest (next, base, seed, amount);
     preservePerformance (next, base);
     applyLocks (next, base, locks);
     return sanitizedPatch (std::move (next));
@@ -392,6 +543,12 @@ const std::array<Patch, 12>& factoryPresets()
                 * (r.feel == 1 ? 2.f / 3.f : r.feel == 2 ? 1.5f : 1.f);
             p.freeLengthMilliseconds = std::max (80.f, p.lengthSeconds * 1000.f);
             p.seed = UINT64_C (0x594f4901) + i;
+            // The originals keep the engine and randomizer they were authored
+            // with, so sessions and Favorites that reference them recall exactly.
+            p.soundEngine = 3;
+            p.randomizerVersion = 2;
+            p.folder = "Classic";
+            p.tags = juce::StringArray { "Classic", familyName (p.family) };
             result[i].presetId = "factory:" + juce::String (static_cast<int> (i));
         }
         return result;
@@ -439,6 +596,30 @@ juce::ValueTree toValueTree (const Patch& source)
     set ("resonance", patch.resonance);
     set ("bodyTime", patch.bodyTime);
     set ("curve", patch.curve);
+    // Engine-4 settings (0.2.0). Earlier releases ignore unknown properties.
+    set ("talkMode", patch.talkMode);
+    set ("talkDivision", patch.talkDivision);
+    set ("talkFeel", patch.talkFeel);
+    set ("bendRange", patch.bendRange);
+    set ("glideMode", patch.glideMode);
+    set ("pitchEnvSemitones", patch.pitchEnvSemitones);
+    set ("pitchEnvMilliseconds", patch.pitchEnvMilliseconds);
+    set ("width", patch.width);
+    set ("subPhaseReset", patch.subPhaseReset ? 1 : 0);
+    set ("shaper", patch.shaper);
+    set ("squash", patch.squash);
+    set ("vowelStart", patch.vowelStart);
+    set ("vowelBody", patch.vowelBody);
+    set ("vowelEnd", patch.vowelEnd);
+    set ("onsetGlide", patch.onsetGlide);
+    set ("consonant", patch.consonant);
+    set ("consonantLevel", patch.consonantLevel);
+    set ("velocityToMouth", patch.velocityToMouth);
+    set ("velocityToBite", patch.velocityToBite);
+    set ("velocityToDirt", patch.velocityToDirt);
+    set ("attackMilliseconds", patch.attackMilliseconds);
+    set ("releaseMilliseconds", patch.releaseMilliseconds);
+    set ("meterBars", patch.meterBars ? 1 : 0);
     return tree;
 }
 
@@ -488,6 +669,30 @@ std::optional<Patch> fromValueTree (const juce::ValueTree& tree)
     patch.resonance = readFloat (tree, "resonance", patch.resonance);
     patch.bodyTime = readFloat (tree, "bodyTime", patch.bodyTime);
     patch.curve = readFloat (tree, "curve", patch.curve);
+    patch.talkMode = readInt (tree, "talkMode", patch.talkMode);
+    patch.talkDivision = readInt (tree, "talkDivision", patch.talkDivision);
+    patch.talkFeel = readInt (tree, "talkFeel", patch.talkFeel);
+    patch.bendRange = readInt (tree, "bendRange", patch.bendRange);
+    patch.glideMode = readInt (tree, "glideMode", patch.glideMode);
+    patch.pitchEnvSemitones = readFloat (tree, "pitchEnvSemitones", patch.pitchEnvSemitones);
+    patch.pitchEnvMilliseconds = readFloat (tree, "pitchEnvMilliseconds", patch.pitchEnvMilliseconds);
+    patch.width = readFloat (tree, "width", patch.width);
+    patch.subPhaseReset = readInt (tree, "subPhaseReset", 0) != 0;
+    patch.shaper = readInt (tree, "shaper", patch.shaper);
+    patch.squash = readFloat (tree, "squash", patch.squash);
+    // Files written before 0.2.0 have no vowel list: carry the poses over.
+    patch.vowelStart = readInt (tree, "vowelStart", patch.startPose);
+    patch.vowelBody = readInt (tree, "vowelBody", patch.bodyPose);
+    patch.vowelEnd = readInt (tree, "vowelEnd", patch.endPose);
+    patch.onsetGlide = readInt (tree, "onsetGlide", patch.onsetGlide);
+    patch.consonant = readInt (tree, "consonant", patch.consonant);
+    patch.consonantLevel = readFloat (tree, "consonantLevel", patch.consonantLevel);
+    patch.velocityToMouth = readFloat (tree, "velocityToMouth", patch.velocityToMouth);
+    patch.velocityToBite = readFloat (tree, "velocityToBite", patch.velocityToBite);
+    patch.velocityToDirt = readFloat (tree, "velocityToDirt", patch.velocityToDirt);
+    patch.attackMilliseconds = readFloat (tree, "attackMilliseconds", patch.attackMilliseconds);
+    patch.releaseMilliseconds = readFloat (tree, "releaseMilliseconds", patch.releaseMilliseconds);
+    patch.meterBars = readInt (tree, "meterBars", 0) != 0;
     return sanitizedPatch (std::move (patch));
 }
 } // namespace yoiboi

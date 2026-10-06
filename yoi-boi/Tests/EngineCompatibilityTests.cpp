@@ -51,6 +51,15 @@ juce::ValueTree historicalEngineState (YoiBoiProcessor& synth, int engine)
     auto patch = state.getChildWithName ("YoiBoiPatch");
     patch.removeProperty ("soundEngine", nullptr);
     patch.setProperty ("name", "Historical test sound", nullptr);
+    // No release before 0.2.0 wrote engine-4 parameters or patch properties.
+    auto allParameters = state.getChildWithName ("PARAMETERS");
+    for (int index = originalParameterCount; index < parameterCount; ++index)
+        allParameters.removeChild (allParameters.getChildWithProperty ("id", parameterIds[static_cast<std::size_t> (index)]), nullptr);
+    for (const auto* property : { "talkMode", "talkDivision", "talkFeel", "bendRange", "glideMode", "pitchEnvSemitones",
+                                  "pitchEnvMilliseconds", "width", "subPhaseReset", "shaper", "squash", "vowelStart", "vowelBody",
+                                  "vowelEnd", "onsetGlide", "consonant", "consonantLevel", "velocityToMouth", "velocityToBite",
+                                  "velocityToDirt", "attackMilliseconds", "releaseMilliseconds", "meterBars" })
+        patch.removeProperty (property, nullptr);
     if (engine < 3)
     {
         for (const auto* property : { "subMode", "lowCut", "lengthFeel" })
@@ -148,7 +157,7 @@ public:
             }
             YoiBoiProcessor reopened (directory.path);
             auto reopenedCallbacks = reopened.makeEditorCallbacks();
-            expectEquals (reopenedCallbacks.soundEngine(), 3);
+            expectEquals (reopenedCallbacks.soundEngine(), Patch::currentSoundEngine);
             const auto presets = reopenedCallbacks.listPresets();
             const auto found = std::find_if (presets.begin(), presets.end(), [&] (const auto& item)
             { return item.user && item.name == name; });
@@ -170,7 +179,7 @@ public:
             const auto before = engineStateOf (synth);
             expect (! callbacks.canUndo());
             callbacks.useLatestSoundEngine();
-            expectEquals (callbacks.soundEngine(), 3);
+            expectEquals (callbacks.soundEngine(), Patch::currentSoundEngine);
             expectEquals (synth.getLatencySamples(), 24);
             expect (callbacks.canUndo());
             auto beforePatch = before.getChildWithName ("YoiBoiPatch").createCopy();
@@ -184,7 +193,7 @@ public:
             expectEquals (callbacks.soundEngine(), engine);
             expectEquals (synth.getLatencySamples(), 0);
             callbacks.redo();
-            expectEquals (callbacks.soundEngine(), 3);
+            expectEquals (callbacks.soundEngine(), Patch::currentSoundEngine);
             expectEquals (synth.getLatencySamples(), 24);
             const auto upgraded = engineStateOf (synth);
             callbacks.useLatestSoundEngine();
@@ -193,7 +202,7 @@ public:
             expectEquals (callbacks.soundEngine(), engine, "Repeated opt-in must not create another Undo entry");
             YoiBoiProcessor reopened (directory.path);
             restoreEngineState (reopened, upgraded);
-            expectEquals (reopened.makeEditorCallbacks().soundEngine(), 3);
+            expectEquals (reopened.makeEditorCallbacks().soundEngine(), Patch::currentSoundEngine);
             expectEquals (reopened.getLatencySamples(), 24);
         }
 
@@ -226,7 +235,7 @@ public:
             expect (! directory.path.exists(), "Editing and mutating must not save presets automatically");
         }
 
-        beginTest ("New Yoi and factory presets use the current engine while Undo restores classic");
+        beginTest ("New Yoi and new factory presets use the latest engine, originals keep 0.1.3's, and Undo restores classic");
         for (const int engine : { 1, 2 })
         {
             EnginePresetDirectory directory;
@@ -236,16 +245,18 @@ public:
             auto callbacks = synth.makeEditorCallbacks();
             callbacks.setParameterLock ("mouth", true);
             callbacks.newYoi();
-            expectEquals (callbacks.soundEngine(), 3);
+            expectEquals (callbacks.soundEngine(), Patch::currentSoundEngine);
             expectEquals (synth.getLatencySamples(), 24);
             expectWithinAbsoluteError (synth.parameters().getRawParameterValue ("mouth")->load(), .331f, .0001f);
             callbacks.undo();
             expectEquals (callbacks.soundEngine(), engine);
-            for (int index = 0; index < 12; ++index)
+            const int bankSize = static_cast<int> (allFactoryPresets().size());
+            for (const int index : { 0, 3, 6, 9, 11, 12, 30, bankSize - 1 })
             {
                 restoreEngineState (synth, historical);
                 callbacks.loadPreset ("factory:" + juce::String (index));
-                expectEquals (callbacks.soundEngine(), 3);
+                expectEquals (callbacks.soundEngine(), index < 12 ? 3 : Patch::currentSoundEngine,
+                              "Original factory sounds keep their engine; the 0.2.0 bank uses the latest");
                 expectEquals (synth.getLatencySamples(), 24);
                 callbacks.undo();
                 expectEquals (callbacks.soundEngine(), engine);
@@ -259,7 +270,7 @@ public:
             YoiBoiProcessor synth (directory.path);
             restoreEngineState (synth, historicalEngineState (synth, engine));
             const auto good = engineStateOf (synth);
-            for (const int unsupported : { -1, 0, 4, 999 })
+            for (const int unsupported : { -1, 0, Patch::currentSoundEngine + 1, 999 })
             {
                 auto bad = good.createCopy();
                 bad.getChildWithName ("YoiBoiPatch").setProperty ("soundEngine", unsupported, nullptr);

@@ -298,6 +298,7 @@ public:
             g.setColour(b.getToggleState() ? cobalt : cyan.withAlpha(0.85f));
             g.fillEllipse(9.0f, b.getHeight() * 0.5f - 2.5f, 5.0f, 5.0f);
         }
+        else if (role == "chip") label = { 3, 0, b.getWidth() - 6, b.getHeight() };
         else if (role == "recent") label = { 10, 0, b.getWidth() - 19, b.getHeight() };
         g.setColour(colour.withMultipliedAlpha(b.isEnabled() ? 1.0f : 0.5f));
         g.drawFittedText(b.getButtonText(), label,
@@ -347,6 +348,29 @@ public:
                           juce::Slider::SliderStyle, juce::Slider& slider) override
     {
         if (static_cast<bool>(slider.getProperties().getWithDefault("valueOnly", false))) return;
+        if (static_cast<bool>(slider.getProperties().getWithDefault("modBar", false)))
+        {
+            // MOD page: a recessed glass pill with a cyan fill, matching the screen's wells.
+            const auto r = slider.getLocalBounds().toFloat().reduced(0.5f, 1.0f);
+            const float opacity = slider.isEnabled() ? 1.0f : 0.4f;
+            g.setColour(midnight.withAlpha(0.55f * opacity));
+            g.fillRoundedRectangle(r, r.getHeight() * 0.5f);
+            const bool bipolar = static_cast<bool>(slider.getProperties().getWithDefault("bipolar", false));
+            const float origin = bipolar ? r.getCentreX() : r.getX();
+            const float fillFrom = juce::jmin(origin, pos), fillTo = juce::jmax(origin, pos);
+            if (fillTo - fillFrom > 0.5f)
+            {
+                juce::Graphics::ScopedSaveState clip(g);
+                juce::Path pill; pill.addRoundedRectangle(r, r.getHeight() * 0.5f);
+                g.reduceClipRegion(pill);
+                g.setGradientFill(juce::ColourGradient(cyan.withAlpha(0.55f * opacity), fillFrom, r.getY(),
+                                                       electricBlue.withAlpha(0.45f * opacity), fillFrom, r.getBottom(), false));
+                g.fillRect(juce::Rectangle<float>(fillFrom, r.getY(), fillTo - fillFrom, r.getHeight()));
+            }
+            g.setColour((slider.hasKeyboardFocus(true) ? cyan : cream).withAlpha(0.32f * opacity));
+            g.drawRoundedRectangle(r, r.getHeight() * 0.5f, 1.0f);
+            return;
+        }
         auto mid = static_cast<float>(y) + h * 0.5f;
         g.setColour(cream.withAlpha(0.22f));
         g.fillRoundedRectangle(static_cast<float>(x), mid - 2, static_cast<float>(w), 4, 2);
@@ -366,7 +390,10 @@ public:
         original->copyAllExplicitColoursTo(*label);
         label->setJustificationType(juce::Justification::centred);
         label->setKeyboardType(juce::TextInputTarget::decimalKeyboard);
-        label->setFont(font(static_cast<bool>(slider.getProperties().getWithDefault("macro", false)) ? 23.0f : 17.0f));
+        const bool macro = static_cast<bool>(slider.getProperties().getWithDefault("macro", false));
+        const bool modBar = static_cast<bool>(slider.getProperties().getWithDefault("modBar", false));
+        label->setFont(font(macro ? 23.0f : modBar ? 12.5f : 17.0f));
+        if (modBar) label->setColour(juce::Label::textColourId, cream);
         return label;
     }
     juce::Slider::SliderLayout getSliderLayout(juce::Slider& slider) override
@@ -552,8 +579,29 @@ public:
     std::function<void()> openShape, beginEdit, endEdit;
     std::function<void(const juce::String&)> contextMenu;
     bool editing = false, snap = true;
+    bool latest = false; // engine 4: nine vowels in the "vowel_*" parameters
     int selected = 1;
     float phase = -1;
+
+    // Engine-4 vowels drawn from bright (top) to dark (bottom).
+    static constexpr std::array<int, 9> vowelRank { 0, 2, 5, 7, 8, 1, 6, 3, 4 }; // by vowel index: EE EH AH OH OO IH UH AE ER
+    static float vowelToVisual(float normalised)
+    {
+        const int vowel = juce::jlimit(0, 8, juce::roundToInt(normalised * 8.0f));
+        return 0.18f + 0.75f * static_cast<float>(vowelRank[static_cast<size_t>(vowel)]) / 8.0f;
+    }
+    static float visualToVowel(float visual)
+    {
+        const int rank = juce::jlimit(0, 8, juce::roundToInt((visual - 0.18f) / 0.75f * 8.0f));
+        for (int vowel = 0; vowel < 9; ++vowel)
+            if (vowelRank[static_cast<size_t>(vowel)] == rank) return static_cast<float>(vowel) / 8.0f;
+        return 0.0f;
+    }
+    float visualFor(const juce::String& id, float fallback) const
+    {
+        const float value = readNormalised(state, id, fallback);
+        return latest ? vowelToVisual(value) : poseToVisual(value);
+    }
 
     static float poseToVisual(float pose)
     {
@@ -570,9 +618,9 @@ public:
     {
         auto r = graph();
         const float t = juce::jlimit(0.2f, 0.8f, readActual(state, "body_time", 0.5f));
-        return {{{ r.getX(), r.getY() + poseToVisual(readNormalised(state, "start_pose", 0)) * r.getHeight() },
-                 { r.getX() + t * r.getWidth(), r.getY() + poseToVisual(readNormalised(state, "body_pose", 0.75f)) * r.getHeight() },
-                 { r.getRight(), r.getY() + poseToVisual(readNormalised(state, "end_pose", 0)) * r.getHeight() }}};
+        return {{{ r.getX(), r.getY() + visualFor(pointId(0), 0) * r.getHeight() },
+                 { r.getX() + t * r.getWidth(), r.getY() + visualFor(pointId(1), 0.75f) * r.getHeight() },
+                 { r.getRight(), r.getY() + visualFor(pointId(2), 0) * r.getHeight() }}};
     }
     void paint(juce::Graphics& g) override
     {
@@ -590,8 +638,8 @@ public:
             g.setColour(cyan.withAlpha(i % 2 == 0 ? 0.17f : 0.07f));
             g.drawHorizontalLine(juce::roundToInt(y), grid.getX(), grid.getRight());
         }
-        const std::array<juce::String, 3> vowelLabels { "EE", "OH", "OO" };
-        const std::array<float, 3> vowelPositions { 0.18f, 0.63f, 0.93f };
+        const std::array<juce::String, 3> vowelLabels { "EE", latest ? "AH" : "OH", "OO" };
+        const std::array<float, 3> vowelPositions { 0.18f, latest ? 0.18f + 0.75f * 5.0f / 8.0f : 0.63f, 0.93f };
         for (int i = 0; i < 3; ++i)
             text(g, vowelLabels[static_cast<size_t>(i)],
                  { 0, juce::roundToInt(r.getY() + vowelPositions[static_cast<size_t>(i)] * r.getHeight()) - 9, 31, 18 },
@@ -693,8 +741,9 @@ public:
     {
         if (! editing || ! dragging) return;
         const auto r = graph();
-        auto v = juce::jlimit(0.0f, 1.0f, visualToPose((event.position.y - r.getY()) / r.getHeight()));
-        v = std::round(v * 4) / 4; // Version one exposes five discrete, calibrated vowel poses.
+        const float visual = (event.position.y - r.getY()) / r.getHeight();
+        auto v = latest ? visualToVowel(visual) : juce::jlimit(0.0f, 1.0f, visualToPose(visual));
+        if (! latest) v = std::round(v * 4) / 4; // The original engines expose five calibrated vowel poses.
         if (auto* p = state.getParameter(poseId())) p->setValueNotifyingHost(v);
         if (selected == 1)
             if (auto* p = state.getParameter("body_time"))
@@ -719,10 +768,91 @@ public:
         { if (openShape) openShape(); return true; }
         return false;
     }
+    juce::String pointId(int point) const
+    {
+        if (latest) return point == 0 ? "vowel_start" : point == 1 ? "vowel_body" : "vowel_end";
+        return point == 0 ? "start_pose" : point == 1 ? "body_pose" : "end_pose";
+    }
+    juce::String poseId() const { return pointId(selected); }
 private:
-    juce::String poseId() const { return selected == 0 ? "start_pose" : selected == 1 ? "body_pose" : "end_pose"; }
     juce::AudioProcessorValueTreeState& state;
     bool dragging = false;
+};
+}
+
+namespace
+{
+constexpr int playPage = 0, shapePage = 1, modPage = 2, libraryPage = 3;
+
+// Library folder column: factory categories and the user's subfolders.
+class FolderListModel final : public juce::ListBoxModel
+{
+public:
+    std::vector<juce::String> labels;
+    int active = -1;
+    std::function<void(int)> onSelect;
+    int getNumRows() override { return static_cast<int>(labels.size()); }
+    void paintListBoxItem(int row, juce::Graphics& g, int width, int height, bool) override
+    {
+        if (row < 0 || row >= getNumRows()) return;
+        const bool on = row == active;
+        if (on) { g.setColour(cyan.withAlpha(0.2f)); g.fillRoundedRectangle(1.0f, 1.0f, width - 2.0f, height - 2.0f, 5.0f); }
+        g.setColour(on ? cobalt : cyan.withAlpha(0.85f));
+        g.fillEllipse(8.0f, height * 0.5f - 2.5f, 5.0f, 5.0f);
+        text(g, labels[static_cast<size_t>(row)], { 20, 0, width - 22, height }, 13, on ? cyan : cream.withAlpha(0.88f), true);
+    }
+    void listBoxItemClicked(int row, const juce::MouseEvent&) override { if (onSelect) onSelect(row); }
+    void returnKeyPressed(int row) override { if (onSelect) onSelect(row); }
+};
+
+// A rendered bounce: click loads that variation, drag drops its WAV into the host.
+class BounceTile final : public juce::Component, public juce::SettableTooltipClient
+{
+public:
+    std::function<void()> onLoad;
+    juce::File file;
+    juce::String label;
+    int number = 0;
+    bool ready = false, pending = false;
+    BounceTile() { setTitle("Bounce variation"); setWantsKeyboardFocus(false); }
+    void paint(juce::Graphics& g) override
+    {
+        auto r = getLocalBounds().toFloat().reduced(1.5f);
+        const bool over = isMouseOver() && ready;
+        g.setColour((ready ? ink : cobalt).withAlpha(ready ? 0.62f : 0.3f));
+        g.fillRoundedRectangle(r, 6.0f);
+        g.setColour((over ? cyan : cream).withAlpha(ready ? 0.55f : 0.2f));
+        g.drawRoundedRectangle(r, 6.0f, over ? 1.6f : 1.0f);
+        text(g, juce::String(number).paddedLeft('0', 2), { 6, 3, 24, 13 }, 11, ready ? lime : cream.withAlpha(0.4f), true);
+        if (ready)
+        {
+            g.setColour(cyan.withAlpha(0.7f));
+            for (int i = 0; i < 9; ++i)
+            {
+                const float h = 2.0f + 6.0f * std::abs(std::sin(static_cast<float>(number * 7 + i) * 0.9f));
+                g.fillRect(getWidth() - 34.0f + i * 3.0f, 9.0f - h * 0.5f, 1.6f, h);
+            }
+        }
+        g.setFont(font(10.5f, true));
+        g.setColour(cream.withAlpha(ready ? 0.9f : 0.45f));
+        g.drawFittedText(pending ? juce::String("RENDERING") : label.toUpperCase(),
+                         getLocalBounds().reduced(6, 0).withTrimmedTop(16), juce::Justification::topLeft, 2, 0.8f);
+    }
+    void mouseEnter(const juce::MouseEvent&) override { repaint(); }
+    void mouseExit(const juce::MouseEvent&) override { repaint(); }
+    void mouseDown(const juce::MouseEvent&) override { dragged = false; }
+    void mouseDrag(const juce::MouseEvent& event) override
+    {
+        if (dragged || ! ready || ! file.existsAsFile() || event.getDistanceFromDragStart() < 6) return;
+        dragged = true;
+        juce::DragAndDropContainer::performExternalDragDropOfFiles({ file.getFullPathName() }, false, this);
+    }
+    void mouseUp(const juce::MouseEvent& event) override
+    {
+        if (! dragged && ready && event.mouseWasClicked() && onLoad) onLoad();
+    }
+private:
+    bool dragged = false;
 };
 }
 
@@ -734,17 +864,18 @@ public:
     Impl(juce::AudioProcessorValueTreeState& s, EditorCallbacks cb) : state(s), callbacks(std::move(cb)), shellArtwork(juce::ImageCache::getFromMemory(BinaryData::HandheldShellfullbleed_png, BinaryData::HandheldShellfullbleed_pngSize)), gesture(s), tooltip(this, 650)
     {
         setLookAndFeel(&theme);
-        const std::array<juce::String, 3> tabNames { "PLAY", "SHAPE", "LIBRARY" };
-        for (int i = 0; i < 3; ++i)
+        const std::array<juce::String, 4> tabNames { "PLAY", "SHAPE", "MOD", "LIBRARY" };
+        for (int i = 0; i < 4; ++i)
         {
             auto& tab = tabs[static_cast<size_t>(i)];
             setupButton(tab, tabNames[static_cast<size_t>(i)], true);
             tab.getProperties().set("italic", true);
             tab.getProperties().set("role", "tab");
-            tab.getProperties().set("fontSize", 21.0f);
+            tab.getProperties().set("fontSize", 18.0f);
             tab.onClick = [this, i] { showPage(i); };
         }
-        setupButton(zoom, "100%", true);
+        tabs[static_cast<size_t>(modPage)].setTooltip("Talk motion, pitch, tone, articulation and velocity (latest sound engine).");
+        setupButton(zoom, "ZOOM 100%", true);
         zoom.setTitle("Interface zoom and settings");
         zoom.getProperties().set("role", "utility");
         zoom.getProperties().set("fontSize", 12.0f);
@@ -871,7 +1002,7 @@ public:
         selectedPoint.onChange = [this] { gesture.selected = selectedPoint.getSelectedId() - 1; syncShapeInspector(); gesture.repaint(); };
         pose.addItemList(vowels, 1); pose.setSelectedId(4, juce::dontSendNotification); pose.setTitle("Vowel pose");
         keepFocusOnClick(pose);
-        pose.onChange = [this] { if (! updatingInspector) setParam(poseId(), (pose.getSelectedId() - 1) / 4.0f); };
+        pose.onChange = [this] { if (! updatingInspector) setParam(poseId(), static_cast<float>(pose.getSelectedId() - 1) / (latestEngine ? 8.0f : 4.0f)); };
         pose.onContextMenu = [this] { showParameterMenu(poseId(), pose); };
         setupButton(snap, "TIME SNAP", true);
         snap.setClickingTogglesState(true); snap.setToggleState(true, juce::dontSendNotification);
@@ -903,14 +1034,116 @@ public:
         curve.updateText();
         addAndMakeVisible(selectedPoint); addAndMakeVisible(pose);
 
-        const std::array<juce::String, 7> filters { "ALL SOUNDS", "FAVORITES", "SAVED", "RUBBER", "METAL", "THROAT", "SQUEAK" };
-        for (int i = 0; i < 7; ++i)
+        // ---- MOD page (engine 4). Every control is a real, automatable parameter.
+        setupModCombo(talkModeBox, "Talk mode", "talk_mode", { "PER NOTE", "SYNCED TALK", "MOD WHEEL", "AFTERTOUCH" },
+            "Per Note: one vowel sweep per note. Synced Talk: the mouth moves on the beat, locked to the song position. Mod Wheel / Aftertouch: scrub the vowel motion live.");
+        setupModCombo(talkRateBox, "Talk rate", "talk_rate", { "1/16", "1/8", "1/4", "1/2", "1 BAR" },
+            "How long one synced talk cycle lasts.");
+        setupModCombo(talkFeelBox, "Talk feel", "talk_feel", { "STRAIGHT", "TRIPLET", "DOTTED" },
+            "Straight, triplet (2/3) or dotted (3/2) talk timing.");
+        setupModToggle(meterBarsToggle, "BAR = METER", "meter_bars",
+            "Off: 1 Bar is four beats. On: 1 Bar follows the host's time signature (for example three beats in 3/4).");
+        setupModSlider(bendSlider, "Bend range", "bend_range", [](double v) { return "+/-" + juce::String(juce::roundToInt(v)) + " ST"; },
+            "Pitch-wheel range in semitones, up to two octaves for dive bombs.");
+        setupModCombo(glideModeBox, "Glide mode", "glide_mode", { "ALWAYS", "LEGATO" },
+            "Always: glide whenever the previous note still sounds. Legato: glide only between connected notes.");
+        setupModSlider(dropSlider, "Pitch drop", "pitch_env", [](double v) { const auto r = std::round(v * 10.0) / 10.0; return (r > 0 ? "+" : "") + juce::String(r, 1) + " ST"; },
+            "Each note starts this far from its pitch and settles onto it. Positive values drop, negative values rise.", true);
+        setupModSlider(dropTimeSlider, "Pitch drop time", "pitch_env_ms", [](double v) { return juce::String(juce::roundToInt(v)) + " MS"; },
+            "How long the pitch takes to settle.");
+        setupModCombo(shaperBox, "Shaper", "shaper", { "CLASSIC", "DIODE", "FOLD", "CRUSH" },
+            "Character of the Dirt stage, inside the 4x oversampled path. Classic is the original tanh.");
+        setupModSlider(squashSlider, "Squash", "squash", [](double v) { return juce::String(juce::roundToInt(v * 100)) + "%"; },
+            "Three-band upward and downward compression of the talking body, in the spirit of OTT.", false, 0.01);
+        setupModSlider(widthSlider, "Body width", "width", [](double v) { return juce::String(juce::roundToInt(v * 100)) + "%"; },
+            "Stereo width for the talking body above 180 Hz. The sub always stays mono.", false, 0.01);
+        setupModToggle(subResetToggle, "SUB RESET", "sub_reset",
+            "Restart the sub's waveform on every new note for an identical punch each time.");
+        setupModCombo(onsetBox, "Onset glide", "onset_glide", { "NONE", "W", "Y" },
+            "Slide into the first vowel from a W (\"wah\") or Y (\"yoi\") mouth.");
+        setupModCombo(consonantBox, "Consonant", "consonant", { "NONE", "T", "K", "CH" },
+            "A short consonant burst at the start of each note.");
+        setupModSlider(consonantLevelSlider, "Consonant level", "consonant_level", [](double v) { return juce::String(juce::roundToInt(v * 100)) + "%"; },
+            "Loudness of the consonant burst.", false, 0.01);
+        setupModSlider(velMouthSlider, "Velocity to mouth", "vel_mouth", [](double v) { return "MOUTH " + juce::String(juce::roundToInt(v * 100)) + "%"; },
+            "How much softer notes close the mouth.", false, 0.01);
+        setupModSlider(velBiteSlider, "Velocity to bite", "vel_bite", [](double v) { return "BITE " + juce::String(juce::roundToInt(v * 100)) + "%"; },
+            "How much softer notes reduce Bite.", false, 0.01);
+        setupModSlider(velDirtSlider, "Velocity to dirt", "vel_dirt", [](double v) { return "DIRT " + juce::String(juce::roundToInt(v * 100)) + "%"; },
+            "How much softer notes reduce Dirt.", false, 0.01);
+        setupModSlider(attackSlider, "Attack", "attack_ms", [](double v) { return "ATK " + juce::String(v < 10.0 ? std::round(v * 10.0) / 10.0 : std::round(v), v < 10.0 ? 1 : 0) + " MS"; },
+            "Amplitude attack. 3 ms is the original.");
+        setupModSlider(releaseSlider, "Release", "release_ms", [](double v) { return "REL " + juce::String(juce::roundToInt(v)) + " MS"; },
+            "Amplitude release. 75 ms is the original.");
+
+        // ---- A/B compare (PLAY page)
+        for (auto* b : { &abA, &abB, &abCopy })
+        {
+            setupButton(*b, b == &abA ? "A" : b == &abB ? "B" : "COPY", true);
+            b->getProperties().set("role", "chip");
+            b->getProperties().set("fontSize", 11.0f);
+        }
+        abA.setTitle("Compare slot A"); abB.setTitle("Compare slot B"); abCopy.setTitle("Copy compare slot");
+        abA.setTooltip("Compare: switch to slot A. Edits stay in the slot you are on.");
+        abB.setTooltip("Compare: switch to slot B. The first visit copies the current sound.");
+        abCopy.setTooltip("Copy the slot you are on into the other slot.");
+        abA.onClick = [this] { if (callbacks.selectAbSlot) callbacks.selectAbSlot(0); toast("Slot A"); };
+        abB.onClick = [this] { if (callbacks.selectAbSlot) callbacks.selectAbSlot(1); toast("Slot B"); };
+        abCopy.onClick = [this] { if (callbacks.copyAbSlot) callbacks.copyAbSlot(); toast(abActive == 0 ? "Copied A to B" : "Copied B to A"); };
+
+        const std::array<juce::String, 3> filters { "ALL SOUNDS", "FAVORITES", "SAVED" };
+        for (int i = 0; i < 3; ++i)
         {
             auto& button = libraryFilters[static_cast<size_t>(i)];
             setupButton(button, filters[static_cast<size_t>(i)], true);
-            button.getProperties().set("fontSize", 16.0f);
+            button.getProperties().set("fontSize", 14.0f);
             button.getProperties().set("role", "filter");
-            button.onClick = [this, i] { activeFilter = i; refreshLibrary(); };
+            button.onClick = [this, i] { activeFilter = i; showingBounces = false; refreshLibrary(); };
+        }
+        folderList.setModel(&folderModel);
+        folderList.setRowHeight(18);
+        folderList.setOutlineThickness(0);
+        folderList.setTitle("Preset folders");
+        folderList.setColour(juce::ListBox::backgroundColourId, juce::Colours::transparentBlack);
+        folderModel.onSelect = [this](int row) { activeFilter = 3 + row; showingBounces = false; refreshLibrary(); };
+        addChildComponent(folderList);
+
+        // ---- Bounce variations (LIBRARY page)
+        for (auto* b : { &viewSounds, &viewBounces })
+        {
+            setupButton(*b, b == &viewSounds ? "SOUNDS" : "BOUNCES", true);
+            b->getProperties().set("role", "chip");
+            b->getProperties().set("fontSize", 11.0f);
+        }
+        viewSounds.onClick = [this] { showingBounces = false; refreshLibrary(); };
+        viewBounces.onClick = [this] { showingBounces = true; refreshLibrary(); };
+        viewBounces.setTooltip("Rendered variations: click a tile to load it, drag it into your DAW.");
+        for (auto* b : { &bounce8, &bounce16, &bounceNew, &bounceMutate, &bounceFolderButton })
+        {
+            setupButton(*b, b == &bounce8 ? "8" : b == &bounce16 ? "16" : b == &bounceNew ? "NEW YOI" : b == &bounceMutate ? "MUTATE" : "FOLDER", true);
+            b->getProperties().set("role", b == &bounceFolderButton ? "filter" : "chip");
+            b->getProperties().set("fontSize", 11.0f);
+        }
+        bounce8.setTitle("Bounce 8 variations"); bounce16.setTitle("Bounce 16 variations");
+        bounceNew.setTitle("Bounce New Yoi variations"); bounceMutate.setTitle("Bounce Mutate variations");
+        bounceFolderButton.setTitle("Choose bounce folder");
+        bounce8.onClick = [this] { bounceCount = 8; updateValues(); };
+        bounce16.onClick = [this] { bounceCount = 16; updateValues(); };
+        bounceNew.onClick = [this] { bounceUsesMutate = false; updateValues(); };
+        bounceMutate.onClick = [this] { bounceUsesMutate = true; updateValues(); };
+        bounceFolderButton.setTooltip("Choose where bounces are written. Default: Music > YOI-BOI Bounces > today's date.");
+        bounceFolderButton.onClick = [this] { chooseBounceFolder(); };
+        setupButton(bounceGo, "BOUNCE", true);
+        bounceGo.setTitle("Bounce variations");
+        bounceGo.setTooltip("Render New Yoi or Mutate variations of a one-bar phrase at the host tempo to WAV files. Locks and exclusions apply.");
+        bounceGo.onClick = [this] { startBounce(); };
+        for (int i = 0; i < static_cast<int>(tiles.size()); ++i)
+        {
+            auto& tile = tiles[static_cast<size_t>(i)];
+            tile.number = i + 1;
+            tile.setTooltip("Click to load this variation (Undo returns). Drag the tile into your DAW to use the WAV.");
+            tile.onLoad = [this, i] { if (callbacks.loadBounceVariant) { callbacks.loadBounceVariant(i); toast("Variation " + juce::String(i + 1) + " loaded"); } };
+            addChildComponent(tile);
         }
         search.setTextToShowWhenEmpty("Search sounds", cream.withAlpha(0.55f));
         search.setTitle("Search sounds");
@@ -947,6 +1180,8 @@ public:
     {
         stopTimer();
         library.setModel(nullptr);
+        folderList.setModel(nullptr);
+        modAttachments.clear();
         for (auto& attachment : macroAttachments) attachment.reset();
         glideAttachment.reset(); outputAttachment.reset(); bodyAttachment.reset(); curveAttachment.reset();
         setLookAndFeel(nullptr);
@@ -958,6 +1193,90 @@ public:
         keepFocusOnClick(button);
         button.getProperties().set("dark", dark); addAndMakeVisible(button);
     }
+    void setupModCombo(ParameterCombo& box, const juce::String& title, const juce::String& id,
+                       const juce::StringArray& items, const juce::String& tip)
+    {
+        box.addItemList(items, 1);
+        box.setTitle(title);
+        box.setTooltip(tip);
+        keepFocusOnClick(box);
+        const int count = items.size();
+        box.onChange = [this, &box, id, count] {
+            if (! updatingInspector) setParam(id, count > 1 ? static_cast<float>(box.getSelectedId() - 1) / static_cast<float>(count - 1) : 0.0f);
+        };
+        bindContext(box, id);
+        addChildComponent(box);
+        modCombos.push_back({ &box, id, count });
+        modControls.push_back(&box);
+    }
+    void setupModSlider(FocusedSlider& slider, const juce::String& title, const juce::String& id,
+                        std::function<juce::String(double)> display, const juce::String& tip, bool bipolar = false,
+                        double textScale = 1.0)
+    {
+        slider.setTitle(title); slider.setName(title);
+        slider.setSliderStyle(juce::Slider::LinearBar);
+        slider.setTextBoxStyle(juce::Slider::TextBoxLeft, false, 120, 22);
+        slider.getProperties().set("modBar", true);
+        if (bipolar) slider.getProperties().set("bipolar", true);
+        slider.setColour(juce::Slider::textBoxTextColourId, cream);
+        slider.setColour(juce::Slider::textBoxBackgroundColourId, juce::Colours::transparentBlack);
+        slider.setColour(juce::Slider::textBoxOutlineColourId, juce::Colours::transparentBlack);
+        slider.setScrollWheelEnabled(false);
+        slider.setWantsKeyboardFocus(true);
+        slider.setTooltip(tip);
+        slider.onDragStart = [this, title] { beginEdit("Adjust " + title); };
+        slider.onDragEnd = [this] { endEdit(); };
+        bindContext(slider, id);
+        addChildComponent(slider);
+        if (state.getParameter(id) != nullptr)
+        {
+            modAttachments.push_back(std::make_unique<SliderAttachment>(state, id, slider));
+            slider.textFromValueFunction = std::move(display);
+            // Typed values use the displayed units ("45%", "120 ms", "+12 st").
+            slider.valueFromTextFunction = [textScale](const juce::String& t) {
+                return t.replace("+/-", "").retainCharacters("0123456789.-").getDoubleValue() * textScale;
+            };
+            slider.updateText();
+        }
+        else slider.setEnabled(false);
+        modControls.push_back(&slider);
+    }
+    void setupModToggle(ParameterButton& button, const juce::String& title, const juce::String& id, const juce::String& tip)
+    {
+        setupButton(button, title, true);
+        button.getProperties().set("role", "filter");
+        button.getProperties().set("fontSize", 11.0f);
+        button.setTooltip(tip);
+        button.onClick = [this, id] { setParam(id, readActual(state, id, 0) < 0.5f ? 1.0f : 0.0f); };
+        bindContext(button, id);
+        button.setVisible(false);
+        modToggles.push_back({ &button, id });
+        modControls.push_back(&button);
+    }
+    void chooseBounceFolder()
+    {
+        const auto start = bounceFolder != juce::File {} ? bounceFolder
+                         : callbacks.defaultBounceFolder ? callbacks.defaultBounceFolder().getParentDirectory() : juce::File();
+        folderChooser = std::make_unique<juce::FileChooser>("Choose a folder for YOI-BOI bounces", start);
+        folderChooser->launchAsync(juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectDirectories,
+            [safe = juce::Component::SafePointer<Impl>(this)](const juce::FileChooser& chooser) {
+                if (safe == nullptr) return;
+                const auto chosen = chooser.getResult();
+                if (chosen != juce::File {}) { safe->bounceFolder = chosen; safe->toast("Bounces go to " + chosen.getFileName()); }
+            });
+    }
+    void startBounce()
+    {
+        if (! callbacks.startBounce) return;
+        if (callbacks.startBounce(bounceCount, bounceUsesMutate, bounceFolder))
+        {
+            showingBounces = true;
+            toast("Bouncing " + juce::String(bounceCount) + " variations");
+            refreshLibrary();
+        }
+        else toast(callbacks.statusText ? callbacks.statusText() : juce::String("Bounce is busy"));
+    }
+
     template <typename Control>
     void bindContext(Control& control, const juce::String& id)
     {
@@ -1019,20 +1338,21 @@ public:
         // Offer only sizes that fit the screen the device is on (150% doesn't fit a 13-14" laptop).
         const auto* display = editor != nullptr ? juce::Desktop::getInstance().getDisplays().getDisplayForRect(editor->getScreenBounds())
                                                 : juce::Desktop::getInstance().getDisplays().getPrimaryDisplay();
-        for (const int percent : { 100, 125, 150 })
+        for (const int percent : { 90, 100, 125, 150 })
         {
-            const bool fits = display == nullptr || percent == 100
-                || (shellWidth * percent / 100 <= display->userArea.getWidth()
-                    && shellHeight * percent / 100 + 60 <= display->userArea.getHeight());
+            const bool fits = display == nullptr || percent <= 90
+                || (shellWidth * percent / 100 <= display->userBounds.getWidth()
+                    && shellHeight * percent / 100 + 60 <= display->userBounds.getHeight());
             menu.addItem(percent, juce::String(percent) + "%", fits || current == percent, current == percent);
         }
         menu.addSeparator();
         menu.addSectionHeader(juce::String("YOI-BOI ") + versionString);
-        const int engine = callbacks.soundEngine ? callbacks.soundEngine() : 3;
-        if (engine < 3)
+        const int engine = callbacks.soundEngine ? callbacks.soundEngine() : 4;
+        if (engine < 4)
         {
             menu.addItem(10, engine == 1 ? "Original 0.1.0 / 0.1.1 sound preserved"
-                                         : "Original 0.1.2 sound preserved", false, true);
+                           : engine == 2 ? "Original 0.1.2 sound preserved"
+                                         : "Original 0.1.3 - 0.1.6 sound preserved", false, true);
             menu.addItem(11, "Use latest sound (changes tone)", static_cast<bool>(callbacks.useLatestSoundEngine));
         }
         else menu.addItem(10, "Latest sound engine", false, true);
@@ -1047,7 +1367,7 @@ public:
                     safe->toast("Latest sound enabled. Undo restores the original.");
                     safe->updateValues();
                 }
-                else if (result == 100 || result == 125 || result == 150)
+                else if (result == 90 || result == 100 || result == 125 || result == 150)
                     if (auto* parent = safe->findParentComponentOfClass<YoiBoiEditor>())
                     {
                         parent->setSize(shellWidth * result / 100, shellHeight * result / 100);
@@ -1181,8 +1501,8 @@ public:
         g.setFont(displayFont(66)); g.setColour(cream.brighter(0.12f));
         g.drawFittedText("YOI-BOI", { 145, 37, 193, 42 }, juce::Justification::centredLeft, 1);
         g.setFont(font(11, true, true).withExtraKerningFactor(0.19f));
-        const bool originalSound = callbacks.soundEngine && callbacks.soundEngine() < 3;
-        g.drawText(originalSound ? "ORIGINAL SOUND PRESERVED" : "TALKING BASS SYNTH",
+        const bool originalSound = callbacks.soundEngine && callbacks.soundEngine() < 4;
+        g.drawText(originalSound ? "ORIGINAL SOUND" : "TALKING BASS SYNTH",
                    juce::Rectangle<int>(347, 43, 180, 18), juce::Justification::centredLeft);
         if (midiLit)
         {
@@ -1196,7 +1516,34 @@ public:
         }
         text(g, "MIDI", { 931, 78, 39, 15 }, 10, midnight, true, juce::Justification::centred);
 
-        if (page != 2)
+        if (page == modPage)
+        {
+            text(g, patchName.toUpperCase() + "  /  MOD", { 104, 116, 330, 20 }, 17, cyan, true);
+            const std::array<const char*, 5> titles { "TALK", "PITCH", "TONE", "ATTACK", "FEEL" };
+            const std::array<std::array<const char*, 5>, 5> captions {{
+                {{ "MOTION", "RATE", "FEEL", "BARS", "" }},
+                {{ "BEND", "GLIDE", "DROP / RISE", "DROP TIME", "" }},
+                {{ "SHAPER", "SQUASH", "WIDTH", "SUB", "" }},
+                {{ "ONSET", "CONSONANT", "LEVEL", "", "" }},
+                {{ "VELOCITY", "", "", "AMP ENVELOPE", "" }} }};
+            for (int column = 0; column < 5; ++column)
+            {
+                const int x = modColumnX(column);
+                text(g, titles[static_cast<size_t>(column)], { x, 142, 128, 18 }, 14, cyan, true);
+                g.setColour(cyan.withAlpha(0.25f)); g.drawLine(static_cast<float>(x), 161.0f, x + 124.0f, 161.0f, 1.0f);
+                for (int row = 0; row < 5; ++row)
+                    if (const auto* caption = captions[static_cast<size_t>(column)][static_cast<size_t>(row)]; caption[0] != 0)
+                        text(g, caption, { x, modRowY(row), 128, 12 }, 10, cream.withAlpha(0.72f), true);
+            }
+            if (statusUntil <= juce::Time::getMillisecondCounterHiRes())
+            {
+                if (! latestEngine)
+                    text(g, "ORIGINAL SOUND: ZOOM > USE LATEST SOUND TO ENABLE MOD", { 330, 116, 437, 20 }, 11, lime, true, juce::Justification::centredRight);
+                else if (subOutputActive)
+                    text(g, "SUB PLAYS ON THE SUB OUTPUT", { 330, 116, 437, 20 }, 11, lime, true, juce::Justification::centredRight);
+            }
+        }
+        else if (page != libraryPage)
         {
             text(g, familyText.toUpperCase() + (page == 1 ? "  /  SHAPE" : "  /  MOUTH MOTION"),
                  { 104, 116, 390, 20 }, 17, cyan, true);
@@ -1241,19 +1588,32 @@ public:
         {
             text(g, "YOUR SOUNDS", { 104, 117, 265, 21 }, 15, cyan, true);
             g.setColour(cyan.withAlpha(0.28f)); g.drawVerticalLine(569, 121, 372);
-            text(g, "NAME", { 262, 169, 185, 17 }, 10, cyan.withAlpha(0.85f), true);
-            text(g, "FAMILY", { 458, 169, 82, 17 }, 10, cyan.withAlpha(0.85f), true);
+            text(g, "FOLDERS", { 104, 259, 132, 14 }, 10, cyan.withAlpha(0.85f), true);
+            if (showingBounces)
+            {
+                text(g, "BOUNCED VARIATIONS  /  CLICK TO LOAD, DRAG TO YOUR DAW", { 254, 169, 300, 17 }, 10, cyan.withAlpha(0.85f), true);
+                if (bounceTotal == 0)
+                    text(g, "Press BOUNCE to render variations of this sound.", { 254, 238, 300, 48 }, 13, cream.withAlpha(0.76f));
+                text(g, juce::String(bounceReady) + " FILES", { 346, 347, 82, 20 }, 10, cyan, true);
+            }
+            else
+            {
+                text(g, "NAME", { 262, 169, 185, 17 }, 10, cyan.withAlpha(0.85f), true);
+                text(g, "FOLDER", { 420, 169, 82, 17 }, 10, cyan.withAlpha(0.85f), true);
+                text(g, "FAMILY", { 492, 169, 56, 17 }, 10, cyan.withAlpha(0.85f), true);
+                if (filtered.empty()) text(g, "No sounds match this view.", { 252, 238, 302, 48 }, 13, cream.withAlpha(0.76f));
+                text(g, juce::String(filtered.size()) + " SOUNDS", { 346, 347, 82, 20 }, 10, cyan, true);
+            }
             text(g, "CURRENT SOUND", { 587, 165, 171, 20 }, 13, cyan, true);
             g.setFont(displayFont(21)); g.setColour(cream);
             g.drawFittedText(patchName, { 587, 187, 171, 28 }, juce::Justification::centredLeft, 1);
             text(g, familyText.toUpperCase(), { 587, 214, 171, 19 }, 13, cyan, true);
             g.setColour(cyan.withAlpha(0.28f)); g.drawLine(588, 238, 761, 238, 1);
-            text(g, "SAVE WHAT YOU LOVE", { 587, 249, 180, 20 }, 13, cyan, true);
-            g.setFont(font(13)); g.setColour(cream.withAlpha(0.8f));
-            g.drawFittedText("New Yoi and Mutate never add presets.\n\nUse SAVE PRESET to keep this sound. Undo brings back a previous variation.",
-                             { 587, 276, 175, 78 }, juce::Justification::topLeft, 6);
-            if (filtered.empty()) text(g, "No sounds match this view.", { 252, 238, 302, 48 }, 13, cream.withAlpha(0.76f));
-            text(g, juce::String(filtered.size()) + " SOUNDS", { 346, 347, 82, 20 }, 10, cyan, true);
+            text(g, "BOUNCE VARIATIONS", { 587, 244, 180, 20 }, 13, cyan, true);
+            // Two single lines, each shortened to fit, so a long folder name never spills.
+            const auto statusLines = juce::StringArray::fromLines(bounceStatusText);
+            for (int line = 0; line < juce::jmin(2, statusLines.size()); ++line)
+                text(g, statusLines[line], { 587, 326 + line * 15, 180, 15 }, 10, cream.withAlpha(0.8f), true);
         }
         if (page != 0 && statusUntil > juce::Time::getMillisecondCounterHiRes())
             text(g, status, { 325, 116, 230, 21 }, 13, lime, true, juce::Justification::centredRight);
@@ -1269,12 +1629,13 @@ public:
     void resized() override
     {
         zoom.setBounds(347, 65, 82, 24); close.setBounds(433, 65, 26, 24);
-        for (int i = 0; i < 3; ++i) tabs[static_cast<size_t>(i)].setBounds(552 + i * 119, 44, 117, 37);
+        for (int i = 0; i < 4; ++i) tabs[static_cast<size_t>(i)].setBounds(552 + i * 89, 44, 87, 37);
         newYoi.setBounds(820, 104, 202, 133);
         mutate.setBounds(820, 251, 202, 62);
         undo.setBounds(820, 331, 96, 60); redo.setBounds(925, 331, 97, 60);
-        family.setBounds(page == 2 ? 585 : 631, 120, page == 2 ? 143 : 135, 28);
-        favorite.setBounds(page == 2 ? 730 : 582, page == 2 ? 118 : 136, 34, 34);
+        family.setBounds(page == libraryPage ? 585 : 631, 120, page == libraryPage ? 143 : 135, 28);
+        favorite.setBounds(page == libraryPage ? 730 : 582, page == libraryPage ? 118 : 136, 34, 34);
+        abA.setBounds(631, 152, 40, 22); abB.setBounds(673, 152, 40, 22); abCopy.setBounds(715, 152, 52, 22);
         const std::array<int, 6> centres { 132, 287, 442, 599, 757, 928 };
         for (int i = 0; i < 6; ++i) macros[static_cast<size_t>(i)]->setBounds(centres[static_cast<size_t>(i)] - 74, 426, 148, 160);
         oneShot.setBounds(72, 613, 111, 35); loop.setBounds(184, 613, 88, 35); sync.setBounds(306, 614, 82, 36);
@@ -1284,10 +1645,25 @@ public:
         bodyTime.setBounds(326, 331, 123, 27); curve.setBounds(460, 331, 114, 27);
         snap.setBounds(584, 329, 83, 31); resetShape.setBounds(674, 329, 95, 31);
         motionLock.setBounds(638, 119, 130, 30);
-        search.setBounds(104, 141, 449, 29);
+        search.setBounds(104, 141, 316, 29);
+        viewSounds.setBounds(424, 143, 64, 25); viewBounces.setBounds(490, 143, 66, 25);
         save.setBounds(431, 341, 122, 27); load.setBounds(254, 341, 80, 27);
-        for (int i = 0; i < 7; ++i) libraryFilters[static_cast<size_t>(i)].setBounds(102, 180 + i * 26, 134, 25);
+        for (int i = 0; i < 3; ++i) libraryFilters[static_cast<size_t>(i)].setBounds(102, 178 + i * 26, 134, 25);
+        folderList.setBounds(102, 273, 134, 90);
         library.setBounds(253, 187, 300, 150);
+        for (int i = 0; i < static_cast<int>(tiles.size()); ++i)
+            tiles[static_cast<size_t>(i)].setBounds(253 + (i % 4) * 75, 187 + (i / 4) * 38, 74, 37);
+        bounce8.setBounds(585, 266, 32, 24); bounce16.setBounds(618, 266, 34, 24);
+        bounceNew.setBounds(655, 266, 57, 24); bounceMutate.setBounds(713, 266, 56, 24);
+        bounceGo.setBounds(584, 292, 100, 32); bounceFolderButton.setBounds(689, 295, 78, 26);
+        // MOD page: five columns of captioned controls.
+        const auto place = [](juce::Component& c, int column, int row) { c.setBounds(modColumnX(column), modRowY(row) + 12, 126, 22); };
+        place(talkModeBox, 0, 0); place(talkRateBox, 0, 1); place(talkFeelBox, 0, 2); place(meterBarsToggle, 0, 3);
+        place(bendSlider, 1, 0); place(glideModeBox, 1, 1); place(dropSlider, 1, 2); place(dropTimeSlider, 1, 3);
+        place(shaperBox, 2, 0); place(squashSlider, 2, 1); place(widthSlider, 2, 2); place(subResetToggle, 2, 3);
+        place(onsetBox, 3, 0); place(consonantBox, 3, 1); place(consonantLevelSlider, 3, 2);
+        place(velMouthSlider, 4, 0); place(velBiteSlider, 4, 1); place(velDirtSlider, 4, 2);
+        place(attackSlider, 4, 3); place(releaseSlider, 4, 4);
         subMode.setBounds(137, 372, 108, 23); lowCut.setBounds(257, 371, 145, 25);
         lengthFeel.setBounds(486, 372, 135, 23);
         if (infoButton) infoButton->setBounds(492, 668, 96, 38);
@@ -1297,15 +1673,21 @@ public:
     void showPage(int newPage)
     {
         page = newPage;
-        for (int i = 0; i < 3; ++i) tabs[static_cast<size_t>(i)].setToggleState(i == page, juce::dontSendNotification);
-        gesture.setVisible(page != 2); gesture.editing = page == 1;
-        favorite.setVisible(true);
-        family.setVisible(page != 1);
-        for (auto* c : std::array<juce::Component*, 7> { &selectedPoint, &pose, &bodyTime, &curve, &snap, &resetShape, &motionLock }) c->setVisible(page == 1);
-        for (auto* c : std::array<juce::Component*, 4> { &search, &library, &load, &save }) c->setVisible(page == 2);
-        for (auto& b : libraryFilters) b.setVisible(page == 2);
-        if (page == 2) refreshLibrary();
-        if (page == 1) syncShapeInspector();
+        for (int i = 0; i < 4; ++i) tabs[static_cast<size_t>(i)].setToggleState(i == page, juce::dontSendNotification);
+        gesture.setVisible(page == playPage || page == shapePage); gesture.editing = page == shapePage;
+        favorite.setVisible(page != modPage);
+        family.setVisible(page == playPage || page == libraryPage);
+        for (auto* c : std::array<juce::Component*, 7> { &selectedPoint, &pose, &bodyTime, &curve, &snap, &resetShape, &motionLock }) c->setVisible(page == shapePage);
+        for (auto* c : modControls) c->setVisible(page == modPage);
+        for (auto* c : std::array<juce::Component*, 3> { &abA, &abB, &abCopy }) c->setVisible(page == playPage);
+        const bool onLibrary = page == libraryPage;
+        for (auto* c : std::array<juce::Component*, 13> { &search, &load, &save, &folderList, &viewSounds, &viewBounces, &bounce8,
+                                                          &bounce16, &bounceNew, &bounceMutate, &bounceGo, &bounceFolderButton, &library })
+            c->setVisible(onLibrary);
+        for (auto& b : libraryFilters) b.setVisible(onLibrary);
+        updateLibraryView();
+        if (onLibrary) refreshLibrary();
+        if (page == shapePage) syncShapeInspector();
         resized(); repaint();
     }
 
@@ -1332,6 +1714,20 @@ public:
     {
         patchName = callbacks.currentPatchName ? callbacks.currentPatchName() : "Bubble Trouble";
         familyText = callbacks.familyName ? callbacks.familyName() : "Rubber";
+        const bool nowLatest = ! callbacks.soundEngine || callbacks.soundEngine() >= 4;
+        if (nowLatest != latestEngine || pose.getNumItems() == 0)
+        {
+            latestEngine = nowLatest;
+            gesture.latest = latestEngine;
+            const juce::ScopedValueSetter<bool> rebuilding(updatingInspector, true);
+            pose.clear(juce::dontSendNotification);
+            if (latestEngine) { for (int v = 0; v < 9; ++v) pose.addItem(vowelLabel(v), v + 1); }
+            else pose.addItemList(vowels, 1);
+            syncShapeInspector();
+        }
+        subOutputActive = callbacks.subOutputActive && callbacks.subOutputActive();
+        updateModControls();
+        updateCompareAndBounce();
         const auto isSync = readActual(state, "sync", 1) >= 0.5f;
         sync.setToggleState(isSync, juce::dontSendNotification);
         // Swapping the Length attachment mid-drag would destroy the attachment
@@ -1375,7 +1771,9 @@ public:
         {
             allLocked = true;
             for (const auto* id : { "mouth", "size", "bite", "dirt", "sub", "length_ms", "length_division",
-                                   "start_pose", "body_pose", "end_pose", "body_time", "curve", "fmRatio", "fmIndex", "resonance" })
+                                   "start_pose", "body_pose", "end_pose", "body_time", "curve", "fmRatio", "fmIndex", "resonance",
+                                   "vowel_start", "vowel_body", "vowel_end", "onset_glide", "consonant", "consonant_level",
+                                   "pitch_env", "pitch_env_ms", "shaper", "squash" })
                 allLocked = allLocked && callbacks.isParameterLocked(id);
         }
         newYoi.setEnabled(! allLocked && static_cast<bool>(callbacks.newYoi));
@@ -1415,7 +1813,79 @@ public:
         if (page == 1) syncShapeInspector();
         gesture.repaint(); repaint();
     }
-    juce::String poseId() const { return gesture.selected == 0 ? "start_pose" : gesture.selected == 1 ? "body_pose" : "end_pose"; }
+    juce::String poseId() const { return gesture.pointId(gesture.selected); }
+    static juce::String vowelLabel(int vowel)
+    {
+        const std::array<const char*, 9> names { "EE", "EH", "AH", "OH", "OO", "IH", "UH", "AE", "ER" };
+        return names[static_cast<size_t>(juce::jlimit(0, 8, vowel))];
+    }
+    static int modColumnX(int column) { return 103 + column * 134; }
+    static int modRowY(int row) { return 166 + row * 39; }
+    void updateModControls()
+    {
+        const juce::ScopedValueSetter<bool> updating(updatingInspector, true);
+        for (const auto& entry : modCombos)
+        {
+            if (entry.box->isPopupActive()) continue;
+            const int index = juce::jlimit(0, entry.count - 1, juce::roundToInt(readNormalised(state, entry.id, 0) * static_cast<float>(entry.count - 1)));
+            entry.box->setSelectedId(index + 1, juce::dontSendNotification);
+        }
+        for (const auto& entry : modToggles)
+            entry.button->setToggleState(readActual(state, entry.id, 0) >= 0.5f, juce::dontSendNotification);
+        for (auto* control : modControls) control->setEnabled(latestEngine);
+        // The original engines keep their fixed timing and mono sub.
+        talkRateBox.setEnabled(latestEngine && readActual(state, "talk_mode", 0) > 0.5f && readActual(state, "talk_mode", 0) < 1.5f);
+        talkFeelBox.setEnabled(talkRateBox.isEnabled());
+        consonantLevelSlider.setEnabled(latestEngine && readActual(state, "consonant", 0) >= 0.5f);
+    }
+    void updateCompareAndBounce()
+    {
+        abActive = callbacks.abSlot ? callbacks.abSlot() : 0;
+        abA.setToggleState(abActive == 0, juce::dontSendNotification);
+        abB.setToggleState(abActive == 1, juce::dontSendNotification);
+        for (auto* b : { &abA, &abB, &abCopy }) b->setEnabled(static_cast<bool>(callbacks.selectAbSlot));
+        bounce8.setToggleState(bounceCount == 8, juce::dontSendNotification);
+        bounce16.setToggleState(bounceCount == 16, juce::dontSendNotification);
+        bounceNew.setToggleState(! bounceUsesMutate, juce::dontSendNotification);
+        bounceMutate.setToggleState(bounceUsesMutate, juce::dontSendNotification);
+        viewSounds.setToggleState(! showingBounces, juce::dontSendNotification);
+        viewBounces.setToggleState(showingBounces, juce::dontSendNotification);
+        const auto info = callbacks.bounceInfo ? callbacks.bounceInfo() : BounceInfo();
+        bounceGo.setEnabled(static_cast<bool>(callbacks.startBounce) && ! info.running);
+        bounceGo.setButtonText(info.running ? juce::String(info.done) + " / " + juce::String(info.total) : juce::String("BOUNCE"));
+        bounceTotal = info.total;
+        bounceReady = 0;
+        for (int i = 0; i < static_cast<int>(tiles.size()); ++i)
+        {
+            auto& tile = tiles[static_cast<size_t>(i)];
+            const bool exists = i < info.total;
+            const auto file = exists && i < static_cast<int>(info.files.size()) ? info.files[static_cast<size_t>(i)] : juce::File();
+            const bool ready = file != juce::File {} && file.existsAsFile();
+            const auto label = exists && i < static_cast<int>(info.names.size()) ? info.names[static_cast<size_t>(i)] : juce::String();
+            if (tile.ready != ready || tile.label != label || tile.file != file || tile.pending != (exists && ! ready && info.running))
+            {
+                tile.ready = ready; tile.label = label; tile.file = file; tile.pending = exists && ! ready && info.running;
+                tile.repaint();
+            }
+            bounceReady += ready ? 1 : 0;
+            tile.setVisible(page == libraryPage && showingBounces && exists);
+        }
+        const auto folder = info.folder != juce::File {} ? info.folder
+                          : bounceFolder != juce::File {} ? bounceFolder
+                          : callbacks.defaultBounceFolder ? callbacks.defaultBounceFolder() : juce::File();
+        bounceStatusText = info.running ? "RENDERING " + juce::String(info.done) + " OF " + juce::String(info.total)
+                         : info.message.isNotEmpty() ? "BOUNCE STOPPED\n" + info.message.toUpperCase()
+                         : info.total > 0 ? juce::String(bounceReady) + " FILES IN\n" + folder.getFileName().toUpperCase()
+                         : "1 BAR AT THE HOST TEMPO, TO\n" + folder.getParentDirectory().getFileName().toUpperCase() + " / "
+                           + folder.getFileName().toUpperCase();
+    }
+    void updateLibraryView()
+    {
+        const bool onLibrary = page == libraryPage;
+        library.setVisible(onLibrary && ! showingBounces);
+        load.setVisible(onLibrary && ! showingBounces);
+        for (auto& tile : tiles) tile.setVisible(onLibrary && showingBounces && tile.number <= bounceTotal);
+    }
     void updateExclusionIndicators(juce::Component& component)
     {
         auto id = component.getProperties().getWithDefault("parameterId", juce::String()).toString();
@@ -1435,7 +1905,8 @@ public:
     {
         if (pose.isPopupActive()) return;
         const juce::ScopedValueSetter<bool> scoped(updatingInspector, true);
-        pose.setSelectedId(1 + juce::jlimit(0, 4, juce::roundToInt(readNormalised(state, poseId(), 0) * 4)), juce::dontSendNotification);
+        const int steps = latestEngine ? 8 : 4;
+        pose.setSelectedId(1 + juce::jlimit(0, steps, juce::roundToInt(readNormalised(state, poseId(), 0) * static_cast<float>(steps))), juce::dontSendNotification);
     }
 
     void refreshLibrary()
@@ -1444,23 +1915,37 @@ public:
         const auto oldId = oldIndex >= 0 && oldIndex < static_cast<int>(filtered.size()) ? filtered[static_cast<size_t>(oldIndex)].id : juce::String();
         // Library open and refresh pick up presets saved by other instances.
         // Existing entries keep their ids, so the selection survives.
-        if (page == 2 && callbacks.rescanPresets) callbacks.rescanPresets();
+        if (page == libraryPage && callbacks.rescanPresets) callbacks.rescanPresets();
         auto items = callbacks.listPresets ? callbacks.listPresets() : std::vector<PresetItem>();
+        // Folder column: factory categories in bank order, then the user's subfolders.
+        folderKeys.clear();
+        for (const auto& p : items)
+            if (p.folder.isNotEmpty() && p.folder != "Saved" && ! folderKeys.contains(p.folder))
+                folderKeys.add(p.folder);
+        folderModel.labels.clear();
+        for (const auto& key : folderKeys)
+            folderModel.labels.push_back(key.startsWith("Saved/") ? "MY " + key.fromFirstOccurrenceOf("/", false, false).toUpperCase() : key.toUpperCase());
+        if (activeFilter >= 3 + folderKeys.size()) activeFilter = 0;
+        folderModel.active = activeFilter >= 3 ? activeFilter - 3 : -1;
+        folderList.updateContent();
+        folderList.repaint();
         filtered.clear();
         auto query = search.getText().trim();
         for (auto& p : items)
         {
             if (activeFilter == 1 && ! p.favorite) continue;
             if (activeFilter == 2 && ! p.user) continue;
-            if (activeFilter >= 3 && ! p.family.equalsIgnoreCase(libraryFilters[static_cast<size_t>(activeFilter)].getButtonText())) continue;
-            if (query.isNotEmpty() && ! (p.name + " " + p.family).containsIgnoreCase(query)) continue;
+            if (activeFilter >= 3 && p.folder != folderKeys[activeFilter - 3]) continue;
+            if (query.isNotEmpty() && ! (p.name + " " + p.family + " " + p.folder + " " + p.tags.joinIntoString(" ")).containsIgnoreCase(query)) continue;
             filtered.push_back(std::move(p));
         }
         library.updateContent();
         library.deselectAllRows();
         for (int i = 0; i < static_cast<int>(filtered.size()); ++i)
             if (filtered[static_cast<size_t>(i)].id == oldId) library.selectRow(i);
-        for (int i = 0; i < 7; ++i) libraryFilters[static_cast<size_t>(i)].setToggleState(i == activeFilter, juce::dontSendNotification);
+        for (int i = 0; i < 3; ++i) libraryFilters[static_cast<size_t>(i)].setToggleState(i == activeFilter, juce::dontSendNotification);
+        updateCompareAndBounce();
+        updateLibraryView();
         library.repaint(); repaint();
     }
     int getNumRows() override { return static_cast<int>(filtered.size()); }
@@ -1470,10 +1955,11 @@ public:
         const auto& p = filtered[static_cast<size_t>(row)];
         if (selected) { g.setColour(cyan.withAlpha(0.18f)); g.fillRoundedRectangle(0, 1, static_cast<float>(width), height - 2.0f, 5); }
         g.setColour(cream.withAlpha(0.08f)); g.drawHorizontalLine(height - 1, 0, static_cast<float>(width));
-        text(g, p.name, { 10, 0, width - 177, height }, 18, selected ? cyan : cream, selected);
-        if (p.favorite) { g.setColour(lime); g.fillEllipse(width - 165.0f, height * 0.5f - 3, 6, 6); }
-        text(g, p.family.toUpperCase(), { width - 146, 0, 83, height }, 13, cream.withAlpha(0.82f), true);
-        text(g, p.user ? "SAVED" : "FACTORY", { width - 65, 0, 63, height }, 10, cream.withAlpha(0.52f));
+        text(g, p.name, { 10, 0, width - 155, height }, 17, selected ? cyan : cream, selected);
+        if (p.favorite) { g.setColour(lime); g.fillEllipse(width - 143.0f, height * 0.5f - 3, 6, 6); }
+        const auto folderText = p.user ? (p.folder.contains("/") ? p.folder.fromFirstOccurrenceOf("/", false, false) : juce::String("SAVED")) : p.folder;
+        text(g, folderText.toUpperCase(), { width - 132, 0, 78, height }, 12, cream.withAlpha(0.82f), true);
+        text(g, p.family.toUpperCase(), { width - 53, 0, 52, height }, 9, cream.withAlpha(0.6f));
     }
     void listBoxItemDoubleClicked(int, const juce::MouseEvent&) override { loadSelected(); }
     void returnKeyPressed(int) override { loadSelected(); }
@@ -1489,17 +1975,34 @@ public:
     void showSaveDialog()
     {
         if (! callbacks.savePreset) return;
-        auto* dialog = new juce::AlertWindow("Save preset", "Name this YOI so you can find it again.", juce::MessageBoxIconType::NoIcon);
+        auto* dialog = new juce::AlertWindow("Save preset", "Name this YOI and choose a folder so you can find it again.", juce::MessageBoxIconType::NoIcon);
         dialog->addTextEditor("name", patchName, "Name");
+        auto folderNames = callbacks.userPresetFolders ? callbacks.userPresetFolders() : juce::StringArray();
+        juce::StringArray choices { "Top level (SAVED)" };
+        choices.addArray(folderNames);
+        choices.add("New folder...");
+        dialog->addComboBox("folder", choices, "Folder");
+        if (activeFilter >= 3 && folderKeys[activeFilter - 3].startsWith("Saved/"))
+            if (auto* box = dialog->getComboBoxComponent("folder"))
+                box->setSelectedItemIndex(juce::jmax(0, choices.indexOf(folderKeys[activeFilter - 3].fromFirstOccurrenceOf("/", false, false))));
+        dialog->addTextEditor("newFolder", {}, "New folder name");
         dialog->addButton("Save", 1, juce::KeyPress(juce::KeyPress::returnKey));
         dialog->addButton("Cancel", 0, juce::KeyPress(juce::KeyPress::escapeKey));
         dialog->enterModalState(true, juce::ModalCallbackFunction::create([safe = juce::Component::SafePointer<Impl>(this), dialog](int result) {
             if (safe != nullptr && result == 1)
             {
                 auto name = dialog->getTextEditorContents("name").trim().substring(0, 64);
+                juce::String folder;
+                if (auto* box = dialog->getComboBoxComponent("folder"))
+                {
+                    const int index = box->getSelectedItemIndex();
+                    if (index == box->getNumItems() - 1) folder = dialog->getTextEditorContents("newFolder").trim();
+                    else if (index > 0) folder = box->getItemText(index);
+                }
                 if (name.isNotEmpty() && safe->callbacks.savePreset)
                 {
-                    const bool saved = safe->callbacks.savePreset(name);
+                    const bool saved = folder.isNotEmpty() && safe->callbacks.savePresetInFolder
+                                     ? safe->callbacks.savePresetInFolder(name, folder) : safe->callbacks.savePreset(name);
                     safe->toast(saved ? juce::String("Preset saved")
                                       : safe->callbacks.statusText ? safe->callbacks.statusText() : juce::String("Could not save preset"));
                     safe->refreshLibrary();
@@ -1515,7 +2018,7 @@ public:
     std::unique_ptr<vfd::InfoButton> infoButton;
     std::unique_ptr<vfd::InfoOverlay> infoOverlay;
     Theme theme;
-    std::array<juce::TextButton, 3> tabs;
+    std::array<juce::TextButton, 4> tabs;
     juce::TextButton newYoi, mutate, undo, redo, favorite, preview, zoom, close;
     ParameterButton oneShot, loop, sync, lowCut;
     ParameterCombo subMode, lengthFeel;
@@ -1529,7 +2032,29 @@ public:
     ParameterCombo pose;
     juce::TextButton snap, resetShape;
     juce::TextButton motionLock;
-    std::array<juce::TextButton, 7> libraryFilters;
+    std::array<juce::TextButton, 3> libraryFilters;
+    // 0.2.0
+    struct ModCombo { ParameterCombo* box; juce::String id; int count; };
+    struct ModToggle { ParameterButton* button; juce::String id; };
+    ParameterCombo talkModeBox, talkRateBox, talkFeelBox, glideModeBox, shaperBox, onsetBox, consonantBox;
+    FocusedSlider bendSlider, dropSlider, dropTimeSlider, squashSlider, widthSlider, consonantLevelSlider,
+                  velMouthSlider, velBiteSlider, velDirtSlider, attackSlider, releaseSlider;
+    ParameterButton meterBarsToggle, subResetToggle;
+    std::vector<ModCombo> modCombos;
+    std::vector<ModToggle> modToggles;
+    std::vector<juce::Component*> modControls;
+    std::vector<std::unique_ptr<SliderAttachment>> modAttachments;
+    juce::TextButton abA, abB, abCopy;
+    FolderListModel folderModel;
+    juce::ListBox folderList;
+    juce::StringArray folderKeys;
+    juce::TextButton viewSounds, viewBounces, bounce8, bounce16, bounceNew, bounceMutate, bounceGo, bounceFolderButton;
+    std::array<BounceTile, 16> tiles;
+    std::unique_ptr<juce::FileChooser> folderChooser;
+    juce::File bounceFolder;
+    juce::String bounceStatusText;
+    int bounceCount = 8, bounceTotal = 0, bounceReady = 0, abActive = 0;
+    bool bounceUsesMutate = false, showingBounces = false, latestEngine = false, subOutputActive = false;
     juce::TextEditor search;
     juce::ListBox library;
     juce::TextButton load, save;
@@ -1554,14 +2079,18 @@ YoiBoiEditor::YoiBoiEditor(juce::AudioProcessor& ownerProcessor, juce::AudioProc
             if (safe != nullptr)
                 if (auto* window = deviceWindowFor(*safe)) window->showDeviceAudioSettings();
         };
+    // Open at the saved size, or the largest size that fits this screen.
     int zoom = callbacks.editorZoom ? callbacks.editorZoom() : 100;
+    if (zoom != 90 && zoom != 100 && zoom != 125 && zoom != 150) zoom = 100;
     if (const auto* display = juce::Desktop::getInstance().getDisplays().getPrimaryDisplay())
-        while (zoom > 100 && shellHeight * zoom / 100 + 60 > display->userArea.getHeight()) zoom -= 25;
+        while (zoom > 90 && (shellHeight * zoom / 100 + 60 > display->userBounds.getHeight()
+                             || shellWidth * zoom / 100 > display->userBounds.getWidth()))
+            zoom = zoom == 100 ? 90 : zoom - 25;
     impl = std::make_unique<Impl>(state, std::move(callbacks));
     addAndMakeVisible(*impl);
     setOpaque(false);
     setResizable(true, false);
-    setResizeLimits(shellWidth, shellHeight, shellWidth * 3 / 2, shellHeight * 3 / 2);
+    setResizeLimits(shellWidth * 9 / 10, shellHeight * 9 / 10, shellWidth * 3 / 2, shellHeight * 3 / 2);
     if (auto* c = getConstrainer()) c->setFixedAspectRatio(static_cast<double>(shellWidth) / shellHeight);
     setSize(shellWidth * zoom / 100, shellHeight * zoom / 100);
 }

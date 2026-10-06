@@ -109,7 +109,7 @@ public:
             expect (callbacks.canUndo());
             callbacks.undo();
             expect (callbacks.canRedo());
-            expectEquals (callbacks.currentPatchName(), juce::String ("Tape Bounce"));
+            expectEquals (callbacks.currentPatchName(), juce::String ("Tape Bounce II"));
             callbacks.redo();
             expect (callbacks.canUndo());
         }
@@ -293,25 +293,26 @@ public:
             TemporaryPresetDirectory directory;
             YoiBoiProcessor synth (directory.path);
             auto callbacks = synth.makeEditorCallbacks();
-            expectEquals (static_cast<int> (callbacks.listPresets().size()), 12);
+            const int bank = static_cast<int> (allFactoryPresets().size());
+            expectEquals (static_cast<int> (callbacks.listPresets().size()), bank);
             callbacks.newYoi();
             callbacks.mutate();
             callbacks.undo();
             callbacks.newYoi();
             callbacks.beginEdit ("Mouth"); setValue (synth, "mouth", .3f); callbacks.endEdit();
-            expectEquals (static_cast<int> (callbacks.listPresets().size()), 12);
+            expectEquals (static_cast<int> (callbacks.listPresets().size()), bank);
             expect (! directory.path.exists(), "New Yoi, Mutate and editing must not create preset files");
             const auto savedState = stateOf (synth);
             expect (! savedState.getChildWithName ("History").isValid());
             expect (! savedState.getChildWithName ("Recent").isValid());
             YoiBoiProcessor restored (directory.path);
             restore (restored, savedState);
-            expectEquals (static_cast<int> (restored.makeEditorCallbacks().listPresets().size()), 12);
+            expectEquals (static_cast<int> (restored.makeEditorCallbacks().listPresets().size()), bank);
             expect (! restored.makeEditorCallbacks().canUndo());
             expectEquals (restored.makeEditorCallbacks().currentPatchName(), callbacks.currentPatchName());
             expect (callbacks.savePreset ("Only This One"));
             expectEquals (directory.path.findChildFiles (juce::File::findFiles, false, "*.xml").size(), 1);
-            expectEquals (static_cast<int> (callbacks.listPresets().size()), 13);
+            expectEquals (static_cast<int> (callbacks.listPresets().size()), bank + 1);
         }
 
         beginTest ("Preset files recall complete settings and colliding legal filenames stay distinct");
@@ -457,7 +458,9 @@ public:
             auto callbacks = synth.makeEditorCallbacks();
             for (int i = 0; i < 6; ++i) callbacks.setLock (i, false);
             for (const auto* id : { "mouth", "size", "bite", "dirt", "sub", "length_ms", "length_division",
-                                    "start_pose", "body_pose", "end_pose", "body_time", "curve", "fmRatio", "fmIndex", "resonance" })
+                                    "start_pose", "body_pose", "end_pose", "body_time", "curve", "fmRatio", "fmIndex", "resonance",
+                                    "vowel_start", "vowel_body", "vowel_end", "onset_glide", "consonant", "consonant_level",
+                                    "pitch_env", "pitch_env_ms", "shaper", "squash" })
                 callbacks.setParameterLock (id, true);
             const auto originalName = callbacks.currentPatchName();
             callbacks.newYoi();
@@ -476,7 +479,9 @@ public:
         beginTest ("New timing and sub modes preserve original parameter indices and migrate old sessions");
         {
             YoiBoiProcessor synth;
-            expectEquals (static_cast<int> (synth.getParameters().size()), 19);
+            expectEquals (static_cast<int> (synth.getParameters().size()), static_cast<int> (parameterCount));
+            expectEquals (synth.parameters().getParameter ("length_feel")->getParameterIndex(), 18);
+            expectEquals (synth.parameters().getParameter ("talk_mode")->getParameterIndex(), 19);
             expectEquals (synth.parameters().getParameter ("curve")->getParameterIndex(), 15);
             expectEquals (synth.parameters().getParameter ("sub_mode")->getParameterIndex(), 16);
             expectEquals (valueOf (synth, "sub_mode"), 1.f);

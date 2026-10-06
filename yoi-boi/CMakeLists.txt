@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.22)
-project(YoiBoi VERSION 0.1.6 LANGUAGES C CXX)
+project(YoiBoi VERSION 0.2.0 LANGUAGES C CXX)
 
 if (APPLE)
     enable_language(OBJCXX)
@@ -31,7 +31,7 @@ juce_add_plugin(YoiBoi
     BUNDLE_ID com.yoiboi.synth
     PLUGIN_MANUFACTURER_CODE YBoi
     PLUGIN_CODE YB01
-    FORMATS VST3 Standalone
+    FORMATS AU VST3 Standalone
     PRODUCT_NAME "YOI-BOI"
     ICON_BIG Assets/AppIcon.png
     ICON_SMALL Assets/AppIcon.png
@@ -45,6 +45,10 @@ juce_add_plugin(YoiBoi
 
 target_sources(YoiBoi PRIVATE
     Source/Plugin/YoiBoiProcessor.cpp
+    Source/Plugin/ParameterMap.cpp
+    Source/Plugin/BounceRenderer.cpp
+    Source/Patch/FactoryPresets.cpp
+    Source/Dsp/YoiVoice4.cpp
     Source/Dsp/YoiVoice.cpp
     Source/Dsp/Legacy/YoiVoice010.cpp
     Source/Dsp/Legacy/YoiVoice012.cpp
@@ -79,7 +83,7 @@ target_link_libraries(YoiBoi PRIVATE
 if (APPLE)
     target_link_options(YoiBoi_VST3 PRIVATE
         "LINKER:-exported_symbols_list,${CMAKE_CURRENT_SOURCE_DIR}/cmake/Vst3Exports.txt")
-    foreach(bundle_target IN ITEMS YoiBoi_VST3 YoiBoi_Standalone)
+    foreach(bundle_target IN ITEMS YoiBoi_VST3 YoiBoi_AU YoiBoi_Standalone)
         add_custom_command(TARGET ${bundle_target} POST_BUILD
             COMMAND /usr/bin/codesign --force --deep --sign - "$<TARGET_BUNDLE_DIR:${bundle_target}>"
             COMMAND /usr/bin/codesign --verify --deep --strict "$<TARGET_BUNDLE_DIR:${bundle_target}>"
@@ -96,6 +100,11 @@ if (YOIBOI_BUILD_TESTS)
         Tests/EngineCompatibilityTests.cpp
         Tests/EditorInteractionTests.cpp
         Tests/RegressionTests.cpp
+        Tests/LatestEngineTests.cpp
+        Source/Plugin/ParameterMap.cpp
+        Source/Plugin/BounceRenderer.cpp
+        Source/Patch/FactoryPresets.cpp
+        Source/Dsp/YoiVoice4.cpp
         Source/Dsp/YoiVoice.cpp
         Source/Dsp/Legacy/YoiVoice010.cpp
         Source/Dsp/Legacy/YoiVoice012.cpp
@@ -111,7 +120,7 @@ if (YOIBOI_BUILD_TESTS)
     endif()
     target_compile_features(YoiBoiTests PRIVATE cxx_std_20)
     target_compile_definitions(YoiBoiTests PRIVATE JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0 JUCE_UNIT_TESTS=1 JUCE_PLUGINHOST_VST3=1
-        YOIBOI_VERSION_STRING="${PROJECT_VERSION}")
+        JUCE_PLUGINHOST_AU=1 YOIBOI_VERSION_STRING="${PROJECT_VERSION}")
     target_link_libraries(YoiBoiTests PRIVATE
         YoiBoiAssets
         juce::juce_audio_utils

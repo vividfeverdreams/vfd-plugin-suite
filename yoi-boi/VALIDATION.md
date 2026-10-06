@@ -1,56 +1,94 @@
-# YOI-BOI 0.1.4 validation
+# YOI-BOI 0.2.0 validation
 
-Apple Silicon macOS Release build, JUCE 9.0.2. Checked 22 September 2026. The installed user copy was not replaced during development or testing.
+Apple Silicon macOS Release build, JUCE 9.0.2. Checked 5 October 2026.
 
-## Final update checks
+Nothing was installed during development or testing. Every check ran on the products in the build folder. The test program gives itself a private temporary home folder, so presets, settings and bounces never touch your real folders.
 
-- **144 historical VST3 compatibility cases passed, with exactly zero audio sample differences.** Actual released binaries from 0.1.0, 0.1.1, 0.1.2 and 0.1.3 generated the reference state and audio. Each case checks the initial import and a second instance reopened from a new 0.1.4 save. Old and new modules are loaded together and destroyed normally.
-- The matrix uses four sound configurations, 44.1/48/96 kHz, and 64/257/1024-sample blocks for each historical release. It includes MIDI offsets, velocity, overlapping notes/glide, sustain, pitch bend, panic, parameter automation, timing and sub controls where present, and a 20 BPM duration-limit case. VST3 component/controller identities, original parameter IDs/order/steps/values and saved engine selection are checked.
-- Historical latency remains **zero samples for 0.1.0–0.1.2 sounds** and **24 samples for 0.1.3/current sounds**. Switching engines updates the host's latency report.
-- **43 integrated suites: 22,492 assertions passed; zero failures.** Includes migration, preset save/load, session save/reopen, engine upgrade and Undo/Redo, Mutate retaining the original engine, New Yoi using the current engine, invalid future-state rejection, manual-save-only presets, randomization exclusions and the existing processor/editor regressions.
-- **Real VST3 scan/load/render passed.** The final bundle produces finite nonzero audio in the JUCE host.
-- **Tracktion pluginval 1.0.4 strictness 10: SUCCESS, exit 0.** GUI tests skipped; random seed 59404942; 60-second per-test timeout. Includes processing, state, automation, repeated loads and parameter fuzzing.
-- **Installer: 28 isolated transaction checks passed.** First install, in-place update/reinstall, no leftover old bundle, preset preservation, downgrade refusal, early/late running-host detection, duplicate and unknown-bundle refusal, payload integrity, symlink refusal, successful rollback after a failed update, failed first-install cleanup and staging cleanup. All writes for these tests were confined to a temporary test directory.
-- The final installer verifies every embedded file against its manifest and checks bundle ID, VST3 IDs, version and code signature. Both the installer and final instrument bundles pass strict code-signature verification. These are ad-hoc development signatures, not notarization.
-- VST3 export inspection confirms exactly three public entrypoints: GetPluginFactory, bundleEntry and bundleExit. Hidden Objective-C++ visibility plus a restricted export list fixes a crash found while loading an old and new JUCE-based module together during development.
+## Results
 
-Final VST3 executable SHA256:
+- **Integrated tests: 74 test groups, 23,090 checks, 0 failures.** They cover the processor, the editor, presets, sessions, migration, randomization, Undo/Redo and the 18 new 0.2.0 groups listed below. The run ends with a real VST3 scan, load and render: `VST3 host scan: YOI-BOI, peak 0.140201`.
+- **Historical compatibility: 180 cases passed, 0 failed, worst sample error 0.** Every released YOI-BOI binary in the release archive was checked: five distinct builds (0.1.3 backup, 0.1.3 staged, 0.1.4, 0.1.5 and 0.1.6), 36 cases each. The other copies in the archive are byte-identical to these: 0.1.5 in suites 1.0.0 to 1.2.1, and 0.1.6 in suite 1.2.2 and its beta.
+  - Each case loads the old and new plug-ins side by side. The old binary saves a project, then both binaries render it sample for sample. The project is also reopened from a fresh 0.2.0 save.
+  - The cases cover 44.1, 48 and 96 kHz, blocks of 64, 257 and 1024 samples, four sound setups, MIDI offsets, glide, sustain, pitch bend, automation and a 20 BPM case.
+  - VST3 component and controller IDs, the original parameter IDs, order and values, the saved engine and the reported latency (24 samples) all match.
+- **Audio Unit, hosted in-process from the build folder (not installed):**
+  - `AU component: VIVID FEVER DREAMS: YOI-BOI type=aumu subtype=YB01 manufacturer=YBoi version=512 factory=YOI_BOIAUFactory`
+  - `AU in-process: YOI-BOI (in-process test) v0.2.0, 42 parameters, latency 24, peak 0.163527, state 3586 bytes`
+  - Bundle ID `com.yoiboi.synth`. The code signature verifies (ad hoc).
+- **pluginval 1.0.4, strictness 5, on the VST3: SUCCESS, exit 0.** 16 test groups ran with GUI tests skipped, random seed 20261005 and a 120-second timeout. pluginval's home folder was a scratch folder. Its info step prints "Reported latency: 0" because it asks before the plug-in is prepared; once prepared, YOI-BOI reports 24 samples.
+- **Factory sounds: all 87 rendered and passed.** No clipping, silence, non-finite samples or DC. The new sounds sit between −25.2 and −24.8 LUFS-ish. Per-sound figures are in `FACTORY-PRESETS.md`.
+- **Interface:** `--render-ui` captured every page at 100% (PLAY, SHAPE, MOD, LIBRARY, Library bounces, INFO), the original-engine MOD and SHAPE states, and the 90%, 125% and 150% sizes. Every screenshot was inspected. Truncated Library buttons and status text, a repeated column and a clipped header were fixed and re-checked.
 
-`a2bfaa31d514c7aeecdb54dcb403bf4b17ebc7e73d7533682fb5a8c711e1cb6c`
+### Why engine-3 comparisons stop at All Notes Off
 
-The installer embeds this same executable. Release packaging verifies its signature, hashes and payload again after ZIP extraction. Final logs accompany the release in `validation/`; `compatibility-provenance.txt` identifies the exact historical binaries and matrix.
+The released 0.1.3–0.1.6 binaries stop a note dead on **CC123 (All Notes Off)**. 0.2.0 lets 0.1.3–0.1.6 sounds finish their release instead (see below). So for those sounds the comparison runs sample for sample up to the fixture's last CC123, at 1.79 s of a 2.0 s render, with zero difference. After that point the harness checks two things:
 
-## Preserved audio engines
+- the new tail never exceeds 1.25 times the peak of the 50 ms before CC123;
+- the last 50 ms are no louder than that window.
 
-Frozen 0.1.0/0.1.1 and 0.1.2 DSP sources are retained inside the updated plug-in. Separate source-archive verification compares the original and preserved engines across 252 rendering scenarios, with identical audio and gesture hashes. Only namespaces and included header basenames differ from the original source. See `Source/Dsp/Legacy/README.md` and its verification script.
+All 180 cases pass this check.
 
-The current 0.1.3 synthesis implementation is unchanged. Its previously completed oversampling, Direct sub, low-cut and stress checks are documented in the 0.1.3 release; this release's hosted comparisons independently establish unchanged current-engine audio for the tested configurations.
+## New 0.2.0 tests
 
-## 0.1.6 processor and editor fixes
+| Test group | Checks |
+| --- | ---: |
+| Parameter IDs stay append-only and new instances use engine 4 | 26 |
+| Use latest sound upgrades an original sound in place and Undo restores it | 11 |
+| A 0.1.6 session keeps its engine, settings and rendering path | 23 |
+| Synced talk is phase-locked to the host position (1/16 to one bar; straight, triplet, dotted) | 5 |
+| Mod wheel and aftertouch scrub the vowel gesture | 3 |
+| Bend range, legato-only glide, unslewed bend and the pitch envelope | 7 |
+| The Sub output carries the sub only when enabled; width keeps the sub mono | 9 |
+| Sub phase reset restarts the sub's cycle on every note | 2 |
+| Shapers, Squash and the oversampled soft ceiling | 9 |
+| Extended vowels, onset glides and consonants | 4 |
+| Velocity amounts and the editable amplitude envelope | 3 |
+| Bars can follow the host meter (opt-in, engine 4 only) | 4 |
+| PREVIEW plays a one-bar phrase at the host tempo and stops | 3 |
+| A/B compare keeps two sounds and copies between them | 6 |
+| Bounce renders WAV variations off the audio thread without consuming the random sequence | 9 |
+| User presets save into folders without touching existing files | 13 |
+| The factory bank: folders, tags, unique names, and untouched originals | 214 |
+| Device size: 90% is a saved size and the editor opens at it | 4 |
 
-No engine's synthesis changed. The following behaviour changed for every sound, including recalled sessions:
+Each synced-talk check starts a note part-way through the song and requires the talk phase to match the song position within 1% of a cycle.
 
-- **CC123 (All Notes Off)** now releases current-engine (0.1.3+) notes with their normal release tail instead of hard-resetting the voice, so hosts that send it on transport stop no longer click. **CC120 (All Sound Off)** still silences immediately. Sounds that use the preserved 0.1.0/0.1.1 and 0.1.2 engines keep their original CC123 hard cut.
-- **Host bypass** renders silence and releases held notes when bypass starts, so a note-off that arrives while bypassed can no longer leave a stuck note. Pitch bend, sustain pedal and All Notes/Sound Off are still followed during bypass. Zero-sample and zero-channel process calls also apply their MIDI.
-- **Engine switches while sounding** (Undo across engines, Use latest sound, preset or session load) fade the outgoing engine over 5 ms instead of cutting it. A silent engine (for example right after a session loads) switches exactly as before, and once the fade ends only the selected engine is heard, unchanged.
-- The generation family is stored canonically, so it is recalled after reopening a session. Sessions that stored the editor's upper-case spelling are repaired.
-- The Library rescans the shared preset folder when opened and refreshed, and before saving. Presets saved by other instances appear. Saving an existing name replaces that file instead of creating a "(2)" copy. Deleted files leave the list.
-- Loading the same preset twice or repeating Reset Shape no longer adds an Undo step that changes nothing. The unused APVTS UndoManager is gone; Undo/Redo still uses the sound history.
-- The output meter holds the peak between editor refreshes. Clicking a control no longer gives it keyboard focus, so later arrow or Return keys cannot silently edit the sound; Tab still reaches every control, and clicking a knob still enables its scroll wheel.
-- The standalone app remembers its audio/MIDI device choice in `~/Library/Application Support/YOI-BOI/YOI-BOI.settings` (device settings only; the sound is still never saved automatically). ZOOM and CLOSE no longer start a window drag.
+## What changes for existing projects
 
-**Historical comparison change.** `--check-compat` still compares the very same saved project in the old and new binaries sample for sample. For engine-3 sounds (saved by 0.1.3–0.1.5), the comparison now stops at the fixture's final CC123, at 1.79 s of a 2.0 s render. Before that frame the tolerance is unchanged (maximum error 2e-6; observed 0). After it, the old binaries hard-cut while the update releases. The harness therefore also requires the new tail to stay at or below 1.25× the peak of the 50 ms before CC123, and the last 50 ms to be no louder than that window. Engines 1 and 2 are still compared over the full render.
+**Sound engines 1–3 are frozen.** The 0.1.0/0.1.1 and 0.1.2 engines (`Source/Dsp/Legacy/`) and the 0.1.3 engine (`Source/Dsp/YoiVoice.cpp`) are byte-identical to the audited baseline. The new controls only reach engine 4. With the Sub output off, which is the default, the main output is exactly as before. "1 Bar = meter" is off by default and affects engine 4 only.
+
+These fixes went in after the released 0.1.6 build and ship for the first time in 0.2.0. They apply to every engine unless noted:
+
+- **CC123 (All Notes Off)** releases 0.1.3–0.1.6 sounds with their normal tail instead of stopping them dead, so hosts that send it at transport stop no longer click. **CC120 (All Sound Off)** still silences at once. 0.1.0–0.1.2 sounds keep their original hard stop.
+- **Host bypass** outputs silence and releases held notes when bypass starts, so a note-off sent while bypassed can no longer leave a stuck note. Pitch bend, sustain and All Notes/Sound Off are still followed during bypass. Process calls with zero samples or zero channels still apply their MIDI.
+- **Changing engine while a note plays** fades the old engine out over 5 ms instead of cutting it. This covers Undo across engines, Use latest sound, and loading a preset or project. A silent engine switches exactly as before.
+- The generation family is saved in a fixed spelling, so it comes back when you reopen a project. Projects that saved the editor's upper-case spelling are repaired.
+- The Library rescans the shared preset folder when you open or refresh it, and before saving, so presets saved by other instances appear. Saving an existing name replaces that file instead of making a "(2)" copy. Deleted files leave the list.
+- Loading the same preset twice, or pressing Reset Shape twice, no longer adds an empty Undo step.
+- The output meter holds its peak between editor refreshes. Clicking a control no longer gives it keyboard focus, so arrow or Return keys can't edit the sound by accident. Tab still reaches every control.
+- The standalone app remembers its audio and MIDI devices in `~/Library/Application Support/YOI-BOI/YOI-BOI.settings` (devices only; the sound is never saved automatically).
+
+Also new in 0.2.0:
+
+- The Library lists the new folders first and the twelve originals under **Classic**. The originals keep their ids (`factory:0`–`factory:11`), sound and Favorites.
+- **PREVIEW** plays a one-bar phrase instead of one short note.
+- The **Sub** output, **A / B** compare, bounces and preset folders do nothing until you use them.
+- Engine-4 sounds report a 2.5-second tail to the host, room for their longest release. Engines 1–3 keep the 1-second tail of 0.1.6.
+- Projects remember the device size. 90% is a new option, and the window opens at the largest size that fits when the saved one doesn't.
 
 ## Practical limits
 
-These checks exercise real VST3 binaries in an automated host. A complete interactive Ableton save/reopen, automation, freeze/flatten, export and long-session test has not been performed. Installer transactions are tested in isolation; the actual user installation was deliberately left for the installer button. The native installer window has not been interactively inspected in this run.
-
-Backward compatibility covers the saved state from releases 0.1.0–0.1.3. It cannot reconstruct an older sound if that project was already changed and saved using a newer engine. Original DSP behavior is preserved; processor fixes for pathological MIDI such as repeated stray note-offs remain in effect. New factory presets and New Yoi deliberately select the current engine, while Mutate retains the selected engine.
-
-The current synth interface is retained, with a saved-engine indicator and an explicit, undoable sound-upgrade option. The VST3 still leaves Ableton's native title bar under the host's control. No change claims removal of that host frame.
-
-Future releases must preserve the permanent engine identifiers and VST3/parameter identities and rerun historical comparisons. This is tested compatibility for the releases above, not a promise about untested future versions.
+- **Audio Unit:** checked only in-process from the build folder. pluginval cannot find an Audio Unit that macOS hasn't registered, and reported "Num plugins found: 0". Run `auval -v aumu YB01 YBoi` and pluginval on an installed copy before release.
+- **Missing old binaries:** the release archive has no 0.1.0–0.1.2 binaries, so they could not be re-run this time. Their engines are byte-identical frozen sources. The integrated tests still import 0.1.0–0.1.2 projects and check that they keep their engines and zero latency. The 0.1.4 validation compared those engines against the real binaries with zero difference.
+- **Not tested:** a full interactive DAW session (save and reopen, freeze or flatten, export, long sessions) and the native installer window. Bounces are rendered and shown as tiles by the automated tests, but dragging a tile into a DAW has not been tried by hand.
+- **Saved-engine scope:** compatibility covers projects saved by the releases above. A project that was already moved to a newer engine and saved can't recover its older sound.
 
 ## Reproduce
 
-See README.md for build, integrated test, historical VST3 comparison and installer build commands. The historical comparison implementation is `Tests/CompatibilityFixtures.h`; `Tools/compat-fixtures-driver.cpp` can also host the matrix independently of the instrument's compiled processor. Installer tests run during `Installer/build-installer.sh` and can be repeated with the built installer executable's `--self-test` option. No silent install action is exposed.
+See README.md for the build and check commands:
+
+- `YoiBoiTests <VST3>` runs the integrated tests and the VST3 scan.
+- `--check-compat <old VST3> <new VST3>` runs the historical comparison. It is implemented in `Tests/CompatibilityFixtures.h`.
+- `--check-au <component>` hosts the AU in-process.
+- `--preset-stats` and `--render-demos` render the factory sounds.
+- `--render-ui` captures the screenshots.

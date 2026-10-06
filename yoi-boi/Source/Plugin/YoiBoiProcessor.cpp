@@ -18,15 +18,8 @@ constexpr std::array<const char*, 12> legacyFactoryNames {
     "Rubber Duck", "Bubble Trouble", "Elastic Yoi", "Chrome Chew", "Tin Goblin", "Laser Teeth",
     "Low Talker", "Throat Coat", "Bog Creature", "Pocket Gremlin", "Squeaky Clean", "Tiny Terror"
 };
-constexpr std::array<float, 5> syncedBeats { 0.25f, 0.5f, 1.0f, 2.0f, 4.0f };
-constexpr std::array<const char*, 19> parameterIds {
-    "mouth", "size", "bite", "dirt", "sub", "length_ms", "length_division", "sync",
-    "loop", "glide_ms", "output_db", "start_pose", "body_pose", "end_pose", "body_time", "curve",
-    "sub_mode", "low_cut", "length_feel"
-};
-
 struct ParameterProperty { const char* id; const char* property; int group; };
-constexpr std::array<ParameterProperty, 22> parameterProperties {{
+constexpr std::array<ParameterProperty, 45> parameterProperties {{
     { "mouth", "mouth", 0 }, { "size", "size", 1 }, { "bite", "bite", 2 }, { "dirt", "dirt", 3 },
     { "sub", "sub", 5 }, { "length_ms", "freeLengthMilliseconds", 4 },
     { "length_division", "lengthDivision", 4 }, { "sync", "tempoSync", -1 },
@@ -34,13 +27,26 @@ constexpr std::array<ParameterProperty, 22> parameterProperties {{
     { "start_pose", "startPose", 0 }, { "body_pose", "bodyPose", 0 }, { "end_pose", "endPose", 0 },
     { "body_time", "bodyTime", 4 }, { "curve", "curve", 4 }, { "sub_mode", "subMode", 5 },
     { "low_cut", "lowCut", 5 }, { "length_feel", "lengthFeel", 4 },
-    { "fmRatio", "fmRatio", 2 }, { "fmIndex", "fmIndex", 2 }, { "resonance", "resonance", 2 }
+    { "fmRatio", "fmRatio", 2 }, { "fmIndex", "fmIndex", 2 }, { "resonance", "resonance", 2 },
+    // 0.2.0. Performance settings (-1) are never randomized; the rest follow
+    // the padlock of the control they shape.
+    { "talk_mode", "talkMode", -1 }, { "talk_rate", "talkDivision", -1 }, { "talk_feel", "talkFeel", -1 },
+    { "bend_range", "bendRange", -1 }, { "glide_mode", "glideMode", -1 },
+    { "pitch_env", "pitchEnvSemitones", 2 }, { "pitch_env_ms", "pitchEnvMilliseconds", 2 },
+    { "width", "width", -1 }, { "sub_reset", "subPhaseReset", -1 },
+    { "shaper", "shaper", 3 }, { "squash", "squash", 3 },
+    { "vowel_start", "vowelStart", 0 }, { "vowel_body", "vowelBody", 0 }, { "vowel_end", "vowelEnd", 0 },
+    { "onset_glide", "onsetGlide", 0 }, { "consonant", "consonant", 0 }, { "consonant_level", "consonantLevel", 0 },
+    { "vel_mouth", "velocityToMouth", -1 }, { "vel_bite", "velocityToBite", -1 }, { "vel_dirt", "velocityToDirt", -1 },
+    { "attack_ms", "attackMilliseconds", -1 }, { "release_ms", "releaseMilliseconds", -1 },
+    { "meter_bars", "meterBars", -1 }
 }};
 
-float lengthFeelMultiplier (float feel) noexcept
+juce::StringArray vowelChoices()
 {
-    const auto index = std::clamp (static_cast<int> (feel), 0, 2);
-    return index == 1 ? 2.0f / 3.0f : index == 2 ? 1.5f : 1.0f;
+    juce::StringArray result;
+    for (int i = 0; i < vowelCount; ++i) result.add (vowelName (i));
+    return result;
 }
 
 juce::StringArray poseChoices()
@@ -79,7 +85,24 @@ bool sameSound (const Patch& a, const Patch& b) noexcept
         && a.tempoSync == b.tempoSync && a.loop == b.loop && a.lengthDivision == b.lengthDivision
         && a.lengthFeel == b.lengthFeel && a.subMode == b.subMode && a.lowCut == b.lowCut
         && close (a.freeLengthMilliseconds, b.freeLengthMilliseconds)
-        && close (a.glideMilliseconds, b.glideMilliseconds) && close (a.outputDecibels, b.outputDecibels);
+        && close (a.glideMilliseconds, b.glideMilliseconds) && close (a.outputDecibels, b.outputDecibels)
+        && a.talkMode == b.talkMode && a.talkDivision == b.talkDivision && a.talkFeel == b.talkFeel
+        && a.bendRange == b.bendRange && a.glideMode == b.glideMode
+        && close (a.pitchEnvSemitones, b.pitchEnvSemitones) && close (a.pitchEnvMilliseconds, b.pitchEnvMilliseconds)
+        && close (a.width, b.width) && a.subPhaseReset == b.subPhaseReset && a.shaper == b.shaper
+        && close (a.squash, b.squash) && a.vowelStart == b.vowelStart && a.vowelBody == b.vowelBody
+        && a.vowelEnd == b.vowelEnd && a.onsetGlide == b.onsetGlide && a.consonant == b.consonant
+        && close (a.consonantLevel, b.consonantLevel) && close (a.velocityToMouth, b.velocityToMouth)
+        && close (a.velocityToBite, b.velocityToBite) && close (a.velocityToDirt, b.velocityToDirt)
+        && close (a.attackMilliseconds, b.attackMilliseconds) && close (a.releaseMilliseconds, b.releaseMilliseconds)
+        && a.meterBars == b.meterBars;
+}
+
+const Patch* factoryByName (const juce::String& name)
+{
+    for (const auto& preset : allFactoryPresets())
+        if (preset.name == name) return &preset;
+    return nullptr;
 }
 
 // Undo entries differ when the sound or the recalled identity differs. A
@@ -165,11 +188,39 @@ APVTS::ParameterLayout YoiBoiProcessor::createParameterLayout()
     p.add (std::make_unique<Choice> (juce::ParameterID { "sub_mode", 1 }, "Sub Routing", juce::StringArray { "Off", "Direct", "Driven" }, 1));
     p.add (std::make_unique<Bool> (juce::ParameterID { "low_cut", 1 }, "Body Low Cut", true));
     p.add (std::make_unique<Choice> (juce::ParameterID { "length_feel", 1 }, "Length Feel", juce::StringArray { "Straight", "Triplet", "Dotted" }, 0));
+    // 0.2.0 (sound engine 4). Appended after every original parameter; older
+    // engines ignore them, so 0.1.x sessions render exactly as before.
+    const auto ms = [] (float low, float high, float skew, float step) { return juce::NormalisableRange<float> (low, high, step, skew); };
+    p.add (std::make_unique<Choice> (juce::ParameterID { "talk_mode", 1 }, "Talk Mode", juce::StringArray { "Per Note", "Synced Talk", "Mod Wheel", "Aftertouch" }, initial.talkMode));
+    p.add (std::make_unique<Choice> (juce::ParameterID { "talk_rate", 1 }, "Talk Rate", juce::StringArray { "1/16", "1/8", "1/4", "1/2", "1 Bar" }, initial.talkDivision));
+    p.add (std::make_unique<Choice> (juce::ParameterID { "talk_feel", 1 }, "Talk Feel", juce::StringArray { "Straight", "Triplet", "Dotted" }, initial.talkFeel));
+    p.add (std::make_unique<Float> (juce::ParameterID { "bend_range", 1 }, "Bend Range", juce::NormalisableRange<float> (1.0f, 24.0f, 1.0f), static_cast<float> (initial.bendRange)));
+    p.add (std::make_unique<Choice> (juce::ParameterID { "glide_mode", 1 }, "Glide Mode", juce::StringArray { "Always", "Legato" }, initial.glideMode));
+    p.add (std::make_unique<Float> (juce::ParameterID { "pitch_env", 1 }, "Pitch Drop", juce::NormalisableRange<float> (-24.0f, 24.0f, 0.1f), initial.pitchEnvSemitones));
+    p.add (std::make_unique<Float> (juce::ParameterID { "pitch_env_ms", 1 }, "Pitch Drop Time", ms (5.0f, 2000.0f, 0.4f, 1.0f), initial.pitchEnvMilliseconds));
+    p.add (std::make_unique<Float> (juce::ParameterID { "width", 1 }, "Body Width", normal, initial.width));
+    p.add (std::make_unique<Bool> (juce::ParameterID { "sub_reset", 1 }, "Sub Phase Reset", initial.subPhaseReset));
+    p.add (std::make_unique<Choice> (juce::ParameterID { "shaper", 1 }, "Shaper", juce::StringArray { "Classic", "Diode", "Fold", "Crush" }, initial.shaper));
+    p.add (std::make_unique<Float> (juce::ParameterID { "squash", 1 }, "Squash", normal, initial.squash));
+    p.add (std::make_unique<Choice> (juce::ParameterID { "vowel_start", 1 }, "Vowel Start", vowelChoices(), initial.vowelStart));
+    p.add (std::make_unique<Choice> (juce::ParameterID { "vowel_body", 1 }, "Vowel Body", vowelChoices(), initial.vowelBody));
+    p.add (std::make_unique<Choice> (juce::ParameterID { "vowel_end", 1 }, "Vowel End", vowelChoices(), initial.vowelEnd));
+    p.add (std::make_unique<Choice> (juce::ParameterID { "onset_glide", 1 }, "Onset Glide", juce::StringArray { "None", "W", "Y" }, initial.onsetGlide));
+    p.add (std::make_unique<Choice> (juce::ParameterID { "consonant", 1 }, "Consonant", juce::StringArray { "None", "T", "K", "CH" }, initial.consonant));
+    p.add (std::make_unique<Float> (juce::ParameterID { "consonant_level", 1 }, "Consonant Level", normal, initial.consonantLevel));
+    p.add (std::make_unique<Float> (juce::ParameterID { "vel_mouth", 1 }, "Velocity to Mouth", normal, initial.velocityToMouth));
+    p.add (std::make_unique<Float> (juce::ParameterID { "vel_bite", 1 }, "Velocity to Bite", normal, initial.velocityToBite));
+    p.add (std::make_unique<Float> (juce::ParameterID { "vel_dirt", 1 }, "Velocity to Dirt", normal, initial.velocityToDirt));
+    p.add (std::make_unique<Float> (juce::ParameterID { "attack_ms", 1 }, "Attack", ms (0.5f, 200.0f, 0.35f, 0.1f), initial.attackMilliseconds));
+    p.add (std::make_unique<Float> (juce::ParameterID { "release_ms", 1 }, "Release", ms (5.0f, 2000.0f, 0.35f, 1.0f), initial.releaseMilliseconds));
+    p.add (std::make_unique<Bool> (juce::ParameterID { "meter_bars", 1 }, "Bars Follow Meter", initial.meterBars));
     return p;
 }
 
 YoiBoiProcessor::YoiBoiProcessor (juce::File presetDirectory)
-    : AudioProcessor (BusesProperties().withOutput ("Output", juce::AudioChannelSet::stereo(), true)),
+    : AudioProcessor (BusesProperties().withOutput ("Output", juce::AudioChannelSet::stereo(), true)
+                                       // Optional: hosts that enable it get the dedicated sub separately.
+                                       .withOutput ("Sub", juce::AudioChannelSet::stereo(), false)),
       apvts (*this, nullptr, "PARAMETERS", createParameterLayout()),
       presetRoot (std::move (presetDirectory)),
       currentPatch (makeDefaultPatch())
@@ -177,18 +228,42 @@ YoiBoiProcessor::YoiBoiProcessor (juce::File presetDirectory)
     for (std::size_t i = 0; i < parameterIds.size(); ++i)
         rawParameters[i] = apvts.getRawParameterValue (parameterIds[i]);
     setLatencySamples (dsp::YoiVoice::latencySamples());
+    // A new instance starts on the reworked signature sound (engine 4). A
+    // session or preset recalled afterwards replaces it completely.
+    if (const auto* initial = factoryByName ("Tape Bounce II")) applyPatch (*initial, false);
     currentPatch = livePatch();
     publishHiddenControls (currentPatch);
+    history.clear();
     history.push_back (currentPatch);
     historyIndex = 0;
     rescanUserPresets();
 }
 
+YoiBoiProcessor::~YoiBoiProcessor()
+{
+    bounceRenderer.cancel();
+    bounceRenderer.waitUntilFinished (15000);
+}
+
 bool YoiBoiProcessor::isBusesLayoutSupported (const BusesLayout& layout) const
 {
     const auto output = layout.getMainOutputChannelSet();
-    return layout.getMainInputChannelSet().isDisabled()
-        && (output == juce::AudioChannelSet::mono() || output == juce::AudioChannelSet::stereo());
+    if (! layout.getMainInputChannelSet().isDisabled()
+        || ! (output == juce::AudioChannelSet::mono() || output == juce::AudioChannelSet::stereo()))
+        return false;
+    for (int bus = 1; bus < layout.outputBuses.size(); ++bus)
+    {
+        const auto sub = layout.getChannelSet (false, bus);
+        if (! (sub.isDisabled() || sub == juce::AudioChannelSet::mono() || sub == juce::AudioChannelSet::stereo()))
+            return false;
+    }
+    return true;
+}
+
+void YoiBoiProcessor::processorLayoutsChanged()
+{
+    const auto* sub = getBus (false, 1);
+    subBusEnabled.store (sub != nullptr && sub->isEnabled() && sub->getNumberOfChannels() > 0, std::memory_order_release);
 }
 
 void YoiBoiProcessor::prepareToPlay (double sampleRate, int)
@@ -203,6 +278,7 @@ void YoiBoiProcessor::prepareToPlay (double sampleRate, int)
     voice.prepare (currentSampleRate);
     allNotesOff();
     bypassActive = false;
+    processorLayoutsChanged();
     meterLeft.store (0.0f); meterRight.store (0.0f);
 }
 
@@ -252,71 +328,76 @@ void YoiBoiProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Midi
         return;
     }
 
-    dsp::VoiceControls c;
-    c.mouth = raw ("mouth"); c.size = raw ("size"); c.bite = raw ("bite");
-    c.dirt = raw ("dirt"); c.sub = raw ("sub");
-    c.subMode = static_cast<int> (raw ("sub_mode")); c.lowCut = raw ("low_cut") > 0.5f;
-    c.fmRatio = fmRatio.load (std::memory_order_acquire);
-    c.fmIndex = fmIndex.load (std::memory_order_acquire);
-    c.resonance = resonance.load (std::memory_order_acquire);
-    c.startPose = static_cast<int> (raw ("start_pose"));
-    c.bodyPose = static_cast<int> (raw ("body_pose"));
-    c.endPose = static_cast<int> (raw ("end_pose"));
-    c.bodyTime = raw ("body_time"); c.curve = raw ("curve");
-    c.loop = raw ("loop") > 0.5f;
-    c.output = juce::Decibels::decibelsToGain (raw ("output_db"));
-
-    if (raw ("sync") > 0.5f)
+    ParameterValues values {};
+    for (std::size_t i = 0; i < values.size(); ++i) values[i] = rawParameters[i]->load (std::memory_order_relaxed);
+    HostTiming timing;
+    if (auto* playhead = getPlayHead())
+        if (auto position = playhead->getPosition())
+        {
+            if (auto hostBpm = position->getBpm())
+                if (std::isfinite (*hostBpm) && *hostBpm > 0.0) { timing.bpm = *hostBpm; timing.hasBpm = true; }
+            if (auto ppq = position->getPpqPosition()) { timing.ppq = *ppq; timing.hasPpq = std::isfinite (*ppq); }
+            if (auto signature = position->getTimeSignature())
+            { timing.numerator = signature->numerator; timing.denominator = signature->denominator; }
+            timing.playing = position->getIsPlaying();
+        }
+    lastHostBpm.store (timing.hasBpm ? timing.bpm : 120.0, std::memory_order_relaxed);
+    const int engine = soundEngine.load (std::memory_order_acquire);
+    const bool latest = engine >= Patch::firstExtendedEngine;
+    auto c = controlsFor (values, timing, engine, currentSampleRate,
+                          fmRatio.load (std::memory_order_acquire), fmIndex.load (std::memory_order_acquire),
+                          resonance.load (std::memory_order_acquire));
+    auto subBuffer = latest && subBusEnabled.load (std::memory_order_acquire) && getBusCount (false) > 1
+                   ? getBusBuffer (buffer, false, 1) : juce::AudioBuffer<float>();
+    c.separateSub = subBuffer.getNumChannels() > 0;
+    voice.setControls (c, engine);
+    if (latest)
     {
-        double bpm = 120.0;
-        if (auto* playhead = getPlayHead())
-            if (auto position = playhead->getPosition())
-                if (auto hostBpm = position->getBpm())
-                    if (std::isfinite (*hostBpm) && *hostBpm > 0.0) bpm = *hostBpm;
-        const int division = std::clamp (static_cast<int> (raw ("length_division")), 0, 4);
-        c.lengthSeconds = std::clamp (static_cast<float> (60.0 / std::max (20.0, bpm))
-            * syncedBeats[static_cast<size_t> (division)] * lengthFeelMultiplier (raw ("length_feel")), .01f, 18.0f);
+        // Engine 4: Bend Range rescales the held wheel, and the scrub source
+        // follows the selected talk mode.
+        const int range = static_cast<int> (std::lround (values[pBendRange]));
+        if (range != appliedBendRange || engine != lastEngine)
+        {
+            appliedBendRange = range;
+            voice.setPitchBend (wheelPosition * static_cast<float> (range));
+        }
+        if (c.talkMode == 2) voice.setTalkScrub (modWheel);
+        else if (c.talkMode == 3) voice.setTalkScrub (pressure);
     }
-    else c.lengthSeconds = raw ("length_ms") * 0.001f;
-    voice.setControls (c, soundEngine.load (std::memory_order_acquire));
+    else if (lastEngine >= Patch::firstExtendedEngine)
+        voice.setPitchBend (wheelPosition * 2.0f); // back on a fixed +/-2 engine
+    lastEngine = engine;
 
     const auto preview = previewCommand.exchange (0, std::memory_order_acq_rel);
-    if (preview == 2 && previewVoiceActive)
-    {
-        voice.noteOff(); previewVoiceActive = false; previewFramesLeft = 0;
-        previewIndicator.store (false, std::memory_order_release);
-    }
-    else if (preview == 1 && activeNote < 0 && ! previewVoiceActive)
-    {
-        voice.noteOn (36, 0.8f, 0.0f, true);
-        previewVoiceActive = true;
-        previewFramesLeft = static_cast<int> (currentSampleRate * 0.4);
-        previewIndicator.store (true, std::memory_order_release);
-    }
+    if (preview == 2 && previewVoiceActive) stopPreview();
+    else if (preview == 1 && activeNote < 0 && ! previewVoiceActive) startPreview();
 
-    const int channels = buffer.getNumChannels();
-    auto* left = buffer.getWritePointer (0);
-    auto* right = channels > 1 ? buffer.getWritePointer (1) : nullptr;
-    float peak = 0.0f;
+    auto mainBuffer = getBusBuffer (buffer, false, 0);
+    const int channels = mainBuffer.getNumChannels();
+    auto* left = channels > 0 ? mainBuffer.getWritePointer (0) : buffer.getWritePointer (0);
+    auto* right = channels > 1 ? mainBuffer.getWritePointer (1) : nullptr;
+    auto* subLeft = subBuffer.getNumChannels() > 0 ? subBuffer.getWritePointer (0) : nullptr;
+    auto* subRight = subBuffer.getNumChannels() > 1 ? subBuffer.getWritePointer (1) : nullptr;
+    float peakLeft = 0.0f, peakRight = 0.0f;
     auto render = [&] (int begin, int end)
     {
         for (int sample = begin; sample < end; ++sample)
         {
-            const float value = voice.renderSample();
-            left[sample] = value;
-            if (right != nullptr) right[sample] = value;
-            peak = std::max (peak, std::abs (value));
+            if (previewVoiceActive) advancePreview();
+            const auto frame = voice.renderFrame();
+            // Engines 1-3 are mono: both sides carry the identical sample.
+            left[sample] = right != nullptr || ! latest ? frame.left : 0.5f * (frame.left + frame.right);
+            if (right != nullptr) right[sample] = frame.right;
+            if (subLeft != nullptr) subLeft[sample] = frame.sub;
+            if (subRight != nullptr) subRight[sample] = frame.sub;
+            peakLeft = std::max (peakLeft, std::abs (left[sample]));
+            peakRight = std::max (peakRight, std::abs (right != nullptr ? frame.right : left[sample]));
             if (--waveformCountdown <= 0)
             {
-                waveformSamples[waveformWriteIndex].store (value, std::memory_order_relaxed);
+                waveformSamples[waveformWriteIndex].store (frame.left, std::memory_order_relaxed);
                 waveformWriteIndex = (waveformWriteIndex + 1) % waveformSamples.size();
                 publishedWaveformIndex.store (waveformWriteIndex, std::memory_order_release);
                 waveformCountdown = waveformStride;
-            }
-            if (previewVoiceActive && --previewFramesLeft <= 0)
-            {
-                voice.noteOff(); previewVoiceActive = false;
-                previewIndicator.store (false, std::memory_order_release);
             }
         }
     };
@@ -331,11 +412,47 @@ void YoiBoiProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Midi
     }
     render (cursor, numSamples);
     midi.clear();
-    holdPeak (meterLeft, peak);
-    holdPeak (meterRight, peak);
+    holdPeak (meterLeft, peakLeft);
+    holdPeak (meterRight, peakRight);
     displayedGesturePhase.store (voice.gesturePhase(), std::memory_order_release);
     midiActivityFramesLeft = std::max (0, midiActivityFramesLeft - numSamples);
     midiIndicator.store (midiActivityFramesLeft > 0, std::memory_order_release);
+}
+
+void YoiBoiProcessor::startPreview() noexcept
+{
+    // One bar of the preview phrase at the host tempo (120 BPM without one).
+    const double bpm = std::clamp (lastHostBpm.load (std::memory_order_relaxed), 40.0, 300.0);
+    previewSixteenth = 60.0 / bpm / 4.0 * currentSampleRate;
+    previewEnd = static_cast<juce::int64> (std::llround (phraseSixteenths * previewSixteenth));
+    previewPosition = 0;
+    previewStep = 0;
+    previewNoteOffAt = -1;
+    previewVoiceActive = true;
+    previewIndicator.store (true, std::memory_order_release);
+}
+
+void YoiBoiProcessor::stopPreview() noexcept
+{
+    voice.noteOff();
+    previewVoiceActive = false;
+    previewNoteOffAt = -1;
+    previewIndicator.store (false, std::memory_order_release);
+}
+
+void YoiBoiProcessor::advancePreview() noexcept
+{
+    const auto position = previewPosition++;
+    if (position == previewNoteOffAt) voice.noteOff();
+    if (previewStep < phraseSteps.size()
+        && position == static_cast<juce::int64> (std::llround (phraseSteps[previewStep].start * previewSixteenth)))
+    {
+        const auto& step = phraseSteps[previewStep];
+        voice.noteOn (step.note, step.velocity, rawAt (pGlideMs), true);
+        previewNoteOffAt = position + std::max<juce::int64> (1, std::llround (step.length * previewSixteenth * 0.85));
+        ++previewStep;
+    }
+    if (position >= previewEnd) stopPreview();
 }
 
 void YoiBoiProcessor::processBlockBypassed (juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midi)
@@ -372,7 +489,28 @@ void YoiBoiProcessor::handleMidi (const juce::MidiMessage& message)
     }
     else if (message.isNoteOff()) noteOff (message.getNoteNumber());
     else if (message.isPitchWheel())
-        voice.setPitchBend ((static_cast<float> (message.getPitchWheelValue()) - 8192.0f) * (2.0f / 8192.0f));
+    {
+        const float value = static_cast<float> (message.getPitchWheelValue()) - 8192.0f;
+        wheelPosition = value / 8192.0f;
+        if (voice.activeEngine() >= Patch::firstExtendedEngine)
+            voice.setPitchBend (value * (static_cast<float> (appliedBendRange) / 8192.0f));
+        else
+            voice.setPitchBend (value * (2.0f / 8192.0f)); // engines 1-3: fixed +/-2, exactly as before
+    }
+    else if (message.isController() && message.getControllerNumber() == 1)
+    {
+        modWheel = static_cast<float> (message.getControllerValue()) / 127.0f;
+        if (voice.activeEngine() >= Patch::firstExtendedEngine && static_cast<int> (rawAt (pTalkMode)) == 2)
+            voice.setTalkScrub (modWheel);
+    }
+    else if (message.isChannelPressure() || message.isAftertouch())
+    {
+        const int amount = message.isChannelPressure() ? message.getChannelPressureValue() : message.getAfterTouchValue();
+        if (message.isAftertouch() && message.getNoteNumber() != activeNote) return;
+        pressure = static_cast<float> (amount) / 127.0f;
+        if (voice.activeEngine() >= Patch::firstExtendedEngine && static_cast<int> (rawAt (pTalkMode)) == 3)
+            voice.setTalkScrub (pressure);
+    }
     else if (message.isController() && message.getControllerNumber() == 64)
     {
         const bool down = message.getControllerValue() >= 64;
@@ -389,7 +527,7 @@ void YoiBoiProcessor::handleMidi (const juce::MidiMessage& message)
         // CC123 releases notes so their tails finish, as hosts send it on
         // transport stop. The preserved 0.1.0-0.1.2 engines keep the hard cut
         // they always had, so those sounds render exactly as before.
-        if (voice.activeEngine() < Patch::currentSoundEngine) allNotesOff();
+        if (voice.activeEngine() < 3) allNotesOff();
         else releaseAllNotes();
     }
 }
@@ -399,7 +537,8 @@ void YoiBoiProcessor::noteOn (int note, float velocity)
     if (note < 0 || note > 127) return;
     if (previewVoiceActive)
     {
-        previewVoiceActive = false; previewFramesLeft = 0;
+        // External MIDI takes over: the phrase stops, the played note sounds.
+        previewVoiceActive = false; previewNoteOffAt = -1;
         previewIndicator.store (false, std::memory_order_release);
     }
     const bool retrigger = activeNote < 0 || activeNote == note;
@@ -456,7 +595,7 @@ void YoiBoiProcessor::allNotesOff()
 {
     pressed.fill (false); sustained.fill (false); noteOrderSize = 0;
     activeNote = -1; sustainDown = false; previewVoiceActive = false;
-    previewFramesLeft = 0; previewCommand.store (0); voice.reset();
+    previewNoteOffAt = -1; previewCommand.store (0); voice.reset();
     midiActivityFramesLeft = 0; midiIndicator.store (false);
     displayedGesturePhase.store (0.0f);
     externalNotesIndicator.store (false); previewIndicator.store (false);
@@ -468,7 +607,7 @@ void YoiBoiProcessor::releaseAllNotes()
     // its normal release instead of being reset. The pedal position is kept.
     pressed.fill (false); sustained.fill (false); noteOrderSize = 0;
     activeNote = -1;
-    previewVoiceActive = false; previewFramesLeft = 0;
+    previewVoiceActive = false; previewNoteOffAt = -1;
     voice.noteOff();
     externalNotesIndicator.store (false, std::memory_order_release);
     previewIndicator.store (false, std::memory_order_release);
@@ -504,6 +643,29 @@ Patch YoiBoiProcessor::livePatch() const
     patch.bodyPose = static_cast<int> (raw ("body_pose"));
     patch.endPose = static_cast<int> (raw ("end_pose"));
     patch.bodyTime = raw ("body_time"); patch.curve = raw ("curve");
+    patch.talkMode = static_cast<int> (rawAt (pTalkMode));
+    patch.talkDivision = static_cast<int> (rawAt (pTalkRate));
+    patch.talkFeel = static_cast<int> (rawAt (pTalkFeel));
+    patch.bendRange = static_cast<int> (std::lround (rawAt (pBendRange)));
+    patch.glideMode = static_cast<int> (rawAt (pGlideMode));
+    patch.pitchEnvSemitones = rawAt (pPitchEnv);
+    patch.pitchEnvMilliseconds = rawAt (pPitchEnvMs);
+    patch.width = rawAt (pWidth);
+    patch.subPhaseReset = rawAt (pSubReset) > 0.5f;
+    patch.shaper = static_cast<int> (rawAt (pShaper));
+    patch.squash = rawAt (pSquash);
+    patch.vowelStart = static_cast<int> (rawAt (pVowelStart));
+    patch.vowelBody = static_cast<int> (rawAt (pVowelBody));
+    patch.vowelEnd = static_cast<int> (rawAt (pVowelEnd));
+    patch.onsetGlide = static_cast<int> (rawAt (pOnsetGlide));
+    patch.consonant = static_cast<int> (rawAt (pConsonant));
+    patch.consonantLevel = rawAt (pConsonantLevel);
+    patch.velocityToMouth = rawAt (pVelocityMouth);
+    patch.velocityToBite = rawAt (pVelocityBite);
+    patch.velocityToDirt = rawAt (pVelocityDirt);
+    patch.attackMilliseconds = rawAt (pAttackMs);
+    patch.releaseMilliseconds = rawAt (pReleaseMs);
+    patch.meterBars = rawAt (pMeterBars) > 0.5f;
     return sanitizedPatch (std::move (patch));
 }
 
@@ -573,25 +735,12 @@ void YoiBoiProcessor::applyPatch (Patch patch, bool addToHistory, bool preserveL
             pushHistory (before);
     }
     currentPatch = patch;
-    setParameterValue ("mouth", patch.mouth); setParameterValue ("size", patch.size);
-    setParameterValue ("bite", patch.bite); setParameterValue ("dirt", patch.dirt);
-    setParameterValue ("sub", patch.sub);
-    setParameterValue ("sub_mode", static_cast<float> (patch.subMode));
-    setParameterValue ("low_cut", patch.lowCut ? 1.f : 0.f);
-    if (! preserveLengthParameters)
+    const auto values = parameterValuesFor (patch);
+    for (int i = 0; i < parameterCount; ++i)
     {
-        setParameterValue ("length_ms", patch.freeLengthMilliseconds);
-        setParameterValue ("length_division", static_cast<float> (patch.lengthDivision));
-        setParameterValue ("length_feel", static_cast<float> (patch.lengthFeel));
+        if (preserveLengthParameters && (i == pLengthMs || i == pLengthDivision || i == pLengthFeel)) continue;
+        setParameterValue (parameterIds[static_cast<std::size_t> (i)], values[static_cast<std::size_t> (i)]);
     }
-    setParameterValue ("sync", patch.tempoSync ? 1.0f : 0.0f);
-    setParameterValue ("loop", patch.loop ? 1.0f : 0.0f);
-    setParameterValue ("glide_ms", patch.glideMilliseconds);
-    setParameterValue ("output_db", patch.outputDecibels);
-    setParameterValue ("start_pose", static_cast<float> (patch.startPose));
-    setParameterValue ("body_pose", static_cast<float> (patch.bodyPose));
-    setParameterValue ("end_pose", static_cast<float> (patch.endPose));
-    setParameterValue ("body_time", patch.bodyTime); setParameterValue ("curve", patch.curve);
     publishHiddenControls (patch);
     currentPatch = livePatch();
     // Loading the same preset twice (or resetting an unchanged shape) would
@@ -664,6 +813,7 @@ void YoiBoiProcessor::resetShape()
     patch.startPose = original.startPose; patch.bodyPose = original.bodyPose;
     patch.endPose = original.endPose; patch.bodyTime = original.bodyTime;
     patch.curve = original.curve;
+    patch.vowelStart = original.startPose; patch.vowelBody = original.bodyPose; patch.vowelEnd = original.endPose;
     applyPatch (std::move (patch), true);
 }
 
@@ -705,8 +855,12 @@ void YoiBoiProcessor::rescanUserPresets()
     // existing entries keep their index so open Library selections stay valid.
     juce::Array<juce::File> files;
     const auto directory = userPresetDirectory();
+    // Subfolders of the preset folder become Library folders. Files are only
+    // ever read here; nothing is moved or rewritten.
     if (directory.isDirectory())
-        directory.findChildFiles (files, juce::File::findFiles, false, "*.xml");
+        for (const auto& entry : juce::RangedDirectoryIterator (directory, true, "*.xml", juce::File::findFiles))
+            if (entry.getFile().getRelativePathFrom (directory).retainCharacters ("/").length() <= 3)
+                files.add (entry.getFile());
     std::sort (files.begin(), files.end(), [] (const juce::File& a, const juce::File& b)
                { return a.getFullPathName() < b.getFullPathName(); });
 
@@ -718,13 +872,15 @@ void YoiBoiProcessor::rescanUserPresets()
             known.push_back ({ entry.file, entry.modified, entry.size, entry.patch.presetId, entry.available });
     }
 
-    const auto read = [] (const juce::File& file, juce::Time modified, juce::int64 size) -> std::optional<UserPreset>
+    const auto read = [&directory] (const juce::File& file, juce::Time modified, juce::int64 size) -> std::optional<UserPreset>
     {
         if (auto xml = juce::XmlDocument::parse (file))
             if (auto patch = fromValueTree (juce::ValueTree::fromXml (*xml)))
             {
                 if (! patch->presetId.startsWith ("user:")) patch->presetId = "user:" + file.getFileNameWithoutExtension();
-                return UserPreset { *patch, file, modified, size, true };
+                const auto parent = file.getParentDirectory();
+                const auto folder = parent == directory ? juce::String() : parent.getRelativePathFrom (directory);
+                return UserPreset { *patch, file, modified, size, true, folder };
             }
         return std::nullopt;
     };
@@ -770,14 +926,33 @@ void YoiBoiProcessor::rescanUserPresets()
     for (auto& entry : added) userPresets.push_back (std::move (entry));
 }
 
-bool YoiBoiProcessor::savePreset (const juce::String& name)
+juce::StringArray YoiBoiProcessor::userPresetFolders() const
+{
+    juce::StringArray folders;
+    const auto directory = userPresetDirectory();
+    if (directory.isDirectory())
+        for (const auto& entry : juce::RangedDirectoryIterator (directory, false, "*", juce::File::findDirectories))
+            if (! entry.isHidden()) folders.addIfNotAlreadyThere (entry.getFile().getFileName());
+    const juce::ScopedLock lock (stateMutex);
+    for (const auto& preset : userPresets)
+        if (preset.available && preset.folder.isNotEmpty()) folders.addIfNotAlreadyThere (preset.folder);
+    folders.sortNatural();
+    return folders;
+}
+
+bool YoiBoiProcessor::savePreset (const juce::String& name, const juce::String& folder)
 {
     auto patch = livePatch();
     const auto previousFavoriteKey = favoriteKey (patch);
     patch.name = name.trim().substring (0, 64);
     if (patch.name.isEmpty())
     { const juce::ScopedLock lock (stateMutex); status = "Enter a preset name"; return false; }
-    auto directory = userPresetDirectory();
+    // One folder level below the preset folder; the name is made filename-safe.
+    const auto folderName = juce::File::createLegalFileName (folder.trim().substring (0, 48)).trim();
+    const auto root = userPresetDirectory();
+    if (folderName.isNotEmpty() && ! root.createDirectory())
+    { const juce::ScopedLock lock (stateMutex); status = "Could not create preset folder"; return false; }
+    auto directory = folderName.isEmpty() ? root : root.getChildFile (folderName);
     if (! directory.createDirectory())
     { const juce::ScopedLock lock (stateMutex); status = "Could not create preset folder"; return false; }
     // Include presets saved by other instances, so saving a name that already
@@ -792,7 +967,7 @@ bool YoiBoiProcessor::savePreset (const juce::String& name)
     {
         const juce::ScopedLock lock (stateMutex);
         for (const auto& entry : userPresets)
-            if (entry.available && entry.patch.name == patch.name)
+            if (entry.available && entry.patch.name == patch.name && entry.folder == (folderName.isEmpty() ? juce::String() : folderName))
             { file = entry.file; patch.presetId = entry.patch.presetId; replacingKnownPreset = true; break; }
     }
     if (! replacingKnownPreset && file.exists())
@@ -802,7 +977,7 @@ bool YoiBoiProcessor::savePreset (const juce::String& name)
         juce::TemporaryFile replacement (file);
         if (xml->writeTo (replacement.getFile()) && replacement.overwriteTargetFileWithTemporary())
         {
-            UserPreset saved { patch, file, file.getLastModificationTime(), file.getSize(), true };
+            UserPreset saved { patch, file, file.getLastModificationTime(), file.getSize(), true, folderName };
             const juce::ScopedLock lock (stateMutex);
             auto existing = std::find_if (userPresets.begin(), userPresets.end(),
                                           [&] (const UserPreset& entry) { return entry.file == file; });
@@ -833,8 +1008,8 @@ void YoiBoiProcessor::loadPreset (const juce::String& id)
     if (number.isEmpty() || number.length() > 9 || ! number.containsOnly ("0123456789")) return;
     const int index = number.getIntValue();
     Patch patch;
-    if (prefix == "factory" && index >= 0 && index < static_cast<int> (factoryPresets().size()))
-        patch = factoryPresets()[static_cast<size_t> (index)];
+    if (prefix == "factory" && index >= 0 && index < static_cast<int> (allFactoryPresets().size()))
+        patch = allFactoryPresets()[static_cast<size_t> (index)];
     else if (prefix == "user")
     { const juce::ScopedLock lock (stateMutex);
       if (index < 0 || index >= static_cast<int> (userPresets.size())
@@ -848,17 +1023,27 @@ std::vector<PresetItem> YoiBoiProcessor::listPresets() const
 {
     std::vector<PresetItem> result;
     const juce::ScopedLock lock (stateMutex);
-    const auto& factory = factoryPresets();
-    for (int i = 0; i < static_cast<int> (factory.size()); ++i)
+    const auto isFavorite = [this] (const Patch& patch)
+    { return favorites.end() != std::find (favorites.begin(), favorites.end(), favoriteKey (patch)); };
+    const auto& factory = allFactoryPresets();
+    const auto addFactory = [&] (int i)
     {
         const auto& patch = factory[static_cast<size_t> (i)];
-        result.push_back ({ "factory:" + juce::String (i), patch.name, familyLabel (patch), favorites.end() != std::find (favorites.begin(), favorites.end(), favoriteKey (patch)), false, false });
-    }
+        result.push_back ({ "factory:" + juce::String (i), patch.name, familyLabel (patch), isFavorite (patch), false, false,
+                            patch.folder, patch.tags, patch.soundEngine });
+    };
+    // The 0.2.0 bank is listed first and the original twelve (Classic) after
+    // it. Ids stay the bank positions, so saved references are unaffected.
+    const auto classicCount = static_cast<int> (factoryPresets().size());
+    for (int i = classicCount; i < static_cast<int> (factory.size()); ++i) addFactory (i);
+    for (int i = 0; i < classicCount; ++i) addFactory (i);
     for (int i = 0; i < static_cast<int> (userPresets.size()); ++i)
     {
-        if (! userPresets[static_cast<size_t> (i)].available) continue;
-        const auto& patch = userPresets[static_cast<size_t> (i)].patch;
-        result.push_back ({ "user:" + juce::String (i), patch.name, familyLabel (patch), favorites.end() != std::find (favorites.begin(), favorites.end(), favoriteKey (patch)), false, true });
+        const auto& entry = userPresets[static_cast<size_t> (i)];
+        if (! entry.available) continue;
+        result.push_back ({ "user:" + juce::String (i), entry.patch.name, familyLabel (entry.patch), isFavorite (entry.patch), false, true,
+                            entry.folder.isEmpty() ? juce::String ("Saved") : "Saved/" + entry.folder,
+                            juce::StringArray { "Saved", familyLabel (entry.patch) }, entry.patch.soundEngine });
     }
     return result;
 }
@@ -871,6 +1056,83 @@ void YoiBoiProcessor::toggleFavorite()
     const auto it = std::find (favorites.begin(), favorites.end(), key);
     if (it == favorites.end()) favorites.push_back (key);
     else favorites.erase (it);
+}
+
+void YoiBoiProcessor::selectAbSlot (int slot)
+{
+    slot = std::clamp (slot, 0, 1);
+    const auto live = livePatch();
+    std::optional<Patch> target;
+    {
+        const juce::ScopedLock lock (stateMutex);
+        if (slot == abActive) return;
+        abSlots[static_cast<std::size_t> (abActive)] = live;
+        // An empty slot starts as a copy of the sound being compared.
+        if (! abSlots[static_cast<std::size_t> (slot)]) abSlots[static_cast<std::size_t> (slot)] = live;
+        target = abSlots[static_cast<std::size_t> (slot)];
+        abActive = slot;
+    }
+    applyPatch (*target, true);
+    const juce::ScopedLock lock (stateMutex);
+    status = slot == 0 ? "Comparing slot A" : "Comparing slot B";
+}
+
+void YoiBoiProcessor::copyAbSlot()
+{
+    const auto live = livePatch();
+    const juce::ScopedLock lock (stateMutex);
+    abSlots[static_cast<std::size_t> (abActive)] = live;
+    abSlots[static_cast<std::size_t> (1 - abActive)] = live;
+    status = abActive == 0 ? "Copied A to B" : "Copied B to A";
+}
+
+bool YoiBoiProcessor::startBounce (int count, bool useMutate, juce::File folder)
+{
+    count = count >= 16 ? 16 : 8;
+    const auto base = livePatch();
+    PatchLocks currentLocks; std::optional<Family> family; std::uint64_t baseSeed;
+    {
+        const juce::ScopedLock lock (stateMutex);
+        currentLocks = locks; baseSeed = seedCounter;
+        for (int i = 0; i < 4; ++i)
+            if (generationFamily.equalsIgnoreCase (familyName (static_cast<Family> (i)))) family = static_cast<Family> (i);
+    }
+    if (std::all_of (currentLocks.begin(), currentLocks.end(), [] (bool value) { return value; })) currentLocks.fill (false);
+    // Variant seeds derive from the instrument's sequence without consuming
+    // it, so the next New Yoi is the same whether or not you bounce.
+    std::vector<Patch> variants;
+    for (int i = 0; i < count; ++i)
+    {
+        const auto seed = (baseSeed ^ UINT64_C (0xb0b0b0b0b0b0b0b0)) + UINT64_C (0x9e3779b97f4a7c15) * static_cast<std::uint64_t> (i + 1);
+        auto next = useMutate ? mutatePatch (base, currentLocks, seed) : yoiboi::newYoi (base, currentLocks, seed, family);
+        preserveExcludedParameters (next, base);
+        variants.push_back (next);
+    }
+    BounceRenderer::Request request;
+    request.variants = variants;
+    request.bpm = std::clamp (lastHostBpm.load(), 40.0, 300.0);
+    request.folder = folder == juce::File {} ? BounceRenderer::defaultFolder() : folder;
+    if (! bounceRenderer.start (std::move (request)))
+    {
+        const juce::ScopedLock lock (stateMutex);
+        status = "Bounce is busy or the folder can't be created";
+        return false;
+    }
+    const juce::ScopedLock lock (stateMutex);
+    bounceVariants = std::move (variants);
+    status = "Bouncing " + juce::String (count) + " variations";
+    return true;
+}
+
+void YoiBoiProcessor::loadBounceVariant (int index)
+{
+    Patch patch;
+    {
+        const juce::ScopedLock lock (stateMutex);
+        if (index < 0 || index >= static_cast<int> (bounceVariants.size())) return;
+        patch = bounceVariants[static_cast<std::size_t> (index)];
+    }
+    applyPatch (std::move (patch), true);
 }
 
 void YoiBoiProcessor::togglePreview() noexcept
@@ -911,12 +1173,29 @@ EditorCallbacks YoiBoiProcessor::makeEditorCallbacks()
     c.editorZoom = [this] { return editorZoom.load(); };
     c.setEditorZoom = [this] (int percent)
     {
-        if (percent == editorZoom.load() || (percent != 100 && percent != 125 && percent != 150)) return;
+        if (percent == editorZoom.load() || (percent != 90 && percent != 100 && percent != 125 && percent != 150)) return;
         editorZoom.store (percent);
         updateHostDisplay (ChangeDetails().withNonParameterStateChanged (true));
     };
     c.loadPreset = [this] (const juce::String& id) { loadPreset (id); };
     c.savePreset = [this] (const juce::String& name) { return savePreset (name); };
+    c.savePresetInFolder = [this] (const juce::String& name, const juce::String& folder) { return savePreset (name, folder); };
+    c.userPresetFolders = [this] { return userPresetFolders(); };
+    c.abSlot = [this] { const juce::ScopedLock lock (stateMutex); return abActive; };
+    c.selectAbSlot = [this] (int slot) { selectAbSlot (slot); };
+    c.copyAbSlot = [this] { copyAbSlot(); };
+    c.startBounce = [this] (int count, bool useMutate, juce::File folder) { return startBounce (count, useMutate, folder); };
+    c.bounceInfo = [this]
+    {
+        const auto state = bounceRenderer.status();
+        BounceInfo info;
+        info.running = state.running; info.done = state.done; info.total = state.total;
+        info.folder = state.folder; info.files = state.files; info.names = state.names; info.message = state.error;
+        return info;
+    };
+    c.loadBounceVariant = [this] (int index) { loadBounceVariant (index); };
+    c.defaultBounceFolder = [] { return BounceRenderer::defaultFolder(); };
+    c.subOutputActive = [this] { return subBusEnabled.load() && soundEngine.load() >= Patch::firstExtendedEngine; };
     c.generationFamily = [this] { const juce::ScopedLock lock (stateMutex); return generationFamily; };
     c.setGenerationFamily = [this] (const juce::String& family) { const juce::ScopedLock lock (stateMutex); generationFamily = canonicalFamilyName (family); };
     c.soundEngine = [this] { return soundEngine.load (std::memory_order_acquire); };
@@ -924,8 +1203,7 @@ EditorCallbacks YoiBoiProcessor::makeEditorCallbacks()
     {
         auto patch = livePatch();
         if (patch.soundEngine == Patch::currentSoundEngine) return;
-        patch.soundEngine = Patch::currentSoundEngine;
-        applyPatch (patch, true);
+        applyPatch (upgradedToLatestEngine (std::move (patch)), true);
         const juce::ScopedLock lock (stateMutex);
         status = "Latest sound engine enabled; Undo restores the original";
     };
@@ -977,10 +1255,15 @@ void YoiBoiProcessor::setStateInformation (const void* data, int size)
     // Validate the complete payload before changing the running instrument.
     // APVTS does not sanitize arbitrary ValueTree numbers for us.
     juce::ValueTree safeParameters ("PARAMETERS");
-    for (const auto* id : parameterIds)
+    // Sessions from 0.1.x have no 0.2.0 parameters: take them from the saved
+    // patch (which carries the original poses into the vowel list).
+    const auto patchValues = parameterValuesFor (*parsed);
+    for (std::size_t index = 0; index < parameterIds.size(); ++index)
     {
+        const auto* id = parameterIds[index];
         const auto* parameter = apvts.getParameter (id);
         auto fallback = parameter->convertFrom0to1 (parameter->getDefaultValue());
+        if (static_cast<int> (index) >= originalParameterCount) fallback = patchValues[index];
         if (std::strcmp (id, "sub_mode") == 0) fallback = static_cast<float> (parsed->subMode);
         if (std::strcmp (id, "low_cut") == 0) fallback = parsed->lowCut ? 1.f : 0.f;
         if (std::strcmp (id, "length_feel") == 0) fallback = static_cast<float> (parsed->lengthFeel);
@@ -996,7 +1279,7 @@ void YoiBoiProcessor::setStateInformation (const void* data, int size)
     const auto restoreIdentity = [this] (Patch& patch)
     {
         if (patch.presetId.isNotEmpty()) return;
-        for (const auto& preset : factoryPresets())
+        for (const auto& preset : allFactoryPresets())
             if (patch.name == preset.name) { patch.presetId = preset.presetId; return; }
         for (const auto& preset : userPresets)
             if (preset.available && patch.name == preset.patch.name) { patch.presetId = preset.patch.presetId; return; }
@@ -1021,7 +1304,7 @@ void YoiBoiProcessor::setStateInformation (const void* data, int size)
     // Case-insensitive: earlier builds stored the editor's "RUBBER" spelling.
     generationFamily = canonicalFamilyName (root.getProperty ("generationFamily", "All Families").toString());
     const int zoom = static_cast<int> (root.getProperty ("editorZoom", 100));
-    editorZoom.store ((zoom == 125 || zoom == 150) ? zoom : 100);
+    editorZoom.store ((zoom == 90 || zoom == 125 || zoom == 150) ? zoom : 100);
     history.clear();
     history.push_back (currentPatch);
     historyIndex = 0;
@@ -1039,7 +1322,7 @@ void YoiBoiProcessor::setStateInformation (const void* data, int size)
         {
             const auto name = item.getProperty ("name").toString().substring (0, 128);
             const auto migrate = [&] (const Patch& patch) { if (patch.name == name) add (favoriteKey (patch)); };
-            for (const auto& patch : factoryPresets()) migrate (patch);
+            for (const auto& patch : allFactoryPresets()) migrate (patch);
             for (const auto& preset : userPresets) if (preset.available) migrate (preset.patch);
             for (std::size_t index = 0; index < legacyFactoryNames.size(); ++index)
                 if (name == legacyFactoryNames[index]) add ("factory:" + juce::String (static_cast<int> (index)));

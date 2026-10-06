@@ -1,116 +1,117 @@
-# YOI-BOI 0.1.5
+# YOI-BOI 0.2.0
 
-YOI-BOI is a monophonic talking-bass synthesizer for Apple Silicon macOS, built as a **VST3 instrument** and **standalone app**. The installer updates the VST3 instrument. Play a MIDI phrase, press **NEW YOI**, and shape the result with Mouth, Size, Bite, Dirt, Length and Sub.
+YOI-BOI is a monophonic talking-bass synthesizer for Apple Silicon macOS, built as a **VST3 instrument**, an **Audio Unit instrument** and a **standalone app**. Play a MIDI phrase, press **NEW YOI**, and shape the result with Mouth, Size, Bite, Dirt, Length and Sub.
 
-Version 0.1.5 adds a physical **INFO** key in a new lower shell band. It opens the exact Vivid Fever Dreams logo, development credit, executive producers, music and donation links. Close the page with its close button, Escape, or by clicking outside it. The editor is now 1070 × 724 at 100%; existing musical controls and the three-stripe header mark keep their original positions. Audio processing, parameter identities, presets and historical sound engines are unchanged from 0.1.4.
+## What's new in 0.2.0
 
-Version 0.1.4 introduced the **Install / Update app** and **built-in historical sound engines**. The installer replaces the same YOI-BOI plug-in in place. Projects and presets saved by versions 0.1.0–0.1.3 automatically select their original engine; you do not need separate old plug-in files. See `VALIDATION.md` for the exact compatibility checks and their limits.
+0.2.0 adds a new sound engine (**engine 4**) and a much bigger library. New instances, **New Yoi** and the new factory sounds use it. Projects and presets from 0.1.x keep the engine they were made with and sound exactly as before (see *Older projects*).
 
-The current engine retains the clean Direct sub route, sub Off, body low-cut, individual randomization exclusions, triplet/dotted timing, and twelve authored factory sounds introduced in 0.1.3. The translucent lavender device, in-shell zoom/close controls, and corrected die remain unchanged.
+- **MOD page** (new tab between SHAPE and LIBRARY), in five columns:
+  - **Talk:** keep one vowel sweep per note, or make the mouth talk on the beat. **Synced Talk** runs from 1/16 to one bar (straight, triplet or dotted) and is locked to the song position, so it stays on the grid wherever playback starts. **Mod Wheel** and **Aftertouch** let you scrub the vowel motion by hand. **BAR = METER** (off by default) makes "1 Bar" follow the host's time signature, for example three beats in 3/4.
+  - **Pitch:** **Bend** range from ±1 to ±24 semitones. **Glide** can be Always (as before) or **Legato** (only between connected notes). **Drop / Rise** starts each note up to two octaves away and settles onto it over **Drop Time**, for dives and risers. The pitch wheel follows instantly even with long glide.
+  - **Tone:** a **Shaper** choice for Dirt: Classic (the original), Diode, Fold or Crush. It works inside the 4× oversampled path. **Squash** is a three-band upward/downward compressor on the talking body, in the spirit of OTT. **Width** spreads the body in stereo above 180 Hz while the sub stays mono. **SUB RESET** restarts the sub's cycle on every note for an identical punch. The final ceiling is now a smooth oversampled limit instead of a hard clip.
+  - **Attack:** an **Onset** glide into the first vowel from a **W** ("wah") or **Y** ("yoi") mouth, and an optional **Consonant** burst (**T**, **K** or **CH**) with its own level.
+  - **Feel:** **Velocity** can soften Mouth, Bite and Dirt on quieter notes. Amplitude **Attack** and **Release** are adjustable; 3 ms and 75 ms are the original values.
+- **More vowels:** besides EE, EH, AH, OH and OO, engine 4 adds **IH, UH, AE and ER**. Pick them on the SHAPE page or drag the points in the motion graph.
+- **Separate Sub output:** YOI-BOI has an optional second stereo output called **Sub**, off by default. When your host enables it, the dedicated sub plays there instead of in the main output, ready for its own processing or sidechain. With it off, nothing changes.
+- **75 new and reworked factory sounds** in folders: Yoi, Riddim, Talk, Growl, Squelch, Wobble, Reese, Sub, Space and Leads/FX. The twelve original sounds are still in **Classic**, unchanged; reworked engine-4 versions with a "II" suffix are in **Yoi**. See [FACTORY-PRESETS.md](FACTORY-PRESETS.md).
+- **Library folders:** the Library lists factory and saved sounds by folder and searches names, folders and tags. **SAVE PRESET** lets you choose a folder or create a new one. Your existing preset files are never moved or rewritten.
+- **Bounce variations** (LIBRARY → BOUNCES): renders 8 or 16 New Yoi or Mutate variations of the current sound to WAV files. Each file plays a one-bar phrase at the host tempo, starting on the beat. Files go to `~/Music/YOI-BOI Bounces/<date>/`, or to a folder you choose with FOLDER. Click a tile to load that variation (Undo goes back); drag a tile into your DAW to use the audio. Locks and exclusions are respected. Rendering runs in the background and never on the audio thread.
+- **A / B compare** on the PLAY page: switch between two versions of a sound while you tweak; COPY duplicates the slot you are on.
+- **PREVIEW** now plays a one-bar phrase at the host tempo (120 BPM when there is none), then stops.
+- **Device size:** ZOOM offers 90%, 100%, 125% and 150%. Sizes that don't fit your screen are disabled. The size is saved with the project, and the window reopens at it, or at the largest size that fits.
 
 ## Make and keep a sound
 
-1. Press **PREVIEW**, or play MIDI notes around **36–48**. External MIDI takes priority over Preview. The synth uses one voice with glide, sustain-pedal support, velocity, and ±2-semitone pitch bend.
-2. Choose Rubber, Metal, Throat or Squeak and press **NEW YOI**. **MUTATE** makes a smaller change within the current family. The revised generator favors clear open-to-bright vowel sweeps and restrained drive.
-3. Right-click a parameter and select **Exclude from randomization**. Its setting remains unchanged by New Yoi and Mutate, while manual adjustment and host automation still work. Repeat the action to include it again. The six padlocks retain their group behavior; Length and Sub begin locked. Including one parameter inside a locked group keeps the other members protected.
-4. Use **SHAPE** to choose Start, Body and End vowels, position the Body point, and adjust Curve. **LOCK** protects Mouth and Length groups together. Undo/Redo remembers sound edits during the current instance.
-5. To keep a reusable sound, open **LIBRARY → SAVE PRESET**, enter a name, and confirm **Save**. New Yoi and Mutate do not add library entries or write files. There is no automatically saved Recent collection. Closing/reopening a session does not retain the Undo stack.
+1. Press **PREVIEW**, or play MIDI notes around **36–48**. External MIDI takes priority over Preview. The synth plays one voice with glide, sustain pedal, velocity and pitch bend.
+2. Choose a family (Rubber, Metal, Throat or Squeak) and press **NEW YOI**. **MUTATE** makes a smaller change within the current family.
+3. Right-click a parameter and choose **Exclude from randomization**. New Yoi and Mutate then leave it alone, while manual changes and automation still work. Repeat to include it again. The six padlocks lock whole groups; Length and Sub start locked.
+4. Use **SHAPE** to set the Start, Body and End vowels, the Body point and the Curve. Use **MOD** for talk motion, pitch, tone, attack and feel. **LOCK** protects the Mouth and Length groups together. Undo/Redo covers your sound edits for the current session.
+5. To keep a sound, open **LIBRARY → SAVE PRESET**, enter a name, choose a folder and press **Save**. New Yoi and Mutate never save files by themselves.
 
-Saving the **Live Set still preserves the current sound**, timing/routing, locks, Favorites and randomizer sequence. That is normal session recall, separate from creating a preset. Factory and manually saved presets are searchable in the Library. Save a generated sound before favoriting it if you want to find it later.
-
-User preset files live at `~/Library/Application Support/YOI-BOI/Presets/` and are shared across instances. A preset stores the complete sound, Sub route, body low-cut, free/synced Length and feel, Sync, Loop, Glide and Output. Saving the same user preset name updates that file. Failed writes are reported in the interface. Existing saved presets remain available.
+Saving your project keeps the current sound, timing and routing, locks, Favorites, generation family, device size and the random sequence. User presets live in `~/Library/Application Support/YOI-BOI/Presets/`, one subfolder per folder, and every open YOI-BOI sees them. Saving a name that already exists in the same folder updates that file.
 
 ## Sub and timing
 
 **SUB ROUTE** offers three choices:
 
-- **Off:** mutes the dedicated sub oscillator. Enable **LOW CUT** as well to reduce bass frequencies in the vowel/body signal.
-- **Direct:** a clean sine one octave below the played note bypasses the internal formants and distortion, then mixes into the main output. It does not create a separate auxiliary output in Ableton. Output level and the final protective ceiling still apply.
-- **Driven:** sends the dedicated sub through its saturation stage, controlled by Dirt, before mixing it with the body.
+- **Off:** mutes the dedicated sub oscillator. Turn on **BODY LOW-CUT** as well to thin out the vowel body's low end.
+- **Direct:** a clean sine an octave below the played note. It skips the formants and distortion and joins the output afterwards.
+- **Driven:** sends the sub through its own saturation, set by Dirt.
 
-**LOW CUT** applies a 110 Hz high-pass to the vowel/body signal, independently of the sub route. This keeps the body clear of the dedicated sub, or makes room for your own separate bass instrument when Sub is Off.
+On engine-4 sounds, a Direct or Driven sub plays on the **Sub** output instead when your host enables it.
 
-With **SYNC** enabled, Length has **15 musical choices**: 1/16, 1/8, 1/4, 1/2 and 1 Bar, each available as **straight, triplet or dotted**. Use the feel selector or right-click Length → **Choose musical length**. A triplet lasts two-thirds of the straight value; dotted lasts one-and-a-half times. With Sync off, Length uses **80–2000 ms**. One Shot and Loop refer to vowel motion; note duration is controlled by MIDI. Sync follows host tempo but starts from each triggered note, rather than locking to the song position. Without host tempo it uses 120 BPM.
+**BODY LOW-CUT** is a 110 Hz high-pass on the vowel body only.
 
-## Factory sounds
-
-The bank contains twelve original recipes, led by **Tape Bounce**, a Tape B-inspired direction with a rounded opening and bright vowel reply. It is not an official Tape B preset, an endorsement, or an exact reconstruction of a recording. See [FACTORY-PRESETS.md](FACTORY-PRESETS.md) for each sound's contour, timing and use. All factory patches use Direct sub and the body low-cut; aggressive Dirt remains available as a deliberate choice.
-
-The release's audio demonstrations are rendered through the actual processor at 140 BPM. Use them to compare the bank before installing; they do not imply a completed test inside Live.
+With **SYNC** on, Length offers 1/16, 1/8, 1/4, 1/2 and 1 Bar, each straight, triplet or dotted. Use the feel selector, or right-click Length and choose **Choose musical length**. With Sync off, Length runs from 80 to 2000 ms. **One Shot** and **Loop** refer to the vowel motion; how long a note sounds is set by MIDI. Without a host tempo, YOI-BOI uses 120 BPM.
 
 ## Window controls
 
-The editor removes the previous dark internal margin and places **ZOOM** and **CLOSE** within the handheld shell. Zoom offers 100%, 125% and 150%.
+**ZOOM** sets the device size and holds the engine options. **CLOSE** closes a floating plug-in window that YOI-BOI can recognise; it is disabled when that window can't be identified safely. The instrument keeps running.
 
-Ableton owns its floating plug-in window and native title bar. This build leaves that host frame under Ableton's control. On macOS, the in-shell Close control only closes a recognized floating plug-in window named YOI-BOI; it is disabled when the host window cannot be identified safely. It closes the editor while the instrument continues running.
+The standalone app has a borderless window: drag its logo area to move it. **ZOOM → Audio / MIDI settings** opens the device and MIDI-input settings, and the app remembers them. Closing the window quits the app. The standalone never saves sounds automatically.
 
-The standalone app has a borderless device window. Drag its logo area to move it. **ZOOM → Audio / MIDI settings** opens the audio device and MIDI input controls; the app remembers those device choices. Closing the standalone window quits that app. The standalone does not automatically save sounds or sound variations on exit.
-
-## Install in Ableton Live
+## Install
 
 1. Quit Live and other audio hosts. Unzip the installer download and open **Install YOI-BOI.app**.
-2. Click **Install / Update**. It installs or replaces `~/Library/Audio/Plug-Ins/VST3/YOI-BOI.vst3`. No administrator password or manual file juggling is needed for this standard user-folder installation.
-3. Reopen Live. Existing YOI-BOI tracks use the updated plug-in. For a first installation, enable **Use VST3 Plug-In System Folders** under **Settings/Preferences → Plug-Ins**, then Rescan if needed. Find **YOI-BOI** in the Plug-Ins browser and add it to a MIDI track.
+2. Tick **VST3**, **AU** or both, then click **Install / Update**. It installs or replaces `~/Library/Audio/Plug-Ins/VST3/YOI-BOI.vst3` and `~/Library/Audio/Plug-Ins/Components/YOI-BOI.component`. No administrator password is needed.
+3. Reopen your host. Existing YOI-BOI tracks use the updated plug-in. For a first installation in Live, enable **Use VST3 Plug-In System Folders** in **Settings → Plug-Ins** and Rescan if needed.
 
-Use the same procedure for future updates. The installer checks the payload, refuses downgrades and updates while known audio hosts are running, replaces the bundle atomically, and restores the previous copy if final verification fails. After a successful update it removes the temporary old copy. Your presets and projects are left in place.
+The installer checks the payload and refuses downgrades. It won't update while known audio hosts are running. It replaces the bundle atomically and restores the previous copy if final verification fails. Your presets and projects stay where they are. If a computer-wide copy exists in `/Library/Audio/Plug-Ins/VST3/`, the installer reports it instead of creating a duplicate.
 
-If you previously placed YOI-BOI in the computer-wide `/Library/Audio/Plug-Ins/VST3/` folder, the installer reports that duplicate instead of silently creating two copies. Move that copy into the user folder once before updating. Custom plug-in locations are not searched. The installer updates the VST3; it does not manage a separately copied standalone app.
+**Audio Unit** (new in 0.2.0) is for Logic Pro, GarageBand and other AU hosts. Quit Logic Pro, GarageBand and MainStage before installing it. The installer then asks macOS to refresh its Audio Unit list; restart Logic afterwards.
 
-The installer requires **Apple Silicon and macOS 12 or later**; the instrument supports macOS 11 or later. Both have an **ad-hoc development signature**, not Developer ID notarization. macOS may require a one-time **Open Anyway** approval for a downloaded installer. Intel macOS, Windows and AU builds are not supplied.
+Everything is built for **Apple Silicon**. The instrument needs macOS 11 or later and the installer macOS 12 or later. All products carry an **ad-hoc development signature**, not Developer ID notarization, so macOS may ask for a one-time **Open Anyway** approval. Intel and Windows builds are not supplied.
 
 ## Older projects and saved sounds
 
-The VST3 identity and original parameter IDs/order remain fixed. Saved state chooses one of three engines contained inside the same plug-in: original 0.1.0/0.1.1, original 0.1.2, or current 0.1.3–0.1.5. The saved engine also determines reported audio latency: zero samples for the original engines and 24 samples for the current one. Saving a project or preset again records that engine explicitly.
+The VST3 identity and every original parameter ID and position are unchanged; 0.2.0 only adds parameters after them. A saved sound records its engine:
 
-An older sound shows **ORIGINAL SOUND PRESERVED** in the header. Adjustments and Mutate retain its engine. The newer sub-routing and body low-cut controls remain disabled for those sounds; turning the Sub knob to zero still mutes the dedicated sub. **ZOOM → Use latest sound (changes tone)** deliberately upgrades the current sound and can be undone. New Yoi and current factory presets use the current engine.
+| Engine | Made with | In 0.2.0 |
+| --- | --- | --- |
+| 1 | 0.1.0 / 0.1.1 | identical sound, zero latency |
+| 2 | 0.1.2 | identical sound, zero latency |
+| 3 | 0.1.3 – 0.1.6 | identical sound, 24 samples latency |
+| 4 | 0.2.0 | the new engine, 24 samples latency |
 
-This preserves the version used when a sound was saved. A sound already changed and saved with 0.1.3 is recalled as a 0.1.3 sound; the update cannot reconstruct an earlier version of that project's state. Keep normal project backups, but separate historical plug-in binaries are not required for the supported versions.
+A sound on engines 1–3 shows **ORIGINAL SOUND** under the logo. The MOD page and the extra vowels are disabled for it, and all of its controls work as they did. **ZOOM → Use latest sound (changes tone)** moves the current sound to engine 4 without changing its settings. Its vowels carry over, and every new control starts neutral. Undo goes back.
+
+Apart from the note-ending fixes below, engines 1–3 play the same audio from the same MIDI, automation and saved settings as in 0.1.6 (see `VALIDATION.md`). These changes apply whatever the engine:
+
+- **All Notes Off (CC123):** sounds from 0.1.3–0.1.6 now finish their normal release instead of stopping dead, so hosts that send it when the transport stops no longer click. Sounds from 0.1.0–0.1.2 keep the hard stop. **All Sound Off (CC120)** still silences at once.
+- **Bypass** releases held notes, so a note-off sent while bypassed can't leave a stuck note.
+- **Changing engine while a note plays** (Undo, Use latest sound, loading a preset or project) fades the old engine out over 5 ms instead of cutting it.
+- **Library:** the new folders come first and the twelve original factory sounds are in **Classic**. Their sound, names and Favorites are unchanged. New Yoi and the new sounds use engine 4.
+- **PREVIEW** plays a one-bar phrase instead of one short note.
+- **New, unused until you choose them:** the Sub output (off by default), A / B compare, bounces and preset folders.
 
 ## Build and check the source
 
-Requirements: Apple's C++ development tools/SDK, Git, **CMake 3.22+**, and **JUCE 9.0.2** at `external/JUCE`. Run from the source folder. Skip the clone when the pinned dependency is already present.
-
-An existing JUCE checkout can instead be selected with `-DJUCE_SOURCE_DIR=/absolute/path/to/JUCE`. Keep the shared `VfdInfo.h` and `VfdLogo.svg` files in the sibling `../shared` folder.
+Requirements: Apple's C++ tools/SDK, **CMake 3.22+**, and **JUCE 9.0.2** (`external/JUCE`, or `-DJUCE_SOURCE_DIR=/path/to/JUCE`). Keep `../shared/VfdInfo.h` and `../shared/VfdLogo.svg` next to this folder.
 
 ```sh
-git clone --depth 1 --branch 9.0.2 https://github.com/juce-framework/JUCE.git external/JUCE
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_ARCHITECTURES=arm64 -DYOIBOI_BUILD_TESTS=ON
-cmake --build build --config Release --target YoiBoi_VST3 YoiBoi_Standalone YoiBoiTests --parallel 4
+cmake --build build --config Release --target YoiBoi_VST3 YoiBoi_AU YoiBoi_Standalone YoiBoiTests --parallel 4
 ```
 
-Products are `build/YoiBoi_artefacts/Release/VST3/YOI-BOI.vst3` and `build/YoiBoi_artefacts/Release/Standalone/YOI-BOI.app`. The build signs the finished macOS bundles and does not install them.
+Products are in `build/YoiBoi_artefacts/Release/`: `VST3/YOI-BOI.vst3`, `AU/YOI-BOI.component` and `Standalone/YOI-BOI.app`. The build signs them and installs nothing.
 
-Run the patch, processor and editor checks plus a real VST3 scan/load/render:
+Checks, all run against private temporary folders (the test binary sets its own HOME):
 
 ```sh
-./build/YoiBoiTests_artefacts/Release/YoiBoiTests "$(pwd)/build/YoiBoi_artefacts/Release/VST3/YOI-BOI.vst3"
+B=build/YoiBoiTests_artefacts/Release/YoiBoiTests
+$B "$(pwd)/build/YoiBoi_artefacts/Release/VST3/YOI-BOI.vst3"           # unit, processor, editor tests + VST3 scan/render
+$B --check-au "$(pwd)/build/YoiBoi_artefacts/Release/AU/YOI-BOI.component" # AU hosted in-process, not installed
+$B --check-compat "/absolute/old/YOI-BOI.vst3" "$(pwd)/build/YoiBoi_artefacts/Release/VST3/YOI-BOI.vst3"
+$B --preset-stats "$(pwd)/build/demos"   # peak, loudness and DC for every factory sound
+$B --render-demos "$(pwd)/build/demos"   # the same, plus WAV files and a combined tour
+$B --render-ui "$(pwd)/build/ui/yoi.png" # screenshots of every page and size
 ```
 
-Render the factory bank through the processor, including the combined tour:
-
-```sh
-mkdir -p build/demos
-./build/YoiBoiTests_artefacts/Release/YoiBoiTests --render-demos "$(pwd)/build/demos"
-```
-
-The separate DSP stress test is `Source/Dsp/tests/YoiVoiceOfflineTest.cpp`. Tests cover seeded generation, individual/group locks, manual-save behavior, state and preset migration, host timing, MIDI handling, and editor interactions. The engine processes synthesis and nonlinear stages at 4× sample rate, with **24 samples of reported latency** for host compensation. Those checks do not establish subjective sound quality or complete Ableton compatibility. Consult the release's `VALIDATION.md` for actual results and remaining DAW checks.
-
-Build the installer after validating the final VST3:
-
-```sh
-bash Installer/build-installer.sh "$(pwd)/build/YoiBoi_artefacts/Release/VST3/YOI-BOI.vst3" "$(pwd)/build/installer-release" 0.1.5
-```
-
-The build verifies the embedded payload and runs isolated installer tests without installing it. See `Installer/README.md`. To compare authentic historical VST3 state and rendered audio with the update:
-
-```sh
-./build/YoiBoiTests_artefacts/Release/YoiBoiTests --check-compat "/absolute/old/YOI-BOI.vst3" "$(pwd)/build/YoiBoi_artefacts/Release/VST3/YOI-BOI.vst3"
-```
-
-Historical engines in `Source/Dsp/Legacy/` are frozen. Future changes that alter rendered sound must introduce a new engine identifier and preserve existing engines and state migrations. Run comparisons against every previously shipped release before replacing its installed bundle. Objective-C++ symbol visibility and the VST3 export list prevent a loaded JUCE plug-in from exposing its private implementation to other modules.
+The preserved engines in `Source/Dsp/Legacy/` and `Source/Dsp/YoiVoice.cpp` (engine 3) are frozen. A change to rendered sound needs a new engine identifier. See `VALIDATION.md` for results and limits.
 
 ## Current scope and licenses
 
-There is one mono voice sent to the main mono/stereo output, no separate sub output, and no sample input, polyphony, MPE, stereo widening or editable amplitude envelope. Randomization clicks are not repeatable timeline automation events; save a selected sound or resample its performance. A complete Live save/reopen, automation, freeze/flatten, export and long-session test remains separate from the automated checks.
+YOI-BOI is one voice: no polyphony, MPE or audio input. Randomization clicks are not timeline automation; save a sound you like, or bounce variations to audio. A complete interactive DAW session test (save/reopen, freeze/flatten, export, long sessions) is separate from the automated checks.
 
-JUCE is a separate dependency under its own license terms; review `external/JUCE/LICENSE.md` and [JUCE's licensing information](https://juce.com/get-juce/) before distribution. The interface embeds Chakra Petch under the SIL Open Font License 1.1; its notice is `Assets/ChakraPetch-OFL.txt`. The shell artwork and generation provenance are documented in `Assets/ARTWORK.md`.
+JUCE is a separate dependency under its own license; review its terms before distribution. The interface embeds Chakra Petch under the SIL Open Font License 1.1 (`Assets/ChakraPetch-OFL.txt`). The shell artwork is documented in `Assets/ARTWORK.md`.

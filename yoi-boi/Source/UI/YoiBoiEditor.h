@@ -15,6 +15,19 @@ struct PresetItem
     bool favorite = false;
     bool recent = false;
     bool user = false;
+    juce::String folder;      // Library folder: a factory category, or "Saved" / "Saved/<subfolder>"
+    juce::StringArray tags;
+    int engine = 4;
+};
+
+struct BounceInfo
+{
+    bool running = false;
+    int done = 0, total = 0;
+    juce::File folder;
+    std::vector<juce::File> files;
+    std::vector<juce::String> names;
+    juce::String message;
 };
 
 // All callbacks run on the message thread. Meter/activity readers should read atomics.
@@ -46,8 +59,19 @@ struct EditorCallbacks
     std::function<bool(const juce::String&)> savePreset;
     std::function<juce::String()> generationFamily;
     std::function<void(const juce::String&)> setGenerationFamily;
-    std::function<int()> editorZoom;            // saved device size in percent (100, 125 or 150)
+    std::function<int()> editorZoom;            // saved device size in percent (90, 100, 125 or 150)
     std::function<void(int)> setEditorZoom;
+    // 0.2.0
+    std::function<bool(const juce::String&, const juce::String&)> savePresetInFolder; // name, subfolder ("" = top level)
+    std::function<juce::StringArray()> userPresetFolders;
+    std::function<int()> abSlot;                // 0 = A, 1 = B
+    std::function<void(int)> selectAbSlot;
+    std::function<void()> copyAbSlot;           // copies the active slot into the other one
+    std::function<bool(int, bool, juce::File)> startBounce; // count (8/16), mutate?, folder (empty = default)
+    std::function<BounceInfo()> bounceInfo;
+    std::function<void(int)> loadBounceVariant;
+    std::function<juce::File()> defaultBounceFolder;
+    std::function<bool()> subOutputActive;      // the host enabled the separate Sub output
 };
 
 class YoiBoiEditor final : public juce::AudioProcessorEditor
