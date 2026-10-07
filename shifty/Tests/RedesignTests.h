@@ -1,7 +1,7 @@
 #pragma once
 
 // 0.5.0 feature tests: engines and latency, the original-sound upgrade, ENV and
-// YOI, user preset folders, and the editor size menu. Shares Checks and helpers
+// YOI, user preset folders, the editor size menu, and editor mouse handling. Shares Checks and helpers
 // with FeatureTests.h.
 
 #include "FeatureTests.h"
@@ -294,6 +294,112 @@ void checkEditorSize(Checks& checks)
     root.deleteRecursively();
     checks.section("editor size: four choices, fitting rule, saved as non-parameter state");
 }
+class GestureCounter final : public juce::AudioProcessorParameter::Listener {
+public:
+    void parameterValueChanged(int, float) override {}
+    void parameterGestureChanged(int, bool starting) override { ++(starting ? begins : ends); }
+    int begins = 0, ends = 0;
+};
+
+juce::MouseEvent sliderEvent(juce::Slider& slider, juce::Point<float> position, juce::Point<float> down,
+                             int modifiers = 0, bool dragged = true)
+{
+    static juce::int64 clock = juce::Time::currentTimeMillis();
+    const juce::Time time(++clock);
+    return {juce::Desktop::getInstance().getMainMouseSource(), position,
+            juce::ModifierKeys(juce::ModifierKeys::leftButtonModifier | modifiers),
+            1.0f, 0.0f, 0.0f, 0.0f, 0.0f, &slider, &slider, time, down, time, 1, dragged};
+}
+
+void checkEditorMouse(Checks& checks)
+{
+    ShiftyProcessor host;
+    const auto root = juce::File::getSpecialLocation(juce::File::tempDirectory)
+                          .getNonexistentChildFile("shifty-mouse", "", false);
+    host.setUserDataRootForTesting(root);
+    {
+        ShiftyEditor editor(host);
+        const auto size = ShiftyEditor::sizeFor(1.0);
+        editor.setSize(size.x, size.y);
+        editor.showPageForTesting(ShiftyEditor::Page::motion, ShiftyEditor::MotionTab::yoi);
+
+        // Screen dropdowns hang from their own control, inside the window (not under the editor).
+        const auto window = editor.getScreenBounds();
+        for (const auto* anchor : {"shape", "rate", "target", "yoiFrom", "yoiTo", "folder", "saveFolder"}) {
+            const auto area = editor.menuOptionsForTesting(anchor).getTargetScreenArea();
+            checks.require(!area.isEmpty() && window.contains(area) && area != window
+                               && area.getBottom() < window.getCentreY(),
+                           juce::String("the ") + anchor + " menu drops down from its control on the screen");
+        }
+
+        const auto near = [](double a, double b, double tolerance) { return std::abs(a - b) <= tolerance; };
+        const auto raw = [&host](const char* id) { return static_cast<double>(host.parameters().getRawParameterValue(id)->load()); };
+
+        // A value strip: a click never jumps, drags are relative, Shift is 5x finer.
+        auto* amount = editor.sliderForTesting("yoiAmount");
+        GestureCounter gestures;
+        host.parameters().getParameter("yoiAmount")->addListener(&gestures);
+        amount->setValue(0.5, juce::sendNotificationSync);
+        const juce::Point<float> start {4.0f, amount->getHeight() * 0.5f}; // on the AMOUNT caption
+        amount->mouseDown(sliderEvent(*amount, start, start, 0, false));
+        checks.require(near(amount->getValue(), 0.5, 1.0e-6), "clicking AMOUNT does not jump its value");
+        amount->mouseDrag(sliderEvent(*amount, start.translated(0.0f, -25.0f), start));
+        checks.require(near(amount->getValue(), 0.6, 0.002), "dragging AMOUNT up 25 px raises it 10%");
+        amount->mouseDrag(sliderEvent(*amount, start.translated(25.0f, -25.0f), start));
+        checks.require(near(amount->getValue(), 0.7, 0.002), "dragging AMOUNT right raises it too");
+        amount->mouseDrag(sliderEvent(*amount, start.translated(25.0f, 0.0f), start, juce::ModifierKeys::shiftModifier));
+        checks.require(near(amount->getValue(), 0.68, 0.002), "Shift drags 5x finer, with no jump when it is pressed");
+        amount->mouseDrag(sliderEvent(*amount, start.translated(25.0f, 25.0f), start));
+        checks.require(near(amount->getValue(), 0.58, 0.002), "releasing Shift mid-drag continues from where the value is");
+        amount->mouseDrag(sliderEvent(*amount, start.translated(25.0f, -2000.0f), start));
+        checks.require(near(amount->getValue(), 1.0, 1.0e-6), "AMOUNT stops at 100%");
+        amount->mouseDrag(sliderEvent(*amount, start.translated(25.0f, -2010.0f), start));
+        amount->mouseDrag(sliderEvent(*amount, start.translated(25.0f, -1990.0f), start));
+        checks.require(near(amount->getValue(), 0.92, 0.002), "pushing past the end does not store up travel");
+        amount->mouseUp(sliderEvent(*amount, start.translated(25.0f, -1990.0f), start));
+        checks.require(gestures.begins == 1 && gestures.ends == 1, "one AMOUNT drag is one host gesture");
+        checks.require(near(raw("yoiAmount"), amount->getValue(), 1.0e-4), "the strip writes the parameter");
+        host.parameters().getParameter("yoiAmount")->removeListener(&gestures);
+        amount->mouseDown(sliderEvent(*amount, start, start, juce::ModifierKeys::altModifier, false));
+        amount->mouseDrag(sliderEvent(*amount, start.translated(0.0f, -50.0f), start, juce::ModifierKeys::altModifier));
+        amount->mouseUp(sliderEvent(*amount, start.translated(0.0f, -50.0f), start, juce::ModifierKeys::altModifier));
+        checks.require(near(amount->getValue(), 0.0, 1.0e-6), "Alt-click resets AMOUNT and does not drag");
+
+        // Bipolar strips get more travel: 40 px moves the envelope amount 20%.
+        auto* envelope = editor.sliderForTesting("envAmount");
+        envelope->setValue(0.0, juce::sendNotificationSync);
+        envelope->mouseDown(sliderEvent(*envelope, start, start, 0, false));
+        envelope->mouseDrag(sliderEvent(*envelope, start.translated(0.0f, -40.0f), start));
+        envelope->mouseUp(sliderEvent(*envelope, start.translated(0.0f, -40.0f), start));
+        checks.require(near(envelope->getValue(), 0.2, 0.002), "ENV AMOUNT: 40 px up is +20%");
+
+        // Knobs keep their 250 px travel and gain Shift for fine steps.
+        auto* shift = editor.sliderForTesting("shift");
+        shift->setValue(0.0, juce::sendNotificationSync);
+        const auto centre = shift->getLocalBounds().toFloat().getCentre();
+        shift->mouseDown(sliderEvent(*shift, centre, centre, 0, false));
+        shift->mouseDrag(sliderEvent(*shift, centre.translated(0.0f, -25.0f), centre));
+        shift->mouseDrag(sliderEvent(*shift, centre.translated(0.0f, -50.0f), centre, juce::ModifierKeys::shiftModifier));
+        shift->mouseUp(sliderEvent(*shift, centre.translated(0.0f, -50.0f), centre));
+        checks.require(near(shift->getValue(), 2.88, 0.02), "SHIFT knob: 25 px is 2.4 st, then 25 px with Shift adds 0.48 st");
+
+        // The vowel bar follows the mouse along its drawn OO..EE marks.
+        editor.showPageForTesting(ShiftyEditor::Page::voice);
+        auto* vowel = editor.sliderForTesting("vowelMorph");
+        const auto at = [vowel](double designX) {
+            return juce::Point<float>(static_cast<float>(vowel->getWidth() * (designX - 300.0) / 300.0), vowel->getHeight() * 0.5f);
+        };
+        const struct { double x, value; } marks[] { {324.0, 0.0}, {450.0, 2.0}, {576.0, 4.0}, {387.0, 1.0} };
+        for (const auto& mark : marks) {
+            vowel->mouseDown(sliderEvent(*vowel, at(mark.x), at(mark.x), 0, false));
+            vowel->mouseUp(sliderEvent(*vowel, at(mark.x), at(mark.x), 0, false));
+            checks.require(near(vowel->getValue(), mark.value, 0.03),
+                           "clicking a vowel mark selects it: " + juce::String(mark.value));
+        }
+    }
+    root.deleteRecursively();
+    checks.section("editor mouse: menus drop from their control, relative strips, Shift fine, vowel bar");
+}
 } // namespace
 
 inline int runRedesignTests()
@@ -304,6 +410,7 @@ inline int runRedesignTests()
     checkEnvelopeAndYoi(checks);
     checkUserPresetFolders(checks);
     checkEditorSize(checks);
+    checkEditorMouse(checks);
     if (checks.failures == 0)
         std::cout << "SHIFTY 0.5.0 feature tests passed.\n";
     else

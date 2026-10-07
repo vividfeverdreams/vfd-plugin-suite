@@ -41,24 +41,75 @@ const juce::Rectangle<float> yoiCells[] { {170, 416, 180, 55}, {350, 416, 140, 5
                                           {630, 416, 170, 55}, {800, 416, 151, 55} };
 const juce::Rectangle<float> envCells[] { {170, 416, 270, 55}, {440, 416, 260, 55}, {700, 416, 251, 55} };
 
+/** The design-space control each screen dropdown hangs from. */
+juce::Rectangle<float> menuAnchor(const juce::String& menu) {
+    if (menu == "shape") return lfoCells[0];
+    if (menu == "rate") return lfoCells[1];
+    if (menu == "target") return lfoCells[4];
+    if (menu == "yoiFrom") return yoiCells[1];
+    if (menu == "yoiTo") return yoiCells[2];
+    if (menu == "folder") return folderChipBounds;
+    if (menu == "saveFolder") return saveFolderPickBounds;
+    jassertfalse;
+    return {};
+}
+
+/** The editor draws every control; this slider only handles the mouse. Knobs drag up, value
+    strips drag up or right, and both are relative: a click never moves the value, and Shift
+    drags 5x finer (it can be pressed or released mid-drag). The vowel bar follows the mouse
+    along its drawn track instead. */
 class InvisibleSlider final : public juce::Slider {
 public:
+    enum class Drag { knob, strip, track };
+    static constexpr double fineFactor = 5.0;
+
+    void setDrag(Drag mode, int pixelsForFullRange, juce::Range<double> trackFraction = {0.0, 1.0}) {
+        drag = mode;
+        track = trackFraction;
+        // Rotary drag styles never jump to the click inside Slider::mouseDown; the drag itself is ours.
+        setSliderStyle(mode == Drag::knob ? juce::Slider::RotaryVerticalDrag
+                                          : juce::Slider::RotaryHorizontalVerticalDrag);
+        setMouseDragSensitivity(pixelsForFullRange);
+    }
     void paint(juce::Graphics&) override {}
     void mouseDown(const juce::MouseEvent& e) override {
         contextClick = e.mods.isPopupMenu() && static_cast<bool>(onContextMenu);
-        if (contextClick) onContextMenu();
-        else juce::Slider::mouseDown(e);
+        if (contextClick) { onContextMenu(); return; }
+        // Alt-click resets to the default (Slider's single-click modifier); no drag follows it.
+        dragging = isEnabled() && !e.mods.isAltDown();
+        lastDrag = e.position;
+        dragProportion = valueToProportionOfLength(getValue());
+        juce::Slider::mouseDown(e); // begins the host gesture
+        if (dragging && drag == Drag::track) followTrack(e.position.x);
     }
     void mouseDrag(const juce::MouseEvent& e) override {
-        if (!contextClick) juce::Slider::mouseDrag(e);
+        if (contextClick || !dragging) return;
+        if (drag == Drag::track) { followTrack(e.position.x); return; }
+        const auto moved = e.position - lastDrag;
+        lastDrag = e.position;
+        const double pixels = getMouseDragSensitivity() * (e.mods.isShiftDown() ? fineFactor : 1.0);
+        const double distance = drag == Drag::knob ? -moved.y : moved.x - moved.y;
+        dragProportion = juce::jlimit(0.0, 1.0, dragProportion + distance / pixels);
+        setValue(proportionOfLengthToValue(dragProportion), juce::sendNotificationSync);
     }
     void mouseUp(const juce::MouseEvent& e) override {
         if (!contextClick) juce::Slider::mouseUp(e);
         contextClick = false;
+        dragging = false;
     }
     std::function<void()> onContextMenu;
 private:
+    void followTrack(float x) {
+        const double fraction = getWidth() > 0 ? x / static_cast<double>(getWidth()) : 0.0;
+        const double proportion = (fraction - track.getStart()) / juce::jmax(0.01, track.getLength());
+        setValue(proportionOfLengthToValue(juce::jlimit(0.0, 1.0, proportion)), juce::sendNotificationSync);
+    }
+    Drag drag = Drag::knob;
+    juce::Range<double> track {0.0, 1.0};
+    juce::Point<float> lastDrag;
+    double dragProportion = 0.0;
     bool contextClick = false;
+    bool dragging = false;
 };
 
 class InvisibleToggle final : public juce::ToggleButton {
@@ -422,8 +473,16 @@ void ShiftyEditor::addControl(const char* id, juce::Rectangle<float> hit,
     c.value = value;
     c.darkText = darkText;
     c.slider = std::make_unique<InvisibleSlider>();
-    c.slider->setSliderStyle(rotary ? juce::Slider::RotaryVerticalDrag
-                                    : juce::Slider::LinearHorizontal);
+    if (c.id == "vowelMorph") {
+        // The drawn track's OO..EE marks span x 324..576 of the 300..600 hit area (see drawVowelBar).
+        c.slider->setDrag(InvisibleSlider::Drag::track, 250, {24.0 / 300.0, 276.0 / 300.0});
+    } else if (rotary) {
+        c.slider->setDrag(InvisibleSlider::Drag::knob, 250);
+    } else {
+        // Bipolar strips get more travel so 1% is still about two pixels.
+        const bool bipolar = c.id == "envAmount" || c.id == "yoiShift";
+        c.slider->setDrag(InvisibleSlider::Drag::strip, bipolar ? 400 : 250);
+    }
     c.slider->setTextBoxStyle(juce::Slider::NoTextBox, false, 0, 0);
     c.slider->setScrollWheelEnabled(false);
     c.slider->setPopupMenuEnabled(false);
@@ -442,7 +501,9 @@ void ShiftyEditor::addControl(const char* id, juce::Rectangle<float> hit,
     else if (c.id == "yoiAmount") description = "YOI amount: each new note sweeps the vowel from FROM to TO";
     else if (c.id == "yoiTime") description = "YOI sweep time";
     else if (c.id == "yoiShift") description = "YOI shift: formant offset at the start of each sweep, gliding back to zero";
-    c.slider->setTooltip(description + ". Drag to adjust, double click to reset, right click for randomization lock.");
+    const juce::String how = c.id == "vowelMorph" ? "Click or drag along the bar" :
+                             rotary ? "Drag up or down" : "Drag up or right to raise";
+    c.slider->setTooltip(description + ". " + how + ", hold Shift for fine steps, double click to reset, right click for randomization lock.");
     c.slider->onContextMenu = [this, parameterId = c.id, slider = c.slider.get()] {
         showParameterLockMenu(parameterId, slider);
     };
@@ -553,6 +614,11 @@ void ShiftyEditor::selectPresetFilterForTesting(int filter, const juce::String& 
 }
 
 int ShiftyEditor::presetCountForTesting() const noexcept { return static_cast<int>(presetItems.size()); }
+
+juce::Slider* ShiftyEditor::sliderForTesting(const juce::String& id) noexcept {
+    for (auto& c : controls) if (c.id == id) return c.slider.get();
+    return nullptr;
+}
 
 void ShiftyEditor::updatePage() {
     const auto engine = plugin.engineMode();
@@ -1563,6 +1629,15 @@ void ShiftyEditor::finishPresetSave() {
     repaint();
 }
 
+juce::PopupMenu::Options ShiftyEditor::menuOptions(const juce::String& anchor) {
+    // Drop down from the clicked control. Targeting only the editor hangs the menu below the
+    // whole window, under the plugin's bottom-left corner.
+    const auto area = scaled(menuAnchor(anchor));
+    return juce::PopupMenu::Options().withTargetComponent(this)
+                                     .withTargetScreenArea(localAreaToGlobal(area))
+                                     .withMinimumWidth(area.getWidth());
+}
+
 void ShiftyEditor::showShapeMenu() {
     juce::PopupMenu menu;
     const char* names[] = {"Sine", "Triangle", "Ramp Up", "Ramp Down"};
@@ -1570,7 +1645,7 @@ void ShiftyEditor::showShapeMenu() {
         menu.addItem(i + 1, names[i], true, juce::roundToInt(valueOf("motionShape")) == i);
     menu.addSeparator();
     menu.addItem(100, "Lock for randomization", true, plugin.isParameterLocked("motionShape"));
-    menu.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(this),
+    menu.showMenuAsync(menuOptions("shape"),
         [safe = juce::Component::SafePointer<ShiftyEditor>(this)](int result) {
             if (safe == nullptr) return;
             if (result == 100) safe->plugin.setParameterLocked("motionShape",
@@ -1587,7 +1662,7 @@ void ShiftyEditor::showRateMenu() {
         menu.addItem(i + 1, names[i], true, juce::roundToInt(valueOf("motionRate")) == i);
     menu.addSeparator();
     menu.addItem(100, "Lock for randomization", true, plugin.isParameterLocked("motionRate"));
-    menu.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(this),
+    menu.showMenuAsync(menuOptions("rate"),
         [safe = juce::Component::SafePointer<ShiftyEditor>(this)](int result) {
             if (safe == nullptr) return;
             if (result == 100) safe->plugin.setParameterLocked("motionRate",
@@ -1604,7 +1679,7 @@ void ShiftyEditor::showTargetMenu() {
         menu.addItem(i + 1, names[i], true, juce::roundToInt(valueOf("motionTarget")) == i);
     menu.addSeparator();
     menu.addItem(100, "Lock for randomization", true, plugin.isParameterLocked("motionTarget"));
-    menu.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(this),
+    menu.showMenuAsync(menuOptions("target"),
         [safe = juce::Component::SafePointer<ShiftyEditor>(this)](int result) {
             if (safe == nullptr) return;
             if (result == 100) safe->plugin.setParameterLocked("motionTarget", !safe->plugin.isParameterLocked("motionTarget"));
@@ -1619,7 +1694,7 @@ void ShiftyEditor::showVowelMenu(const char* id) {
         menu.addItem(i + 1, vowelName(i), true, juce::roundToInt(valueOf(id)) == i);
     menu.addSeparator();
     menu.addItem(100, "Lock for randomization", true, plugin.isParameterLocked(id));
-    menu.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(this),
+    menu.showMenuAsync(menuOptions(id),
         [safe = juce::Component::SafePointer<ShiftyEditor>(this), parameterId = juce::String(id)](int result) {
             if (safe == nullptr) return;
             if (result == 100) safe->plugin.setParameterLocked(parameterId, !safe->plugin.isParameterLocked(parameterId));
@@ -1638,7 +1713,7 @@ void ShiftyEditor::showFolderMenu() {
     menu.addItem(1, "All folders", true, presetFolderFilter.isEmpty());
     for (int i = 0; i < folders.size(); ++i)
         menu.addItem(i + 2, folders[i], true, presetFolderFilter == folders[i]);
-    menu.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(this),
+    menu.showMenuAsync(menuOptions("folder"),
         [safe = juce::Component::SafePointer<ShiftyEditor>(this), folders](int result) {
             if (safe == nullptr || result <= 0) return;
             safe->presetFolderFilter = result == 1 ? juce::String() : folders[result - 2];
@@ -1654,7 +1729,7 @@ void ShiftyEditor::showSaveFolderMenu() {
     for (int i = 0; i < folders.size(); ++i) menu.addItem(i + 2, folders[i]);
     menu.addSeparator();
     menu.addItem(1000, "New folder: type its name in the folder field", false, false);
-    menu.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(this),
+    menu.showMenuAsync(menuOptions("saveFolder"),
         [safe = juce::Component::SafePointer<ShiftyEditor>(this), folders](int result) {
             if (safe == nullptr || result <= 0 || result >= 1000) return;
             safe->presetFolderEditor.setText(result == 1 ? juce::String() : folders[result - 2], juce::dontSendNotification);
@@ -1686,7 +1761,7 @@ void ShiftyEditor::applyScale(double scale) {
 }
 
 void ShiftyEditor::showSizeMenu() {
-    createSizeMenu().showMenuAsync(juce::PopupMenu::Options().withTargetComponent(this),
+    createSizeMenu().showMenuAsync(juce::PopupMenu::Options().withTargetComponent(this).withMousePosition(),
         [safe = juce::Component::SafePointer<ShiftyEditor>(this)](int result) {
             if (safe == nullptr || result <= 0) return;
             safe->applyScale(sizeChoices[static_cast<size_t>(result - 1)]);
@@ -1699,7 +1774,7 @@ void ShiftyEditor::showParameterLockMenu(const juce::String& id, juce::Component
         menu.addSectionHeader(parameter->getName(80));
     menu.addItem(1, "Lock for randomization", true, plugin.isParameterLocked(id));
     menu.addItem(2, "All randomization locks...");
-    menu.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(target),
+    menu.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(target).withMousePosition(),
         [safe = juce::Component::SafePointer<ShiftyEditor>(this), id](int result) {
             if (safe == nullptr) return;
             if (result == 1) safe->plugin.setParameterLocked(id, !safe->plugin.isParameterLocked(id));

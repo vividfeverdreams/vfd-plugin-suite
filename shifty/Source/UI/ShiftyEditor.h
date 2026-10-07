@@ -40,6 +40,9 @@ public:
     /** filter: 0 factory, 1 user, 2 favorites; folder empty = all folders. */
     void selectPresetFilterForTesting(int filter, const juce::String& folder);
     int presetCountForTesting() const noexcept;
+    /** anchor: shape, rate, target, yoiFrom, yoiTo, folder or saveFolder. */
+    juce::PopupMenu::Options menuOptionsForTesting(const juce::String& anchor) { return menuOptions(anchor); }
+    juce::Slider* sliderForTesting(const juce::String& id) noexcept;
 
 private:
     enum class PresetFilter { factory, user, favorites };
@@ -63,6 +66,7 @@ private:
     void loadSelectedPreset();
     void beginPresetSave();
     void finishPresetSave();
+    juce::PopupMenu::Options menuOptions(const juce::String& anchor);
     void showShapeMenu();
     void showRateMenu();
     void showTargetMenu();
