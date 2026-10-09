@@ -1104,8 +1104,12 @@ void BackScratchProcessor::setStateInformation(const void* data, int size)
 juce::File BackScratchProcessor::userPresetRoot()
 {
     if (userPresetRootOverride() != juce::File()) return userPresetRootOverride();
-    return juce::File::getSpecialLocation(juce::File::userApplicationDataDirectory)
-        .getChildFile("Application Support").getChildFile("BACK-SCRATCH").getChildFile("Presets");
+    // ~/Library/Application Support/BACK-SCRATCH/Presets on macOS, %APPDATA%\BACK-SCRATCH\Presets on Windows.
+    auto root = juce::File::getSpecialLocation(juce::File::userApplicationDataDirectory);
+   #if JUCE_MAC
+    root = root.getChildFile("Application Support");
+   #endif
+    return root.getChildFile("BACK-SCRATCH").getChildFile("Presets");
 }
 
 void BackScratchProcessor::setUserPresetRootForTesting(const juce::File& root) { userPresetRootOverride() = root; }

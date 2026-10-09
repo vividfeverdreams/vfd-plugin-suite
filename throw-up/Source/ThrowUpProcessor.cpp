@@ -386,8 +386,12 @@ juce::File ThrowUpProcessor::userPresetRoot()
     if (userPresetRootOverride() != juce::File()) return userPresetRootOverride();
     const auto environment = juce::SystemStats::getEnvironmentVariable("THROW_UP_PRESET_DIR", {});
     if (environment.isNotEmpty() && juce::File::isAbsolutePath(environment)) return juce::File(environment);
-    return juce::File::getSpecialLocation(juce::File::userApplicationDataDirectory)
-        .getChildFile("Application Support").getChildFile("THROW-UP").getChildFile("Presets");
+    // ~/Library/Application Support/THROW-UP/Presets on macOS, %APPDATA%\THROW-UP\Presets on Windows.
+    auto root = juce::File::getSpecialLocation(juce::File::userApplicationDataDirectory);
+   #if JUCE_MAC
+    root = root.getChildFile("Application Support");
+   #endif
+    return root.getChildFile("THROW-UP").getChildFile("Presets");
 }
 
 void ThrowUpProcessor::setUserPresetRootForTesting(const juce::File& root) { userPresetRootOverride() = root; }

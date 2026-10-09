@@ -1,0 +1,40 @@
+--- JUCE-9.0.2/modules/juce_audio_plugin_client/juce_audio_plugin_client_VST3.cpp
++++ JUCE-9.0.2+back-scratch/modules/juce_audio_plugin_client/juce_audio_plugin_client_VST3.cpp
+@@ -68,6 +68,9 @@
+ #include <juce_audio_processors_headless/format_types/juce_VST3Utilities.h>
+ #include <juce_audio_processors_headless/format_types/juce_VST3Common.h>
+ #include <juce_audio_plugin_client/VST3/juce_VST3ModuleInfo.h>
++#if BACK_SCRATCH_QUEUE_BRIDGE
++ #include "AutomationBridge.h"
++#endif
+ 
+ #if JUCE_VST3_CAN_REPLACE_VST2 && ! JUCE_FORCE_USE_LEGACY_PARAM_IDS && ! JUCE_IGNORE_VST3_MISMATCHED_PARAMETER_ID_WARNING
+ 
+@@ -3531,9 +3534,14 @@
+                 }
+                 else
+                #endif
+-                if (const auto change = getPointFromQueue (paramQueue, numPoints - 1))
++                if (auto* param = comPluginInstance->getParamForVSTParamID (vstParamID))
+                 {
+-                    if (auto* param = comPluginInstance->getParamForVSTParamID (vstParamID))
++                   #if BACK_SCRATCH_QUEUE_BRIDGE
++                    for (Steinberg::int32 point = 0; point < numPoints; ++point)
++                        if (const auto change = getPointFromQueue (paramQueue, point))
++                            backScratchBridge::current.push (param, change->offsetSamples, (float) change->value);
++                   #endif
++                    if (const auto change = getPointFromQueue (paramQueue, numPoints - 1))
+                         setValueAndNotifyIfChanged (*param, (float) change->value);
+                 }
+             }
+@@ -3586,6 +3594,10 @@
+         }
+ 
+         midiBuffer.clear();
++
++       #if BACK_SCRATCH_QUEUE_BRIDGE
++        backScratchBridge::current.clear();
++       #endif
+ 
+         if (data.inputParameterChanges != nullptr)
+             processParameterChanges (*data.inputParameterChanges);

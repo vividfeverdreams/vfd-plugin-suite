@@ -1,0 +1,23 @@
+VIVID FEVER DREAMS SUITE for Windows (beta)
+
+Six VST3 plug-ins for Windows 10 and 11 (64-bit):
+
+  YOI-BOI            talking bass synth (an instrument)
+  THROW-UP           mid-bass reverb throws
+  BACK-SCRATCH       tempo-synced scratch patterns
+  SHIFTY             formant shifter for bass
+  ENERGY HARVESTER   tape start, stop and brake
+  STUTTER-STEP       swing gate with slap delay
+
+They install to the standard VST3 folder, C:\Program Files\Common Files\VST3, so every VST3 host finds them: Ableton Live, FL Studio, Bitwig, Reaper, Cubase, Studio One and others. On the next page you can choose which ones to install. Running the installer again updates them. To remove them, use Settings > Apps > Vivid Fever Dreams Suite.
+
+After installing, open your DAW and rescan plug-ins.
+  Ableton Live: Settings > Plug-ins, turn on "Use VST3 Plug-in System Folder", then Rescan.
+  FL Studio: Options > Manage plugins > Find more plugins.
+
+These beta builds are not signed with a Microsoft certificate yet. If Windows shows "Windows protected your PC", click "More info", then "Run anyway".
+
+The Windows and Mac versions are the same plug-ins, so a project saved on a Mac opens with the same settings on a PC and the other way round. Your own presets live in %APPDATA%\<plug-in name>\Presets.
+
+Executive producers: C.Y. Lee (@cxy) and Carl Tydingco (@clt)
+https://www.vividfeverdreams.xyz

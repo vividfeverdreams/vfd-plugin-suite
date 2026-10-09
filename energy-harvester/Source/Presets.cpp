@@ -93,9 +93,14 @@ juce::StringArray factoryFolders() {
 juce::File userRoot() {
     if(const char* overridden=std::getenv("ENERGY_HARVESTER_PRESET_ROOT"); overridden!=nullptr && *overridden!=0)
         return juce::File(juce::String::fromUTF8(overridden));
+   #if JUCE_MAC
     const char* home=std::getenv("HOME");
     const juce::File base=home!=nullptr&&*home=='/'?juce::File(juce::String::fromUTF8(home)):juce::File::getSpecialLocation(juce::File::userHomeDirectory);
     return base.getChildFile("Library").getChildFile("Application Support").getChildFile("ENERGY HARVESTER").getChildFile("Presets");
+   #else
+    // %APPDATA%\ENERGY HARVESTER\Presets on Windows.
+    return juce::File::getSpecialLocation(juce::File::userApplicationDataDirectory).getChildFile("ENERGY HARVESTER").getChildFile("Presets");
+   #endif
 }
 juce::String cleanName(const juce::String& text) {
     auto name=text.trim().replaceCharacters("/\\:","---").removeCharacters("\"*?<>|");
