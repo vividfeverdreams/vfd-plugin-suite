@@ -107,7 +107,7 @@ See [PRESETS.md](PRESETS.md) for every room.
 - **VST3:** `~/Library/Audio/Plug-Ins/VST3/THROW-UP.vst3`, unchanged identity (class IDs, parameter IDs).
 - **Audio Unit:** `~/Library/Audio/Plug-Ins/Components/THROW-UP.component`. It is type `aumf` (MIDI-controlled effect), subtype `Thr1`, manufacturer `Yoib`, bundle ID `com.yoiboi.throwup`.
 
-The installer writes only THROW-UP bundles to your user plug-in folders and needs no administrator password. Both are signed locally (ad hoc), not Apple-notarized. If macOS blocks an installer you trust, use System Settings → Privacy & Security → **Open Anyway**. Native Apple Silicon only (no Intel or Rosetta).
+The installer writes only THROW-UP bundles to your user plug-in folders and needs no administrator password. Both are signed locally (ad hoc), not Apple-notarized. If macOS blocks an installer you trust, use System Settings → Privacy & Security → **Open Anyway**. Native Apple Silicon only (no Intel or Rosetta). Plug-ins installed from the Vivid Fever Dreams Suite installer (1.5.0 and later) are signed with the developer's Developer ID and notarized by Apple.
 
 ## Version history
 

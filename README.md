@@ -15,8 +15,8 @@ Six audio plug-ins built with JUCE 9.0.2, one folder each:
 
 ## Platforms
 
-- **macOS 12+ (Apple Silicon):** VST3 and Audio Unit, built locally with CMake. Each plug-in's README has its build steps and tests. The Mac installer is `vfd-suite-installer/` (`build-installer.sh`).
-- **Windows 10/11 (x64):** VST3, built on GitHub Actions by `.github/workflows/windows.yml`. Every push to `main` builds each plug-in with MSVC, checks it with pluginval (strictness 5) and packages `vfd-suite-installer/windows/VividFeverDreamsSuite.iss` (Inno Setup). Download the installer from the run's artifacts. A plug-in is rebuilt only when its folder, `shared/` or `patches/` changes.
+- **macOS 12+ (Apple Silicon):** VST3 and Audio Unit, built locally with CMake. Each plug-in's README has its build steps and tests. The Mac installer is `vfd-suite-installer/` (`build-installer.sh`). Releases are signed with the Developer ID and notarized by Apple (`sign-plugins.sh`, then `build-installer.sh` with `VFD_SIGN_IDENTITY` and `VFD_NOTARY_PROFILE`; see its README).
+- **Windows 10/11 (x64):** VST3, built on GitHub Actions by `.github/workflows/windows.yml`. Every push to `main` builds each plug-in with MSVC, checks it with pluginval (strictness 5) and packages `vfd-suite-installer/windows/VividFeverDreamsSuite.iss` (Inno Setup). Download the installer from the run's artifacts. A plug-in is rebuilt only when something that goes into its VST3 changes (its folder except docs and tests, `shared/` or `patches/`).
 
 ## JUCE
 

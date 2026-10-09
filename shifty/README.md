@@ -26,7 +26,7 @@ This build is a **VST3 and Audio Unit (AU) effect for Apple Silicon Macs running
 
 Install with the release's installer, then reopen your DAW and rescan plug-ins if SHIFTY does not appear. In Ableton Live, enable **Use VST3 Plug-In System Folders** under **Settings → Plug-Ins**, then click **Rescan**. Logic Pro scans Audio Units by itself when it starts.
 
-The plug-in is signed locally rather than notarized by Apple. A downloaded copy may need macOS's **Open Anyway** approval. See [installer details](Installer/README.md).
+The plug-in is signed locally rather than notarized by Apple. A downloaded copy may need macOS's **Open Anyway** approval. See [installer details](Installer/README.md). Plug-ins installed from the Vivid Fever Dreams Suite installer (1.5.0 and later) are signed with the developer's Developer ID and notarized by Apple.
 
 ## The three engines
 

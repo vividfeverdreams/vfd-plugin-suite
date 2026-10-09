@@ -76,7 +76,7 @@ Click and recall fixes (bypass and transport fades, recall-race and parameter-fl
 
 The existing ENERGY HARVESTER installer (and the suite installer) installs only the VST3. To use the Audio Unit, copy `ENERGY HARVESTER.component` from the build folder to `~/Library/Audio/Plug-Ins/Components/` yourself and let your host rescan.
 
-This release was built and tested without installing anything into the real plug-in folders. Local builds are ad hoc signed and not Apple notarized, so macOS may ask for approval in Privacy & Security.
+This release was built and tested without installing anything into the real plug-in folders. Local builds are ad hoc signed and not Apple notarized, so macOS may ask for approval in Privacy & Security. Plug-ins installed from the Vivid Fever Dreams Suite installer (1.5.0 and later) are signed with the developer's Developer ID and notarized by Apple.
 
 ## Build from source
 

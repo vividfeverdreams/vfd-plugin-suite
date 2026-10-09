@@ -4,7 +4,7 @@ One native installer for YOI-BOI 0.2.1, THROW-UP 0.2.0, BACK-SCRATCH 0.11.0, SHI
 
 All six report **VIVID FEVER DREAMS** as their creator/vendor. Plug-in names, bundle identifiers, and VST3 component/controller identities remain compatible with earlier releases. The Audio Units register under these codes (type/subtype/manufacturer): YOI-BOI `aumu/YB01/YBoi`, THROW-UP `aumf/Thr1/Yoib` (a MIDI-controlled effect, so MIDI throws work in Logic), BACK-SCRATCH `aufx/Bsc1/Yoib`, SHIFTY `aufx/Shf1/Yoib`, ENERGY HARVESTER `aufx/Enh1/Yoib`, STUTTER-STEP `aufx/Stp1/Yoib`.
 
-Requires **macOS 12 or later on Apple Silicon**. This package does not provide Intel or AAX builds. The installer and included plug-ins are ad-hoc signed and are not Apple notarized, so macOS asks you to approve the installer once (System Settings → Privacy & Security → Open Anyway). Developer ID signing and notarization will follow once the developer enrollment is in place.
+Requires **macOS 12 or later on Apple Silicon**. This package does not provide Intel or AAX builds. Since 1.5.0 the installer and every included plug-in are signed with the developer's Apple Developer ID and notarized by Apple, so the installer opens with a double-click like any downloaded Mac app. (Builds made without a Developer ID, see below, are ad hoc signed and need System Settings → Privacy & Security → Open Anyway once.)
 
 ## Install or update
 
@@ -73,6 +73,24 @@ bash build-installer.sh \
   /absolute/path/new-release-directory 1.5.0 /absolute/path/whats-new.json
 ```
 
+### Developer ID release
+
+1. Sign, notarize and staple the twelve plug-in bundles (copies; the build folders are untouched). `VFD-NOTARY` is a keychain profile made once with `xcrun notarytool store-credentials VFD-NOTARY --apple-id … --team-id …`:
+
+   ```sh
+   bash sign-plugins.sh "Developer ID Application: NAME (TEAMID)" VFD-NOTARY /absolute/path/signed-plugins \
+     /absolute/path/YOI-BOI.vst3 /absolute/path/YOI-BOI.component …
+   ```
+
+2. Build the installer from `/absolute/path/signed-plugins`, with the app signed, notarized and stapled too:
+
+   ```sh
+   VFD_SIGN_IDENTITY="Developer ID Application: NAME (TEAMID)" VFD_NOTARY_PROFILE=VFD-NOTARY \
+     bash build-installer.sh /absolute/path/signed-plugins/YOI-BOI.vst3 … /absolute/path/new-release-directory 1.5.0 /absolute/path/whats-new.json
+   ```
+
+Plug-ins are signed with the hardened runtime and a secure timestamp. A notarized, stapled installer needs neither Open Anyway nor `Prepare VFD Beta.command`.
+
 `whats-new.json` is a JSON object keyed by plug-in name; each value is one to six short lines (at most 160 characters each), for example `{"YOI-BOI": ["Now also an Audio Unit for Logic Pro and GarageBand."], …}`. Every suite plug-in needs an entry.
 
-Requires Apple’s Xcode command-line tools. Packaging preserves plug-in bytes and their existing signatures. It reads the VST3 class IDs and AU codes from the supplied bundles and refuses any AU whose codes differ from `SuiteCatalog` (update the catalog if a plug-in’s codes change on purpose). It embeds the manifest and What’s new, signs the installer ad hoc, runs verification and fixture tests, and builds everything in a work folder before moving it into place. The release contains the installer ZIP, source ZIP, `SHA256SUMS.txt`, and `Prepare VFD Beta.command`, generated from the template with the signed installer executable’s SHA-256 filled in.
+Requires Apple’s Xcode command-line tools. Packaging preserves plug-in bytes and their existing signatures. It reads the VST3 class IDs and AU codes from the supplied bundles and refuses any AU whose codes differ from `SuiteCatalog` (update the catalog if a plug-in’s codes change on purpose). It embeds the manifest and What’s new, signs the installer (ad hoc unless `VFD_SIGN_IDENTITY` is set), runs verification and fixture tests, and builds everything in a work folder before moving it into place. The release contains the installer ZIP, source ZIP, `SHA256SUMS.txt`, and `Prepare VFD Beta.command`, generated from the template with the signed installer executable’s SHA-256 filled in.

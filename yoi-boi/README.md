@@ -61,7 +61,7 @@ The installer checks the payload and refuses downgrades. It won't update while k
 
 **Audio Unit** (new in 0.2.0) is for Logic Pro, GarageBand and other AU hosts. Quit Logic Pro, GarageBand and MainStage before installing it. The installer then asks macOS to refresh its Audio Unit list; restart Logic afterwards.
 
-Everything is built for **Apple Silicon**. The instrument needs macOS 11 or later and the installer macOS 12 or later. All products carry an **ad-hoc development signature**, not Developer ID notarization, so macOS may ask for a one-time **Open Anyway** approval. Intel and Windows builds are not supplied.
+Everything is built for **Apple Silicon**. The instrument needs macOS 11 or later and the installer macOS 12 or later. All products carry an **ad-hoc development signature**, not Developer ID notarization, so macOS may ask for a one-time **Open Anyway** approval. Intel and Windows builds are not supplied. Plug-ins installed from the Vivid Fever Dreams Suite installer (1.5.0 and later) are signed with the developer's Developer ID and notarized by Apple.
 
 ## Older projects and saved sounds
 

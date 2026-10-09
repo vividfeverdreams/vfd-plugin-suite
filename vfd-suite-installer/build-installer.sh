@@ -6,6 +6,16 @@ set -euo pipefail
 #   SHIFTY.vst3 SHIFTY.component "ENERGY HARVESTER.vst3" "ENERGY HARVESTER.component" \
 #   STUTTER-STEP.vst3 STUTTER-STEP.component OUTPUT-DIRECTORY SUITE_VERSION WHATS-NEW.json
 # Every path must be absolute. Each plug-in is supplied as its signed VST3 bundle followed by its signed AU bundle.
+#
+# Signing: by default the installer app is ad hoc signed. For a release, set
+#   VFD_SIGN_IDENTITY="Developer ID Application: NAME (TEAMID)"   sign with the hardened runtime and a timestamp
+#   VFD_NOTARY_PROFILE=VFD-NOTARY                                  then notarize and staple the app
+# and pass plug-in bundles already signed and stapled by sign-plugins.sh (they are embedded byte for byte).
+installer_identity="${VFD_SIGN_IDENTITY:--}"
+installer_notary_profile="${VFD_NOTARY_PROFILE:-}"
+if [[ -n "$installer_notary_profile" && "$installer_identity" == "-" ]]; then
+    printf 'Notarization needs a Developer ID identity: set VFD_SIGN_IDENTITY.\n' >&2; exit 1
+fi
 installer_names=("YOI-BOI" "THROW-UP" "BACK-SCRATCH" "SHIFTY" "ENERGY HARVESTER" "STUTTER-STEP")
 if [[ $# -ne 15 ]]; then
     printf 'Usage: %s <VST3> <AU> for YOI-BOI, THROW-UP, BACK-SCRATCH, SHIFTY, ENERGY HARVESTER and STUTTER-STEP (in that order), then /absolute/output-directory 1.5.0 /absolute/whats-new.json\n' "$0" >&2
@@ -87,8 +97,29 @@ cat > "$installer_app/Contents/Info.plist" <<EOF
 EOF
 "$installer_app/Contents/MacOS/VFD-Suite-Installer" --make-manifest "$installer_resources/Payload" \
     "$installer_resources/suite-manifest.json" "$installer_version"
-/usr/bin/codesign --force --sign - "$installer_app"
+if [[ "$installer_identity" == "-" ]]; then
+    /usr/bin/codesign --force --sign - "$installer_app"
+else
+    /usr/bin/codesign --force --options runtime --timestamp --sign "$installer_identity" "$installer_app"
+fi
 /usr/bin/codesign --verify --deep --strict "$installer_app"
+if [[ -n "$installer_notary_profile" ]]; then
+    /usr/bin/ditto -c -k --keepParent --sequesterRsrc "$installer_app" "$installer_work/notarize.zip"
+    xcrun notarytool submit "$installer_work/notarize.zip" --keychain-profile "$installer_notary_profile" --wait \
+        --output-format json > "$installer_work/notarize.json" || true
+    installer_notary_status="$(/usr/bin/python3 -I -c 'import json,sys; print(json.load(open(sys.argv[1])).get("status",""))' "$installer_work/notarize.json" 2>/dev/null || true)"
+    installer_notary_id="$(/usr/bin/python3 -I -c 'import json,sys; print(json.load(open(sys.argv[1])).get("id",""))' "$installer_work/notarize.json" 2>/dev/null || true)"
+    if [[ "$installer_notary_status" != "Accepted" ]]; then
+        printf 'Installer notarization was not accepted (status: %s).\n' "${installer_notary_status:-unknown}" >&2
+        [[ -n "$installer_notary_id" ]] && xcrun notarytool log "$installer_notary_id" --keychain-profile "$installer_notary_profile" >&2 || true
+        exit 1
+    fi
+    rm -f "$installer_work/notarize.zip"
+    xcrun stapler staple -q "$installer_app"
+    xcrun stapler validate -q "$installer_app"
+    /usr/sbin/spctl --assess --type execute "$installer_app"
+    printf 'Installer notarized (submission %s) and stapled.\n' "$installer_notary_id"
+fi
 "$installer_app/Contents/MacOS/VFD-Suite-Installer" --inspect-payload > "$installer_work/payload-verification.txt"
 "$installer_app/Contents/MacOS/VFD-Suite-Installer" --self-test > "$installer_work/installer-tests.txt"
 # Every release artifact is produced inside the work directory first. Nothing reaches the output directory

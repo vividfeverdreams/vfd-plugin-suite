@@ -1,8 +1,9 @@
 # Windows builds of the suite: each plug-in's VST3 (x64, MSVC), checked with pluginval, then the
 # Windows installer. Mac builds and the Mac installer are made locally (see each plug-in's README).
 #
-# A plug-in is rebuilt only when its folder, shared/, patches/ or this file changes; otherwise its
-# last validated bundle comes from the cache. Windows minutes on private repos cost double.
+# A plug-in is rebuilt only when something that goes into its VST3 changes (its folder except docs and
+# tests, shared/ or patches/); otherwise its last validated bundle comes from the cache. Bump
+# BUILD_RECIPE when the build steps below change. Windows minutes on private repos cost double.
 name: Windows build
 
 on:
@@ -18,6 +19,7 @@ env:
   SUITE_VERSION: "1.5.0"
   JUCE_TAG: "9.0.2"
   PLUGINVAL_VERSION: "v1.0.4"
+  BUILD_RECIPE: "1"
 
 jobs:
   plugin:
@@ -42,7 +44,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: dist
-          key: vst3-${{ matrix.folder }}-${{ hashFiles(format('{0}/**', matrix.folder), 'shared/**', 'patches/**', '.github/workflows/windows.yml') }}
+          key: vst3-r${{ env.BUILD_RECIPE }}-${{ matrix.folder }}-${{ hashFiles(format('{0}/**', matrix.folder), format('!{0}/**/*.md', matrix.folder), format('!{0}/Tests/**', matrix.folder), 'shared/**', 'patches/**') }}
 
       - name: JUCE ${{ env.JUCE_TAG }}
         if: steps.cache.outputs.cache-hit != 'true'

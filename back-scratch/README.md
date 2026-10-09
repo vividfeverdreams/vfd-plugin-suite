@@ -149,7 +149,7 @@ The plug-in identity is unchanged (VST3 and the new AU share the bundle ID `com.
 
 ## Build and verification
 
-Apple Silicon macOS 12+, VST3 and Audio Unit. Plug-ins are locally ad hoc signed. See **VALIDATION.md** for the automated checks and what was not verified (actual DAW sessions, listening, and AU validation with Apple's `auval`, which needs the AU installed).
+Apple Silicon macOS 12+, VST3 and Audio Unit. Plug-ins are locally ad hoc signed. See **VALIDATION.md** for the automated checks and what was not verified (actual DAW sessions, listening, and AU validation with Apple's `auval`, which needs the AU installed). Plug-ins installed from the Vivid Fever Dreams Suite installer (1.5.0 and later) are signed with the developer's Developer ID and notarized by Apple.
 
 Build with C++20, CMake and the included patched JUCE tree. Keep the source archive's `back-scratch` and `shared` directories beside each other: the shared folder supplies the VFD logo and Info interface. Run these commands from `back-scratch`:
 
