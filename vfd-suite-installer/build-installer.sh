@@ -4,19 +4,19 @@ set -euo pipefail
 # Usage: build-installer.sh \
 #   YOI-BOI.vst3 YOI-BOI.component THROW-UP.vst3 THROW-UP.component BACK-SCRATCH.vst3 BACK-SCRATCH.component \
 #   SHIFTY.vst3 SHIFTY.component "ENERGY HARVESTER.vst3" "ENERGY HARVESTER.component" \
-#   OUTPUT-DIRECTORY SUITE_VERSION WHATS-NEW.json
+#   STUTTER-STEP.vst3 STUTTER-STEP.component OUTPUT-DIRECTORY SUITE_VERSION WHATS-NEW.json
 # Every path must be absolute. Each plug-in is supplied as its signed VST3 bundle followed by its signed AU bundle.
-installer_names=("YOI-BOI" "THROW-UP" "BACK-SCRATCH" "SHIFTY" "ENERGY HARVESTER")
-if [[ $# -ne 13 ]]; then
-    printf 'Usage: %s <VST3> <AU> for YOI-BOI, THROW-UP, BACK-SCRATCH, SHIFTY and ENERGY HARVESTER (in that order), then /absolute/output-directory 1.3.0 /absolute/whats-new.json\n' "$0" >&2
+installer_names=("YOI-BOI" "THROW-UP" "BACK-SCRATCH" "SHIFTY" "ENERGY HARVESTER" "STUTTER-STEP")
+if [[ $# -ne 15 ]]; then
+    printf 'Usage: %s <VST3> <AU> for YOI-BOI, THROW-UP, BACK-SCRATCH, SHIFTY, ENERGY HARVESTER and STUTTER-STEP (in that order), then /absolute/output-directory 1.4.0 /absolute/whats-new.json\n' "$0" >&2
     exit 1
 fi
 installer_source_dir="$(cd "$(dirname "$0")" && pwd -P)"
-installer_vst3=("$1" "$3" "$5" "$7" "$9")
-installer_au=("$2" "$4" "$6" "$8" "${10}")
-installer_output="${11}"
-installer_version="${12}"
-installer_whats_new="${13}"
+installer_vst3=("$1" "$3" "$5" "$7" "$9" "${11}")
+installer_au=("$2" "$4" "$6" "$8" "${10}" "${12}")
+installer_output="${13}"
+installer_version="${14}"
+installer_whats_new="${15}"
 if [[ ! "$installer_version" =~ ^[0-9]+(\.[0-9]+){1,3}$ ]]; then
     printf 'Suite version must have two to four numeric components.\n' >&2; exit 1
 fi
@@ -26,7 +26,7 @@ case "$installer_whats_new" in /*) ;; *) printf 'The what'"'"'s-new JSON path mu
 installer_whats_new="$(cd "$(dirname "$installer_whats_new")" && pwd -P)/$(basename "$installer_whats_new")"
 installer_helper_template="$installer_source_dir/scripts/Prepare VFD Beta.command.template"
 [[ -f "$installer_helper_template" ]] || { printf 'Missing beta helper template: %s\n' "$installer_helper_template" >&2; exit 1; }
-for installer_index in 0 1 2 3 4; do
+for installer_index in "${!installer_names[@]}"; do
     installer_name="${installer_names[$installer_index]}"
     for installer_kind in vst3 component; do
         if [[ "$installer_kind" == vst3 ]]; then installer_payload="${installer_vst3[$installer_index]}"; else installer_payload="${installer_au[$installer_index]}"; fi
@@ -63,7 +63,7 @@ cp "$installer_work/Assets/AppIcon.icns" "$installer_resources/AppIcon.icns"
 cp "$installer_work/Assets/VfdLogo.png" "$installer_resources/VfdLogo.png"
 "$installer_app/Contents/MacOS/VFD-Suite-Installer" --check-whats-new "$installer_whats_new"
 cp "$installer_whats_new" "$installer_resources/whats-new.json"
-for installer_index in 0 1 2 3 4; do
+for installer_index in "${!installer_names[@]}"; do
     # Preserve the supplied signatures and bytes. Never re-sign plug-in payloads here.
     /usr/bin/ditto --noqtn "${installer_vst3[$installer_index]}" "$installer_resources/Payload/${installer_names[$installer_index]}.vst3"
     /usr/bin/ditto --noqtn "${installer_au[$installer_index]}" "$installer_resources/Payload/${installer_names[$installer_index]}.component"

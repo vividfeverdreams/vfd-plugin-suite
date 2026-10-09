@@ -1,6 +1,6 @@
 # Vivid Fever Dreams info controls
 
-The five plugins use `VfdInfo.h` and the supplied `VfdLogo.svg` from this directory. Each plugin adds the SVG to its existing JUCE binary data target and passes its Chakra Petch typeface to the shared components. The original logo's path geometry is preserved; only its display color is adapted to the plugin palette.
+The six plugins use `VfdInfo.h` and the supplied `VfdLogo.svg` from this directory. Each plugin adds the SVG to its existing JUCE binary data target and passes its Chakra Petch typeface to the shared components. The original logo's path geometry is preserved; only its display color is adapted to the plugin palette.
 
 `InfoButton` paints the dedicated molded INFO key. `InfoOverlay` owns the logo, credits, external links and close control. Opening or closing this component never changes processor state. The page intercepts pointer input, contains keyboard focus while open, closes on Escape, and returns focus to the invoking key.
 

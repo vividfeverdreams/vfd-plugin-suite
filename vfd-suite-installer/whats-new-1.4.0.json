@@ -1,0 +1,45 @@
+{
+  "YOI-BOI": [
+    "Talk patterns that lock to your tempo, plus mod-wheel and aftertouch scrubbing of the vowel.",
+    "Bends up to 24 semitones, legato-only glide and a pitch envelope for dives and rises.",
+    "Diode, Fold and Crush shapers, a Squash stage, new vowels and t/k/ch attacks, and an optional separate Sub output.",
+    "Bounce 8 or 16 variations to WAV and drag them straight into your DAW.",
+    "75 new sounds in folders. Your saved projects keep their original sound.",
+    "Now also an Audio Unit for Logic Pro and GarageBand."
+  ],
+  "THROW-UP": [
+    "Throw without drawing automation: THROW! key, MIDI notes, or Auto-catch at the end of a phrase.",
+    "Low cut now cuts where it says, Grit is real saturation, and Duck can follow a sidechain.",
+    "Tempo-synced pre-delay, Freeze, Shimmer, Swell, a wet Return trim, an optional Safe clip and Send mode.",
+    "90 rooms in folders plus the original 50, user presets and A/B compare.",
+    "Your saved projects keep their original sound. Now also an Audio Unit."
+  ],
+  "BACK-SCRATCH": [
+    "PERFORM page: quantized Engage with Retrigger, and fills that play every 2, 4 or 8 phrases.",
+    "Rolls and tape-stop shapes, pattern slots A-H with chains, Mix, Depth up to 4x and Look Back.",
+    "No more dropouts when the tempo slows into a half-time drop; host bypass stays in time.",
+    "230 presets in 17 folders. Your saved projects keep their original sound.",
+    "Now also an Audio Unit."
+  ],
+  "SHIFTY": [
+    "New TALK engine: zero latency and real vowel resonances that make raw saws and Reese basses talk.",
+    "MOUTH engine for true bigger/smaller-mouth formant shifting, and a low-latency Classic mode.",
+    "Envelope follower, a YOI sweep on every note, CHARACTER and TALK macros, and a cleaner Drive.",
+    "114 presets in folders. Your saved projects keep their original sound.",
+    "Now also an Audio Unit."
+  ],
+  "ENERGY HARVESTER": [
+    "New modes: Tape Stop, Brake, Stop-to-Start and Rewind, plus a True Tape engine.",
+    "Land on the grid, Sub Keep, curve and start depth, a resonant filter sweep and Clean/Tail/Hold landings.",
+    "A new light show that spins with the tape, and the device now fills the whole window.",
+    "56 transition presets in folders. Your saved projects keep their original sound.",
+    "Now also an Audio Unit."
+  ],
+  "STUTTER-STEP": [
+    "New: a swing gate for sustained mid-basses and subs. NEW GROOVE rolls a fresh pattern, swung most of the time.",
+    "Pick which hits feed a slap delay. LOCK lands each echo on the swung off-step; GAPS plays echoes only in the holes.",
+    "SUB SAFE keeps the lows out of the echoes, so the sub stays clean and mono.",
+    "43 grooves in 8 folders: halftime, riddim, triplet, left-field, dub, shuffle, sub and stutter.",
+    "VST3 and Audio Unit."
+  ]
+}

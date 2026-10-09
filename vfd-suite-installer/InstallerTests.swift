@@ -34,6 +34,7 @@ func runInstallerTests() throws {
     }
     func exists(_ url: URL) -> Bool { SuiteInstallerEngine.exists(url) }
     let all = Set(SuiteCatalog.allItems)
+    let total = SuiteCatalog.allItems.count
     let vst3Items = Set(SuiteCatalog.allItems.filter { $0.format == .vst3 })
     let auItems = Set(SuiteCatalog.allItems.filter { $0.format == .au })
     func key(_ plugin: Int, _ format: PluginFormat) -> ItemKey { ItemKey(plugin: plugin, format: format) }
@@ -159,7 +160,7 @@ func runInstallerTests() throws {
     try fm.createDirectory(at: preset.deletingLastPathComponent(), withIntermediateDirectories: true)
     try Data("a saved sound".utf8).write(to: preset)
     let first = try initial.install(selection: all)
-    try expect(first.installed.count == 10 && first.updated.isEmpty && first.skipped.isEmpty, "all ten VST3 and AU bundles install together")
+    try expect(first.installed.count == SuiteCatalog.allItems.count && first.updated.isEmpty && first.skipped.isEmpty, "every VST3 and AU bundle installs together")
     for item in SuiteCatalog.allItems {
         try initial.verifyPayload(at: initial.destinationURL(item), key: item)
         try expect(try SuiteInstallerEngine.fileHashes(in: initial.destinationURL(item)) == manifest.entry(item).files,
@@ -169,12 +170,12 @@ func runInstallerTests() throws {
                "Audio Units go to the Components folder and the AU list is refreshed once")
     try expect(try String(contentsOf: preset) == "a saved sound", "user presets remain unchanged")
     let again = try initial.install(selection: all)
-    try expect(again.skipped.count == 10 && again.installed.isEmpty && again.updated.isEmpty, "a repeat install skips every bundle whose bytes already match")
+    try expect(again.skipped.count == SuiteCatalog.allItems.count && again.installed.isEmpty && again.updated.isEmpty, "a repeat install skips every bundle whose bytes already match")
     try expect(refreshCount == 1 && !again.audioUnitsRefreshed && (try clean(initial)), "nothing is refreshed or staged when nothing changed")
     try expect(first.warnings.isEmpty && again.warnings.isEmpty, "a normal installation reports no warnings")
     let mixed = try scenario(existing: [key(0, .vst3), key(2, .vst3), key(1, .au)])
     let mixedResult = try mixed.install(selection: all)
-    try expect(mixedResult.installed.count == 7 && mixedResult.updated.count == 3, "mixed new/update selection commits all ten")
+    try expect(mixedResult.installed.count == total - 3 && mixedResult.updated.count == 3, "mixed new/update selection commits every bundle")
 
     // MARK: Status shown beside each checkbox
 
@@ -217,7 +218,7 @@ func runInstallerTests() throws {
     try fm.removeItem(at: partial.destinationURL(key(3, .vst3)))
     try fm.copyItem(at: oldRoot.appendingPathComponent("SHIFTY.vst3"), to: partial.destinationURL(key(3, .vst3)))
     let partialResult = try partial.install(selection: all)
-    try expect(partialResult.updated == [key(3, .vst3)] && partialResult.skipped.count == 9, "only the changed bundle is replaced; nine identical ones are skipped")
+    try expect(partialResult.updated == [key(3, .vst3)] && partialResult.skipped.count == total - 1, "only the changed bundle is replaced; the identical ones are skipped")
     try rejectsWith("an empty selection is refused", containing: "Select at least one") { _ = try partial.install(selection: []) }
 
     // Every possible partial commit is exercised for new, update, and mixed selections.
@@ -250,14 +251,14 @@ func runInstallerTests() throws {
     try rejectsWith("a newer installed bundle blocks the selection that includes it", containing: "Untick it") { _ = try newer.install(selection: all) }
     try expect(try state(newer) == newerState, "downgrade refusal leaves every bundle intact")
     let withoutNewer = try newer.install(selection: all.subtracting([key(4, .vst3)]))
-    try expect(withoutNewer.updated.count == 9, "unticking the newer bundle installs the other nine")
+    try expect(withoutNewer.updated.count == total - 1, "unticking the newer bundle installs the rest")
     let tampered = try scenario(existing: [key(0, .vst3), key(2, .au)])
     let tamperedState = try state(tampered)
     let extra = payloadRoot.appendingPathComponent("ENERGY HARVESTER.component/Contents/Resources/tampered.txt")
     try Data("extra".utf8).write(to: extra)
     try rejects("last embedded payload corruption blocks all commits") { _ = try tampered.install(selection: all) }
     try expect(try state(tampered) == tamperedState, "payload corruption preserves every installed bundle")
-    try expect((try tampered.install(selection: vst3Items)).installed.count == 4, "a corrupt AU payload does not block a VST3-only selection")
+    try expect((try tampered.install(selection: vst3Items)).installed.count == vst3Items.count - 1, "a corrupt AU payload does not block a VST3-only selection")
     try fm.removeItem(at: extra)
     let system = try scenario(existing: [key(0, .vst3)])
     try fm.createDirectory(at: system.locations.systemVST3, withIntermediateDirectories: true)
@@ -334,7 +335,7 @@ func runInstallerTests() throws {
     try expect(try state(lateHost) == hostState, "late host refusal restores original state")
     let logicRunning = try scenario(hosts: { formats in formats.contains(.au) ? ["Logic Pro"] : [] })
     try rejectsWith("Logic Pro blocks an AU install", containing: "Logic Pro") { _ = try logicRunning.install(selection: all) }
-    try expect((try logicRunning.install(selection: vst3Items)).installed.count == 5, "Logic Pro does not block a VST3-only install")
+    try expect((try logicRunning.install(selection: vst3Items)).installed.count == vst3Items.count, "Logic Pro does not block a VST3-only install")
     let race = try scenario(existing: [key(0, .vst3), key(2, .vst3)])
     let changedFile = race.destinationURL(key(0, .vst3)).appendingPathComponent("Contents/Resources/external.txt")
     race.afterStagingForTesting = { try Data("independent edit".utf8).write(to: changedFile) }
@@ -437,7 +438,7 @@ func runInstallerTests() throws {
     let quarantineEngine = makeEngine(quarantineTarget.locations, payload: quarantinedPayload)
     let quarantineResult = try quarantineEngine.install(selection: all)
     let installedPaths = SuiteCatalog.allItems.flatMap { allPaths(quarantineTarget.destinationURL($0)) }
-    try expect(quarantineResult.installed.count == 9 && allPaths(quarantinedPayload).allSatisfy(hasQuarantine),
+    try expect(quarantineResult.installed.count == total - 1 && allPaths(quarantinedPayload).allSatisfy(hasQuarantine),
                "a fully quarantined payload installs, and the payload itself keeps its flags")
     try expect(installedPaths.count > 20 && !installedPaths.contains(where: hasQuarantine), "installed VST3 and AU bundles never inherit the quarantine flag")
 
@@ -481,7 +482,7 @@ func runInstallerTests() throws {
     let stagingFolder = try leftover(in: safeStaging, state: "staging", format: 3, payload: true, keys: SuiteCatalog.allItems)
     let afterCleanup = try safeStaging.install(selection: all)
     try expect(!exists(stagingFolder) && (try clean(safeStaging)), "an interrupted staging transaction that changed nothing is cleaned up automatically")
-    try expect(afterCleanup.installed.count == 8 && afterCleanup.updated.count == 2, "installation proceeds after the automatic cleanup")
+    try expect(afterCleanup.installed.count == total - 2 && afterCleanup.updated.count == 2, "installation proceeds after the automatic cleanup")
     let legacyPrepared = try scenario(existing: [key(1, .vst3)])
     let legacyFolder = try leftover(in: legacyPrepared, state: "prepared", format: nil, payload: false)
     _ = try legacyPrepared.install(selection: all)
@@ -499,7 +500,7 @@ func runInstallerTests() throws {
     _ = try finished.install(selection: all)
     let finishedFolder = try leftover(in: finished, state: "all-verified", format: 3, payload: true, keys: SuiteCatalog.allItems)
     _ = try finished.install(selection: all)
-    try expect(!exists(finishedFolder), "a transaction that had already verified all ten is cleaned up")
+    try expect(!exists(finishedFolder), "a transaction that had already verified every bundle is cleaned up")
     let legacyFinished = try scenario()
     _ = try legacyFinished.install(selection: all)
     let legacyFinishedFolder = try leftover(in: legacyFinished, state: "all-verified", format: nil, payload: false)
@@ -545,7 +546,7 @@ func runInstallerTests() throws {
     let recorded = retained.flatMap { SuiteInstallerEngine.readJournal($0) }
     let recordedStates = recorded?.items?.map(\.state) ?? []
     try expect(recorded?.state == "recovery-required" && Array(recordedStates.prefix(3)) == ["rollback-failed", "restored", "pending"]
-               && recordedStates.count == 10 && recorded?.items?[0].destination == broken.destinationURL(key(0, .vst3)).path,
+               && recordedStates.count == SuiteCatalog.allItems.count && recorded?.items?[0].destination == broken.destinationURL(key(0, .vst3)).path,
                "the retained journal records each item's state and destination")
     try expect(retained.map { exists($0.appendingPathComponent("0.staged")) && !exists($0.appendingPathComponent("1.staged")) } == true,
                "the restored item's rolled-back copy is removed, so retained copies are never ambiguous")
@@ -560,7 +561,7 @@ func runInstallerTests() throws {
         stagedNames = try fm.contentsOfDirectory(atPath: folder.path).sorted()
     }
     _ = try naming.install(selection: all)
-    try expect(stagedNames == (0..<10).map { "\($0).staged" } + ["transaction.json"],
+    try expect(stagedNames == ((0..<SuiteCatalog.allItems.count).map { "\($0).staged" } + ["transaction.json"]).sorted(),
                "staged copies use extension-less names that audio apps and the AU registrar never scan")
 
     // MARK: Single-plugin installer leftovers
@@ -604,13 +605,13 @@ func runInstallerTests() throws {
     try fm.createDirectory(at: thirdPartyBundle.appendingPathComponent("Contents"), withIntermediateDirectories: true)
     try PropertyListSerialization.data(fromPropertyList: ["CFBundleIdentifier": "com.othervendor.shifty"], format: .xml, options: 0)
         .write(to: thirdPartyBundle.appendingPathComponent("Contents/Info.plist"))
-    try expect((try thirdParty.install(selection: all)).installed.count == 10, "another vendor's system plug-in that shares a name does not block the suite")
+    try expect((try thirdParty.install(selection: all)).installed.count == SuiteCatalog.allItems.count, "another vendor's system plug-in that shares a name does not block the suite")
     let relocated = try scenario()
     let realSystem = root.appendingPathComponent("RelocatedSystemComponents")
     try fm.createDirectory(at: realSystem, withIntermediateDirectories: true)
     try fm.createDirectory(at: relocated.locations.systemComponents.deletingLastPathComponent(), withIntermediateDirectories: true)
     try fm.createSymbolicLink(at: relocated.locations.systemComponents, withDestinationURL: realSystem)
-    try expect((try relocated.install(selection: all)).installed.count == 10, "a relocated (symlinked) system Components folder is read, not refused")
+    try expect((try relocated.install(selection: all)).installed.count == SuiteCatalog.allItems.count, "a relocated (symlinked) system Components folder is read, not refused")
     try fm.copyItem(at: oldRoot.appendingPathComponent("SHIFTY.component"), to: realSystem.appendingPathComponent("SHIFTY.component"))
     try rejects("a duplicate inside a symlinked system Components folder is still detected") { _ = try relocated.install(selection: auItems) }
 
@@ -621,7 +622,7 @@ func runInstallerTests() throws {
     guard otherLock >= 0, flock(otherLock, LOCK_EX | LOCK_NB) == 0 else { throw InstallError.message("Cannot hold the fixture lock") }
     try rejectsWith("a lock held by another installer gets a plain explanation", containing: "Another Vivid Fever Dreams installer") { _ = try held.install(selection: auItems) }
     flock(otherLock, LOCK_UN); close(otherLock)
-    try expect((try held.install(selection: all)).installed.count == 10, "the leftover lock file does not block once nobody holds it")
+    try expect((try held.install(selection: all)).installed.count == SuiteCatalog.allItems.count, "the leftover lock file does not block once nobody holds it")
     let hardLinked = try scenario()
     let lockFile = hardLinked.locations.userVST3.appendingPathComponent(SuiteInstallerEngine.lockName)
     try Data().write(to: lockFile)
@@ -647,7 +648,7 @@ func runInstallerTests() throws {
     let aliasPayload = root.appendingPathComponent("PayloadAlias")
     try fm.createSymbolicLink(at: aliasPayload, withDestinationURL: payloadRoot)
     let viaAlias = try scenario()
-    try expect((try makeEngine(viaAlias.locations, payload: aliasPayload).install(selection: all)).installed.count == 10,
+    try expect((try makeEngine(viaAlias.locations, payload: aliasPayload).install(selection: all)).installed.count == SuiteCatalog.allItems.count,
                "an installer opened through a symlinked folder still verifies and installs its payload")
 
     // MARK: Uninstall moves verified bundles to the Trash
@@ -657,7 +658,7 @@ func runInstallerTests() throws {
     let refreshesBeforeRemoval = refreshCount
     let removing: Set<ItemKey> = [key(0, .vst3), key(0, .au), key(3, .vst3), key(4, .au)]
     let removed = try removal.uninstall(selection: removing)
-    try expect(removed.removed.count == 4 && removing.allSatisfy { !exists(removal.destinationURL($0)) } && (try state(removal)).count == 6,
+    try expect(removed.removed.count == 4 && removing.allSatisfy { !exists(removal.destinationURL($0)) } && (try state(removal)).count == total - 4,
                "uninstall removes exactly the four selected bundles")
     try expect(trash(removal).count == 4 && removed.removed.allSatisfy { item in
         item.trashedAt.map { (try? SuiteInstallerEngine.fileHashes(in: $0)) == manifest.entry(item.key).files } == true
@@ -705,7 +706,7 @@ func runInstallerTests() throws {
                && !exists(crashed.destinationURL(key(0, .au))) && !exists(crashFolder),
                "Restore Previous Versions puts back the hash-verified backup and removes the added AU")
     try expect(trash(crashed).count == 2 && refreshCount == refreshesBeforeRepair + 1, "the added AU and the finished folder go to the Trash; AUs are refreshed")
-    try expect((try crashed.install(selection: all)).installed.count == 9, "installation works again after the repair")
+    try expect((try crashed.install(selection: all)).installed.count == total - 1, "installation works again after the repair")
     let brokenIssue = broken.repairIssues().first { if case .suiteTransaction = $0.kind { return true }; return false }
     try expect(brokenIssue?.canRestore == false && brokenIssue?.detail.contains("changed after the interrupted installation") == true,
                "a transaction whose destination changed afterwards is not restored automatically")
@@ -713,7 +714,7 @@ func runInstallerTests() throws {
     broken.failAfterCommitForTesting = nil
     broken.afterCommitForTesting = nil
     let afterCleanUp = try broken.install(selection: all)
-    try expect(trash(broken).count == 1 && afterCleanUp.installed.count + afterCleanUp.updated.count == 10 && (try clean(broken)),
+    try expect(trash(broken).count == 1 && afterCleanUp.installed.count + afterCleanUp.updated.count == SuiteCatalog.allItems.count && (try clean(broken)),
                "Clean Up moves it to the Trash and installation works again")
     let leftovers = try scenario()
     try fm.createDirectory(at: leftovers.locations.userComponents, withIntermediateDirectories: true)

@@ -55,18 +55,22 @@ enum ResultSummary {
 }
 
 final class InstallerDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
-    /// Fits a 1280×800 display with the menu bar and Dock visible; the content scrolls on anything shorter.
-    private static let contentSize = NSSize(width: 700, height: 640)
-    private static let descriptions = ["Talking bass synth", "Mid-bass reverb", "Scratch automation", "Formant shifter", "Magnetic tape-start FX"]
+    /// One 66-point row per plug-in; the heading moves up with them. With six plug-ins the window fits a 1280×800
+    /// display with the menu bar and a small Dock visible; the content scrolls on anything shorter.
+    private static let rowsHeight = CGFloat(SuiteCatalog.plugins.count * 66)
+    private static let contentSize = NSSize(width: 700, height: 310 + rowsHeight)
+    private static let descriptions = ["Talking bass synth", "Mid-bass reverb", "Scratch automation", "Formant shifter", "Magnetic tape-start FX",
+                                       "Swing gate + slap delay"]
     private static let colors = [NSColor(calibratedRed: 0.69, green: 0.57, blue: 1.0, alpha: 1),
                                  NSColor(calibratedRed: 1.0, green: 0.59, blue: 0.25, alpha: 1),
                                  NSColor(calibratedRed: 1.0, green: 0.38, blue: 0.46, alpha: 1),
                                  NSColor(calibratedRed: 0.50, green: 0.87, blue: 0.38, alpha: 1),
-                                 NSColor(calibratedRed: 1.0, green: 0.23, blue: 0.70, alpha: 1)]
+                                 NSColor(calibratedRed: 1.0, green: 0.23, blue: 0.70, alpha: 1),
+                                 NSColor(calibratedRed: 0.37, green: 0.91, blue: 0.85, alpha: 1)]
     private enum Page { case main, result, repair }
     private var window: NSWindow!
     private var documentView: NSView!
-    private let rows = NSView(frame: NSRect(x: 42, y: 180, width: 616, height: 330))
+    private let rows = NSView(frame: NSRect(x: 42, y: 180, width: 616, height: InstallerDelegate.rowsHeight))
     private var checkboxes: [ItemKey: NSButton] = [:]
     private var statusLabels: [ItemKey: NSTextField] = [:]
     private let folders = NSTextField(wrappingLabelWithString:
@@ -85,9 +89,9 @@ final class InstallerDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate
     private let confirmOK = NSButton(title: "Move to Trash", target: nil, action: nil)
     private var confirmAction: (() -> Void)?
     /// The result and repair pages also use the space of the folders note, which only the main page shows.
-    private let detailScroll = NSScrollView(frame: NSRect(x: 42, y: 140, width: 616, height: 370))
-    private let detailText = NSTextView(frame: NSRect(x: 0, y: 0, width: 600, height: 330))
-    private let repairList = FlippedView(frame: NSRect(x: 0, y: 0, width: 600, height: 330))
+    private let detailScroll = NSScrollView(frame: NSRect(x: 42, y: 140, width: 616, height: InstallerDelegate.rowsHeight + 40))
+    private let detailText = NSTextView(frame: NSRect(x: 0, y: 0, width: 600, height: InstallerDelegate.rowsHeight))
+    private let repairList = FlippedView(frame: NSRect(x: 0, y: 0, width: 600, height: InstallerDelegate.rowsHeight))
     private var page = Page.main
     private var busy = false
     private var engine: SuiteInstallerEngine?
@@ -150,18 +154,18 @@ final class InstallerDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate
         scroll.documentView = content
         window.contentView = scroll
         if let url = Bundle.main.url(forResource: "VfdLogo", withExtension: "png"), let image = NSImage(contentsOf: url) {
-            let mark = NSImageView(frame: NSRect(x: 42, y: 548, width: 64, height: 67))
+            let mark = NSImageView(frame: NSRect(x: 42, y: 218 + Self.rowsHeight, width: 64, height: 67))
             mark.image = image; mark.imageScaling = .scaleProportionallyUpOrDown
             mark.setAccessibilityLabel("Vivid Fever Dreams")
             content.addSubview(mark)
         }
-        addLabel("VIVID FEVER DREAMS", frame: NSRect(x: 122, y: 596, width: 520, height: 20),
+        addLabel("VIVID FEVER DREAMS", frame: NSRect(x: 122, y: 266 + Self.rowsHeight, width: 520, height: 20),
                  size: 12, weight: .semibold, color: NSColor(white: 0.72, alpha: 1), to: content)
-        addLabel("The complete suite", frame: NSRect(x: 120, y: 552, width: 520, height: 44),
+        addLabel("The complete suite", frame: NSRect(x: 120, y: 222 + Self.rowsHeight, width: 520, height: 44),
                  size: 30, weight: .bold, color: .white, to: content)
-        let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.3.0"
+        let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.4.0"
         addLabel("MACOS 12+   /   APPLE SILICON   /   VST3 + AUDIO UNIT   /   SUITE \(version)",
-                 frame: NSRect(x: 44, y: 520, width: 614, height: 18), size: 10, weight: .medium,
+                 frame: NSRect(x: 44, y: 190 + Self.rowsHeight, width: 614, height: 18), size: 10, weight: .medium,
                  color: NSColor(white: 0.57, alpha: 1), to: content)
         buildRows()
         content.addSubview(rows)
@@ -225,7 +229,7 @@ final class InstallerDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate
     }
     private func buildRows() {
         for (index, definition) in SuiteCatalog.plugins.enumerated() {
-            let row = NSView(frame: NSRect(x: 0, y: CGFloat(272 - index * 66), width: 616, height: 58))
+            let row = NSView(frame: NSRect(x: 0, y: CGFloat((SuiteCatalog.plugins.count - 1 - index) * 66), width: 616, height: 58))
             row.wantsLayer = true
             row.layer?.backgroundColor = NSColor(white: 0.115, alpha: 1).cgColor
             row.layer?.cornerRadius = 10

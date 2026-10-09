@@ -154,7 +154,9 @@ enum SuiteCatalog {
         PluginDefinition(name: "SHIFTY", bundleIdentifier: "com.yoiboi.shifty", version: "0.5.0",
                          audioUnit: AudioUnitIdentity(type: "aufx", subtype: "Shf1", manufacturer: "Yoib")),
         PluginDefinition(name: "ENERGY HARVESTER", bundleIdentifier: "com.yoiboi.energyharvester", version: "0.4.0",
-                         audioUnit: AudioUnitIdentity(type: "aufx", subtype: "Enh1", manufacturer: "Yoib"))
+                         audioUnit: AudioUnitIdentity(type: "aufx", subtype: "Enh1", manufacturer: "Yoib")),
+        PluginDefinition(name: "STUTTER-STEP", bundleIdentifier: "com.yoiboi.stutterstep", version: "0.2.0",
+                         audioUnit: AudioUnitIdentity(type: "aufx", subtype: "Stp1", manufacturer: "Yoib"))
     ]
     /// Canonical order: each plug-in's VST3, then its AU.
     static let allItems: [ItemKey] = plugins.indices.flatMap { index in PluginFormat.allCases.map { ItemKey(plugin: index, format: $0) } }

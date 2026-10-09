@@ -19,6 +19,9 @@ inline Theme themeFor(const juce::String& name)
     if (name.containsIgnoreCase("THROW"))
         return { c(0x211307), c(0xfff0d8), c(0xffcf83), c(0x674625), c(0xd6c3ac),
                  c(0xfff6cf), c(0xc6a793), c(0x694325), c(0x703514) };
+    if (name.containsIgnoreCase("STUTTER"))
+        return { c(0x071d1f), c(0xddf8f2), c(0x5fe8d8), c(0x2c5c5e), c(0xa6cdc8),
+                 c(0xf3fffb), c(0xa9d6d0), c(0x164244), c(0x0f4446) };
     if (name.containsIgnoreCase("SHIFTY"))
         return { c(0x09281d), c(0xd7ffee), c(0xc3ff62), c(0x42765b), c(0xb7d3c5),
                  c(0xf1ffe4), c(0x9bc5c3), c(0x245744), c(0x16533a) };
