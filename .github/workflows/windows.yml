@@ -1,0 +1,133 @@
+# Windows builds of the suite: each plug-in's VST3 (x64, MSVC), checked with pluginval, then the
+# Windows installer. Mac builds and the Mac installer are made locally (see each plug-in's README).
+#
+# A plug-in is rebuilt only when its folder, shared/, patches/ or this file changes; otherwise its
+# last validated bundle comes from the cache. Windows minutes on private repos cost double.
+name: Windows build
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: windows-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  SUITE_VERSION: "1.5.0"
+  JUCE_TAG: "9.0.2"
+  PLUGINVAL_VERSION: "v1.0.4"
+
+jobs:
+  plugin:
+    name: ${{ matrix.bundle }}
+    runs-on: windows-2022
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { folder: yoi-boi, target: YoiBoi_VST3, bundle: YOI-BOI, tests: YOIBOI_BUILD_TESTS }
+          - { folder: throw-up, target: ThrowUp_VST3, bundle: THROW-UP, tests: THROW_UP_BUILD_TESTS }
+          - { folder: back-scratch, target: BackScratch_VST3, bundle: BACK-SCRATCH, tests: BACK_SCRATCH_BUILD_TESTS }
+          - { folder: shifty, target: Shifty_VST3, bundle: SHIFTY, tests: SHIFTY_BUILD_TESTS }
+          - { folder: energy-harvester, target: EnergyHarvester_VST3, bundle: ENERGY HARVESTER, tests: ENERGY_HARVESTER_BUILD_TESTS }
+          - { folder: stutter-step, target: StutterStep_VST3, bundle: STUTTER-STEP, tests: STUTTER_BUILD_TESTS }
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Reuse the last validated build
+        id: cache
+        uses: actions/cache@v4
+        with:
+          path: dist
+          key: vst3-${{ matrix.folder }}-${{ hashFiles(format('{0}/**', matrix.folder), 'shared/**', 'patches/**', '.github/workflows/windows.yml') }}
+
+      - name: JUCE ${{ env.JUCE_TAG }}
+        if: steps.cache.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          git -c core.autocrlf=false clone --quiet --depth 1 --branch "$JUCE_TAG" https://github.com/juce-framework/JUCE.git "${{ matrix.folder }}/external/JUCE"
+          rm -rf "${{ matrix.folder }}/external/JUCE/.git"
+          patched="patches/juce-$JUCE_TAG/${{ matrix.folder }}/juce_audio_plugin_client_VST3.cpp"
+          if [ -f "$patched" ]; then
+            cp "$patched" "${{ matrix.folder }}/external/JUCE/modules/juce_audio_plugin_client/"
+            echo "Applied $patched"
+          fi
+
+      - name: Build
+        if: steps.cache.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake -S "${{ matrix.folder }}" -B build -G "Visual Studio 17 2022" -A x64 -D${{ matrix.tests }}=OFF
+          cmake --build build --config Release --target ${{ matrix.target }} --parallel -- -nologo -verbosity:minimal
+          mkdir -p dist
+          cp -R "$(find build -type d -path '*Release/VST3/*.vst3' -prune | head -1)" dist/
+          find dist -maxdepth 4 | sort
+
+      - name: pluginval (strictness 5)
+        if: steps.cache.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -sSL -o pluginval.zip "https://github.com/Tracktion/pluginval/releases/download/$PLUGINVAL_VERSION/pluginval_Windows.zip"
+          unzip -q -o pluginval.zip -d pluginval
+          exe="$(find pluginval -iname 'pluginval.exe' | head -1)"
+          log="dist/pluginval-${{ matrix.folder }}.txt"
+          if "$exe" --strictness-level 5 --validate-in-process --validate "dist/${{ matrix.bundle }}.vst3" > "$log" 2>&1; then
+            tail -n 3 "$log"
+          else
+            tail -n 60 "$log"
+            exit 1
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: vst3-${{ matrix.folder }}
+          path: dist
+          if-no-files-found: error
+
+  installer:
+    needs: plugin
+    runs-on: windows-2022
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: vst3-*
+          path: artifacts
+
+      - name: Collect the bundles
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist/VST3 dist/pluginval
+          for folder in artifacts/vst3-*; do
+            cp -R "$folder"/*.vst3 dist/VST3/
+            cp "$folder"/pluginval-*.txt dist/pluginval/ 2>/dev/null || true
+          done
+          ls dist/VST3
+          test "$(ls -d dist/VST3/*.vst3 | wc -l)" -eq 6
+
+      - name: Installer (Inno Setup)
+        shell: pwsh
+        run: |
+          choco install innosetup --no-progress -y | Out-Null
+          $iscc = Join-Path ${env:ProgramFiles(x86)} "Inno Setup 6\ISCC.exe"
+          & $iscc /Q "/DSuiteVersion=$env:SUITE_VERSION" "/DSourceDir=$PWD\dist\VST3" "/O$PWD\dist" vfd-suite-installer\windows\VividFeverDreamsSuite.iss
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Compress-Archive -Path dist\VST3\* -DestinationPath "dist\Vivid-Fever-Dreams-Suite-v$env:SUITE_VERSION-Beta-Windows-VST3.zip"
+          Get-ChildItem dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Vivid-Fever-Dreams-Suite-v${{ env.SUITE_VERSION }}-Beta-Windows
+          path: |
+            dist/*.exe
+            dist/*.zip
+            dist/pluginval
+          if-no-files-found: error
