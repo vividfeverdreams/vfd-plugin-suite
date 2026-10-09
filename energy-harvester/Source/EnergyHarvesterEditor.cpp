@@ -373,7 +373,7 @@ public:
         juce::PopupMenu m;m.addItem(1,"Reduced Motion",true,processor.reducedMotion.load());m.addSeparator();
         const auto area=availableArea();
         for(int v:EnergyHarvesterProcessor::uiScales)m.addItem(v,"Size "+juce::String(v)+"%",fits(v,area),processor.uiScale==v);
-        m.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(this),[safe=juce::Component::SafePointer<HarvestCanvas>(this)](int choice){
+        m.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(this).withMousePosition(),[safe=juce::Component::SafePointer<HarvestCanvas>(this)](int choice){ // at the pointer, not under the whole device
             if(!safe)return;if(choice==1)safe->processor.reducedMotion=!safe->processor.reducedMotion.load();
             if(std::find(EnergyHarvesterProcessor::uiScales.begin(),EnergyHarvesterProcessor::uiScales.end(),choice)!=EnergyHarvesterProcessor::uiScales.end()){
                 safe->processor.uiScale=choice;safe->editor.setSize(viewWidth*choice/100,viewHeight*choice/100);}

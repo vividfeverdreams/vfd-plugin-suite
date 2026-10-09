@@ -312,6 +312,114 @@ void playGatedSaw(shifty::ShiftyProcessor& processor) {
     }
 }
 
+// Opens every dropdown in a real on-screen window and measures where JUCE actually puts the menu:
+// each must hang from (or sit just above) the control that opened it, never under the window.
+// Right-click menus open at the mouse pointer, so they are not part of this check.
+class MenuPlacementCheck final : private juce::Timer {
+public:
+    MenuPlacementCheck() {
+        processor.setUserDataRootForTesting(juce::File::getSpecialLocation(juce::File::tempDirectory)
+            .getChildFile("shifty-menus-" + juce::String(juce::Time::currentTimeMillis())));
+        processor.parameters().getParameter("motionSync")->setValueNotifyingHost(1.0f);
+        editor = std::make_unique<shifty::ShiftyEditor>(processor);
+        window = std::make_unique<juce::DocumentWindow>("SHIFTY menu check", juce::Colours::black, 0);
+        window->setUsingNativeTitleBar(true);
+        window->setContentNonOwned(editor.get(), true);
+        window->centreWithSize(window->getWidth(), window->getHeight());
+        window->setVisible(true);
+        startTimer(350);
+    }
+    int failures = 0;
+
+private:
+    using Page = shifty::ShiftyEditor::Page;
+    using Tab = shifty::ShiftyEditor::MotionTab;
+    struct Case { const char* name; Page page; Tab tab; juce::Rectangle<float> design; bool saving; const char* button; };
+    const std::vector<Case> cases {
+        { "LFO shape", Page::motion, Tab::lfo, {170, 416, 160, 55}, false, nullptr },
+        { "LFO rate", Page::motion, Tab::lfo, {330, 416, 190, 55}, false, nullptr },
+        { "LFO target", Page::motion, Tab::lfo, {830, 416, 121, 55}, false, nullptr },
+        { "YOI from", Page::motion, Tab::yoi, {350, 416, 140, 55}, false, nullptr },
+        { "YOI to", Page::motion, Tab::yoi, {490, 416, 140, 55}, false, nullptr },
+        { "Preset folder", Page::presets, Tab::lfo, {640, 204, 290, 38}, false, nullptr },
+        { "Save folder", Page::presets, Tab::lfo, {728, 357, 112, 40}, true, nullptr },
+        { "LOCKS", Page::sound, Tab::lfo, {}, false, "Randomization locks" },
+    };
+
+    juce::Rectangle<int> screenAreaFor(const juce::Rectangle<float>& design) const {
+        // Design (shell art) coordinates to the editor: the crop starts at (57, 73) and is 1008 x 1317.
+        const float sx = editor->getWidth() / 1008.0f, sy = editor->getHeight() / 1317.0f;
+        const juce::Rectangle<float> local((design.getX() - 57.0f) * sx, (design.getY() - 73.0f) * sy,
+                                           design.getWidth() * sx, design.getHeight() * sy);
+        return editor->localAreaToGlobal(local.toNearestInt());
+    }
+
+    std::vector<juce::Component*> desktopWindows() const {
+        std::vector<juce::Component*> list;
+        auto& desktop = juce::Desktop::getInstance();
+        for (int i = 0; i < desktop.getNumComponents(); ++i) list.push_back(desktop.getComponent(i));
+        return list;
+    }
+
+    void timerCallback() override {
+        if (index >= cases.size()) {
+            stopTimer();
+            juce::MessageManager::getInstance()->stopDispatchLoop();
+            return;
+        }
+        const auto& c = cases[index];
+        if (!menuOpen) {
+            editor->showPageForTesting(c.page, c.tab);
+            if (c.saving) editor->beginPresetSaveForTesting();
+            before = desktopWindows();
+            if (c.button != nullptr) {
+                auto* button = dynamic_cast<juce::Button*>(findComponent(*editor, c.button));
+                anchor = button->getScreenBounds();
+                button->onClick(); // what a click runs, synchronously
+            } else {
+                anchor = screenAreaFor(c.design);
+                const auto at = editor->getLocalPoint(nullptr, anchor.getCentre()).toFloat();
+                const auto now = juce::Time::getCurrentTime();
+                editor->mouseDown(juce::MouseEvent(juce::Desktop::getInstance().getMainMouseSource(), at,
+                    juce::ModifierKeys(juce::ModifierKeys::leftButtonModifier), juce::MouseInputSource::defaultPressure,
+                    juce::MouseInputSource::defaultOrientation, juce::MouseInputSource::defaultRotation,
+                    juce::MouseInputSource::defaultTiltX, juce::MouseInputSource::defaultTiltY,
+                    editor.get(), editor.get(), now, at, now, 1, false));
+            }
+            menuOpen = true;
+        }
+        // A dropdown's window exists as soon as it is shown; measure it before the real pointer
+        // (which is not over it) makes JUCE close it.
+        juce::Component* menu = nullptr;
+        for (auto* w : desktopWindows())
+            if (std::find(before.begin(), before.end(), w) == before.end() && w->isVisible()) menu = w;
+        if (menu == nullptr) {
+            std::cout << "FAIL " << c.name << ": no menu opened\n";
+            ++failures;
+        } else {
+            const auto m = menu->getScreenBounds();
+            const bool alignedLeft = std::abs(m.getX() - anchor.getX()) <= 16;
+            const bool below = std::abs(m.getY() - anchor.getBottom()) <= 16;
+            const bool above = std::abs(m.getBottom() - anchor.getY()) <= 16;
+            const bool ok = alignedLeft && (below || above);
+            if (!ok) ++failures;
+            std::cout << (ok ? "ok   " : "FAIL ") << c.name << ": control " << anchor.toString() << ", menu "
+                      << m.toString() << (below ? " (drops below it)" : above ? " (opens above it)" : " (detached)") << "\n";
+        }
+        juce::PopupMenu::dismissAllActiveMenus();
+        menuOpen = false;
+        ++index;
+    }
+
+    shifty::ShiftyProcessor processor;
+    std::unique_ptr<shifty::ShiftyEditor> editor;
+    std::unique_ptr<juce::DocumentWindow> window;
+    std::vector<juce::Component*> before;
+    juce::Rectangle<int> anchor;
+    size_t index = 0;
+    bool menuOpen = false;
+};
+
 int renderGallery(const juce::File& directory) {
     juce::ScopedJuceInitialiser_GUI gui;
     using shifty::EngineMode;
@@ -379,6 +487,13 @@ int renderGallery(const juce::File& directory) {
           [](shifty::ShiftyEditor& e) { e.beginPresetSaveForTesting(); } },
         { "20-size-90", EngineMode::talk, false, Page::sound, Tab::lfo, 0.9, {}, {} },
         { "21-size-150", EngineMode::talk, false, Page::voice, Tab::lfo, 1.5, {}, {} },
+        // The shell's glow: low formants light the bottom of the shell, high ones the top; bypass is dark.
+        { "22-glow-shift-down", EngineMode::talk, false, Page::sound, Tab::lfo, 1.0,
+          [set](shifty::ShiftyProcessor& p) { set(p, "shift", -12.0f); set(p, "vowelMorph", 0.0f); }, {} },
+        { "23-glow-shift-up", EngineMode::talk, false, Page::sound, Tab::lfo, 1.0,
+          [set](shifty::ShiftyProcessor& p) { set(p, "shift", 12.0f); set(p, "vowelMorph", 4.0f); }, {} },
+        { "24-glow-bypassed", EngineMode::talk, false, Page::sound, Tab::lfo, 1.0,
+          [set](shifty::ShiftyProcessor& p) { set(p, "bypass", 1.0f); }, {} },
     };
     bool ok = classicOriginal >= 0;
     for (const auto& shot : shots) {
@@ -392,7 +507,8 @@ int renderGallery(const juce::File& directory) {
         editor.setSize(size.x, size.y);
         editor.showPageForTesting(shot.page, shot.tab);
         if (shot.setupEditor) shot.setupEditor(editor);
-        editor.refreshForTesting();
+        // Half a second of display updates, so the meters and the glow settle as they would on screen.
+        for (int frame = 0; frame < 15; ++frame) editor.refreshForTesting();
         const auto image = editor.createComponentSnapshot(editor.getLocalBounds(), true, 2.0f);
         const auto file = directory.getChildFile(juce::String(shot.name) + ".png");
         const bool written = image.isValid() && writePng(image, file);
@@ -431,6 +547,18 @@ int main(int argc, char* argv[]) {
         const auto path = juce::String::fromUTF8(argv[2]);
         if (!juce::File::isAbsolutePath(path)) { std::cerr << "Gallery directory must be absolute.\n"; return 2; }
         return renderGallery(juce::File(path));
+    }
+
+    if (argc == 2 && juce::String::fromUTF8(argv[1]) == "--menu-placement") {
+        juce::ScopedJuceInitialiser_GUI gui;
+        int failures = 0;
+        {
+            MenuPlacementCheck check;
+            juce::MessageManager::getInstance()->runDispatchLoop();
+            failures = check.failures;
+        }
+        std::cout << (failures == 0 ? "Every dropdown opens at its control.\n" : "Some menus open away from their control.\n");
+        return failures == 0 ? 0 : 1;
     }
 
     if (argc == 2 && juce::String::fromUTF8(argv[1]) == "--preset-audit") {

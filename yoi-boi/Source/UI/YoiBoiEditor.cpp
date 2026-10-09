@@ -1307,7 +1307,9 @@ public:
                 menu.addSubMenu("Choose musical length", rhythm);
             }
         }
-        menu.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(&target),
+        // A right-click menu opens at the pointer; hanging it from the control put it under the
+        // whole gesture pad.
+        menu.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(&target).withMousePosition(),
             [safe = juce::Component::SafePointer<Impl>(this), id, excluded](int result) {
                 if (safe == nullptr) return;
                 if (result == 1)
