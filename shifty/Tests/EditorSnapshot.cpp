@@ -170,11 +170,18 @@ int checkAudioUnitInProcess(const juce::String& componentPath) {
     if (bundle == nullptr || !CFBundleLoadExecutable(bundle)) { std::cerr << "Could not load the AU bundle.\n"; return 1; }
     auto* factory = reinterpret_cast<AudioComponentFactoryFunction>(CFBundleGetFunctionPointerForName(bundle, CFSTR("SHIFTYAUFactory")));
     if (factory == nullptr) { std::cerr << "SHIFTYAUFactory not exported.\n"; return 1; }
+    // Register under the bundle's own version, so the check follows the release being tested
+    // (an installed copy with a higher version would otherwise win the lookup).
+    juce::String bundleVersion;
+    if (auto shortVersion = static_cast<CFStringRef>(CFBundleGetValueForInfoDictionaryKey(bundle, CFSTR("CFBundleShortVersionString"))))
+        bundleVersion = juce::String::fromCFString(shortVersion);
+    const auto parts = juce::StringArray::fromTokens(bundleVersion, ".", {});
+    const auto packed = static_cast<UInt32>((parts[0].getIntValue() << 16) | (parts[1].getIntValue() << 8) | parts[2].getIntValue());
     AudioComponentDescription description {};
     description.componentType = 'aufx';
     description.componentSubType = 'Shf1';
     description.componentManufacturer = 'Yoib';
-    if (AudioComponentRegister(&description, CFSTR("VIVID FEVER DREAMS: SHIFTY"), 0x00000500, factory) == nullptr) {
+    if (bundleVersion.isEmpty() || AudioComponentRegister(&description, CFSTR("VIVID FEVER DREAMS: SHIFTY"), packed, factory) == nullptr) {
         std::cerr << "AudioComponentRegister failed.\n";
         return 1;
     }
@@ -188,7 +195,8 @@ int checkAudioUnitInProcess(const juce::String& componentPath) {
     juce::String error;
     auto hosted = format.createInstanceFromDescription(*types[0], 48000.0, 512, error);
     if (!hosted) { std::cerr << "Could not instantiate the AU: " << error << '\n'; return 1; }
-    bool ok = types[0]->version == "0.5.0";
+    bool ok = types[0]->version == bundleVersion;
+    if (!ok) std::cout << "Hosted AU is " << types[0]->version << ", the bundle is " << bundleVersion << ".\n";
 
     // Parameters: the 29 SHIFTY controls (an AU's host bypass is a property, not a parameter). AU
     // parameter IDs are hashes of SHIFTY's string IDs, so hosts list them in hash order.

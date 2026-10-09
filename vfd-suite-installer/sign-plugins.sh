@@ -17,7 +17,7 @@ fi
 identity="$1"; profile="$2"; output="$3"; shift 3
 case "$output" in /*) ;; *) printf 'Output must be an absolute path.\n' >&2; exit 1 ;; esac
 [[ -e "$output" ]] && { printf 'Output already exists. Use a fresh directory: %s\n' "$output" >&2; exit 1; }
-security find-identity -v -p codesigning | grep -qF "\"$identity\"" || {
+security find-identity -v -p codesigning | grep -qF "$identity" || {
     printf 'Signing identity not found in the keychain: %s\n' "$identity" >&2; exit 1; }
 
 work="$(mktemp -d)"
