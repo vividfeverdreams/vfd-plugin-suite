@@ -1,6 +1,6 @@
-# Vivid Fever Dreams Suite 1.4.0
+# Vivid Fever Dreams Suite 1.5.0
 
-One native installer for YOI-BOI 0.2.0, THROW-UP 0.2.0, BACK-SCRATCH 0.11.0, SHIFTY 0.5.0, ENERGY HARVESTER 0.4.0 and STUTTER-STEP 0.2.0, each as a **VST3** and an **Audio Unit**. STUTTER-STEP, a swing gate with slap delay for mid-bass and sub, is new in 1.4.0; the other five are the same builds as in 1.3.0.
+One native installer for YOI-BOI 0.2.1, THROW-UP 0.2.0, BACK-SCRATCH 0.11.0, SHIFTY 0.5.1, ENERGY HARVESTER 0.4.1 and STUTTER-STEP 0.3.0, each as a **VST3** and an **Audio Unit**. New in 1.5.0: SHIFTY's footer sits in the device's own plate and its shell glows with the sound, and its menus drop from the control you clicked (1.4.0 shipped an older SHIFTY without that fix). STUTTER-STEP's NEW GROOVE composes brand-new rhythms and RATE gains 1/4. YOI-BOI's and ENERGY HARVESTER's right-click menus open at the pointer. The suite is also available for Windows (VST3) as a separate installer, built from the same source (see `windows/`).
 
 All six report **VIVID FEVER DREAMS** as their creator/vendor. Plug-in names, bundle identifiers, and VST3 component/controller identities remain compatible with earlier releases. The Audio Units register under these codes (type/subtype/manufacturer): YOI-BOI `aumu/YB01/YBoi`, THROW-UP `aumf/Thr1/Yoib` (a MIDI-controlled effect, so MIDI throws work in Logic), BACK-SCRATCH `aufx/Bsc1/Yoib`, SHIFTY `aufx/Shf1/Yoib`, ENERGY HARVESTER `aufx/Enh1/Yoib`, STUTTER-STEP `aufx/Stp1/Yoib`.
 
@@ -70,7 +70,7 @@ bash build-installer.sh \
   /absolute/path/SHIFTY.vst3 /absolute/path/SHIFTY.component \
   "/absolute/path/ENERGY HARVESTER.vst3" "/absolute/path/ENERGY HARVESTER.component" \
   /absolute/path/STUTTER-STEP.vst3 /absolute/path/STUTTER-STEP.component \
-  /absolute/path/new-release-directory 1.4.0 /absolute/path/whats-new.json
+  /absolute/path/new-release-directory 1.5.0 /absolute/path/whats-new.json
 ```
 
 `whats-new.json` is a JSON object keyed by plug-in name; each value is one to six short lines (at most 160 characters each), for example `{"YOI-BOI": ["Now also an Audio Unit for Logic Pro and GarageBand."], …}`. Every suite plug-in needs an entry.

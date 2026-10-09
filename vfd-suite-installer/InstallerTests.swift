@@ -778,8 +778,8 @@ func runInstallerTests() throws {
     let summary = ResultSummary.installSections(InstallResult(installed: [key(0, .au)], updated: [key(2, .vst3)], skipped: [key(3, .vst3)],
         audioUnitsRefreshed: true, log: [], warnings: []), hostIdentifiers: ["com.apple.logic10"], whatsNew: notes)
     let lines = summary.flatMap(\.lines)
-    try expect(summary.map(\.heading) == ["Done", "Next steps", "What’s new"] && lines.contains { $0.hasPrefix("YOI-BOI 0.2.0:") }
-               && lines.contains { $0.hasPrefix("BACK-SCRATCH 0.11.0:") } && !lines.contains { $0.hasPrefix("SHIFTY") && $0.contains("Now also") }
+    try expect(summary.map(\.heading) == ["Done", "Next steps", "What’s new"] && lines.contains { $0.hasPrefix("YOI-BOI \(SuiteCatalog.plugins[0].version):") }
+               && lines.contains { $0.hasPrefix("BACK-SCRATCH \(SuiteCatalog.plugins[2].version):") } && !lines.contains { $0.hasPrefix("SHIFTY") && $0.contains("Now also") }
                && lines.contains { $0.contains("Restart Logic Pro") }, "the result page shows guidance and What’s new for the plug-ins that changed")
 
     // MARK: Plain-English errors and the appended log
