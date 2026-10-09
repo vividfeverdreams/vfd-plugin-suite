@@ -89,7 +89,7 @@ bash build-installer.sh \
      bash build-installer.sh /absolute/path/signed-plugins/YOI-BOI.vst3 … /absolute/path/new-release-directory 1.5.0 /absolute/path/whats-new.json
    ```
 
-Plug-ins are signed with the hardened runtime and a secure timestamp. A notarized, stapled installer needs neither Open Anyway nor `Prepare VFD Beta.command`.
+`release-mac.sh VERSION` runs both steps on the local builds, then packages the Beta-Install folder (with `START HERE.txt`), its ZIP and checksum, and checks the result as a downloaded copy. Edit `whats-new-VERSION.json` and `START HERE.txt` first. Plug-ins are signed with the hardened runtime and a secure timestamp. A notarized, stapled installer needs neither Open Anyway nor `Prepare VFD Beta.command`.
 
 `whats-new.json` is a JSON object keyed by plug-in name; each value is one to six short lines (at most 160 characters each), for example `{"YOI-BOI": ["Now also an Audio Unit for Logic Pro and GarageBand."], …}`. Every suite plug-in needs an entry.
 

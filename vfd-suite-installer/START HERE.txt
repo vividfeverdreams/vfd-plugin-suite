@@ -1,0 +1,40 @@
+VIVID FEVER DREAMS SUITE 1.5.0 - PRIVATE BETA INSTALL
+
+Includes YOI-BOI 0.2.1, THROW-UP 0.2.0, BACK-SCRATCH 0.11.0,
+SHIFTY 0.5.1, ENERGY HARVESTER 0.4.1, and STUTTER-STEP 0.3.0.
+
+NEW IN 1.5.0
+SHIFTY: the footer sits in the device's own plate, clear of the speaker
+grill, and the shell glows with the sound. Every menu drops from the
+control you clicked (1.4.0 shipped an older SHIFTY without that fix).
+STUTTER-STEP: NEW GROOVE composes a brand-new rhythm every time, never a
+copy of a preset, and RATE has a 1/4 setting (16 steps over four bars).
+YOI-BOI and ENERGY HARVESTER: right-click menus open at the pointer.
+The whole suite now also runs on Windows (VST3), as a separate download.
+Every plug-in comes as a VST3 and as an Audio Unit (AU) on the Mac.
+The installer and plug-ins are now signed with the developer's Apple
+Developer ID and notarized by Apple: no security workarounds needed.
+
+REQUIREMENTS
+Apple Silicon Mac (M1 or later) and macOS 12 or later.
+VST3: Ableton Live, Bitwig, FL Studio, REAPER and other VST3 hosts.
+AU: Logic Pro, GarageBand, MainStage and other AU hosts.
+
+INSTALL
+1. Double-click the ZIP to extract it.
+2. Quit your audio applications (including Logic Pro or GarageBand if
+   you are installing the Audio Units).
+3. Double-click Install Vivid Fever Dreams Suite.app. If macOS asks
+   whether to open an app downloaded from the internet, click Open.
+4. Tick the plug-ins and formats you want and click Install / Update.
+5. Follow the rescan steps the installer shows for your DAW.
+
+INSTALL LOCATIONS AND SUPPORT
+VST3: ~/Library/Audio/Plug-Ins/VST3
+AU:   ~/Library/Audio/Plug-Ins/Components
+No administrator password is needed. The installer reports conflicts,
+such as a second copy in the computer-wide plug-in folders or a newer
+version, instead of overwriting them. Uninstall moves plug-ins to the
+Trash, so you can put them back.
+Installation details: README.md
+Log: ~/Library/Logs/Vivid Fever Dreams Suite/installer.log
