@@ -8,7 +8,7 @@ set -euo pipefail
 # Every path must be absolute. Each plug-in is supplied as its signed VST3 bundle followed by its signed AU bundle.
 installer_names=("YOI-BOI" "THROW-UP" "BACK-SCRATCH" "SHIFTY" "ENERGY HARVESTER" "STUTTER-STEP")
 if [[ $# -ne 15 ]]; then
-    printf 'Usage: %s <VST3> <AU> for YOI-BOI, THROW-UP, BACK-SCRATCH, SHIFTY, ENERGY HARVESTER and STUTTER-STEP (in that order), then /absolute/output-directory 1.4.0 /absolute/whats-new.json\n' "$0" >&2
+    printf 'Usage: %s <VST3> <AU> for YOI-BOI, THROW-UP, BACK-SCRATCH, SHIFTY, ENERGY HARVESTER and STUTTER-STEP (in that order), then /absolute/output-directory 1.5.0 /absolute/whats-new.json\n' "$0" >&2
     exit 1
 fi
 installer_source_dir="$(cd "$(dirname "$0")" && pwd -P)"
