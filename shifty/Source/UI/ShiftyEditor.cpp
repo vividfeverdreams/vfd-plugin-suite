@@ -7,9 +7,11 @@
 namespace shifty {
 namespace {
 // The editor shows exactly the device: this crop sits on the shell's own straight edges in
-// Assets/DeviceShell-fullbleed.png (corners tightened to match), so it meets the window on every side.
+// Assets/DeviceShell-editor.png (corners tightened to match), so it meets the window on every side.
+// That art is baked from DeviceShell-fullbleed.png by Tools/make_editor_shell.py, which adds a
+// 70 px band of board under the footer plate for the INFO key.
 constexpr int shellX = 57, shellY = 73, shellWidth = 1008, shellHeight = 1247;
-constexpr int infoBandTop = 1244, infoBandHeight = 70;
+constexpr int infoBandHeight = 70;
 constexpr int editorHeight = shellHeight + infoBandHeight;
 constexpr int baseWidth = 650;
 constexpr float startAngle = juce::MathConstants<float>::pi * 1.25f;
@@ -17,12 +19,14 @@ constexpr float endAngle = juce::MathConstants<float>::pi * 2.75f;
 const juce::Colour ink { 0xff073d2b }, screenText { 0xffd7ffee }, lime { 0xffc3ff62 };
 const juce::Colour muted { 0xff9bc2b2 }, mint { 0xffd7f4cd }, neon { 0xff69ff9a };
 const juce::Colour screenPanel { 0xff0b3a29 }, screenLine { 0xff398c5b };
-const juce::Rectangle<float> motionSwitchBounds {177, 1160, 168, 58};
-const juce::Rectangle<float> randomBounds {367, 1146, 168, 65};
-const juce::Rectangle<float> locksBounds {550, 1146, 150, 65};
-const juce::Rectangle<float> undoBounds {721, 1126, 86, 42};
-const juce::Rectangle<float> redoBounds {816, 1126, 86, 42};
-const juce::Rectangle<float> bypassBounds {721, 1180, 181, 40};
+// The footer plate is part of the shell art: four bays between engraved dividers at x 341, 524
+// and 701, the last ending in the slant beside the speaker grill. Each group sits in its own bay.
+const juce::Rectangle<float> motionSwitchBounds {175, 1168, 150, 50};
+const juce::Rectangle<float> randomBounds {356, 1139, 154, 58};
+const juce::Rectangle<float> locksBounds {543, 1139, 140, 58};
+const juce::Rectangle<float> undoBounds {719, 1139, 64, 38};
+const juce::Rectangle<float> redoBounds {791, 1139, 64, 38};
+const juce::Rectangle<float> bypassBounds {719, 1185, 136, 36};
 // Screen (dark LCD) layout, design coordinates. The screen interior spans x 141..981, y 171..507.
 const juce::Rectangle<float> pageTabs[] { {592, 116, 82, 42}, {674, 116, 82, 42}, {756, 116, 82, 42}, {838, 116, 80, 42} };
 const juce::Rectangle<float> engineSelectorBounds {540, 202, 400, 40};
@@ -318,8 +322,9 @@ std::vector<double> ShiftyEditor::sizesFitting(juce::Rectangle<int> userArea) {
 
 ShiftyEditor::ShiftyEditor(ShiftyProcessor& p)
     : juce::AudioProcessorEditor(p), plugin(p),
-      shell(juce::ImageCache::getFromMemory(BinaryData::DeviceShellfullbleed_png,
-                                            BinaryData::DeviceShellfullbleed_pngSize)),
+      shell(juce::ImageCache::getFromMemory(BinaryData::DeviceShelleditor_png,
+                                            BinaryData::DeviceShelleditor_pngSize)),
+      glowMask(juce::ImageCache::getFromMemory(BinaryData::ShellGlow_png, BinaryData::ShellGlow_pngSize)),
       normalTypeface(juce::Typeface::createSystemTypefaceFor(
           BinaryData::ChakraPetchSemiBold_ttf, BinaryData::ChakraPetchSemiBold_ttfSize)),
       displayTypeface(juce::Typeface::createSystemTypefaceFor(
@@ -671,7 +676,7 @@ juce::Point<float> ShiftyEditor::designPoint(juce::Point<float> p) const {
 }
 
 void ShiftyEditor::paintShell(juce::Graphics& g) {
-    // Composite the shell (with its inserted INFO band) once per size and screen density, then blit it 1:1.
+    // Scale the shell (and its glow mask) once per size and screen density, then blit it 1:1.
     // A logical-size cache was upsampled, and soft, on Retina.
     const float scale = g.getInternalContext().getPhysicalPixelScaleFactor();
     const int width = juce::jmax(1, juce::roundToInt(getWidth() * scale));
@@ -680,26 +685,36 @@ void ShiftyEditor::paintShell(juce::Graphics& g) {
         scaledShell = juce::Image(juce::Image::RGB, width, height, false);
         juce::Graphics shellGraphics(scaledShell);
         shellGraphics.setImageResamplingQuality(juce::Graphics::highResamplingQuality);
-        const float sx = static_cast<float>(width) / shellWidth;
-        const float sy = static_cast<float>(height) / editorHeight;
-        // Each slice lands on whole physical pixels, so neighbouring slices share an exact boundary. Fractional
-        // slice edges left a half-covered, see-through row at each seam of the inserted band.
-        const auto slice = [&](int dx, int dy, int dw, int dh, int srcX, int srcY, int srcW, int srcH) {
-            const int x0 = juce::roundToInt((dx - shellX) * sx), x1 = juce::roundToInt((dx + dw - shellX) * sx);
-            const int y0 = juce::roundToInt((dy - shellY) * sy), y1 = juce::roundToInt((dy + dh - shellY) * sy);
-            shellGraphics.drawImage(shell, x0, y0, x1 - x0, y1 - y0, srcX, srcY, srcW, srcH);
-        };
-        // Keep all original control geometry and the lower molded rim intact.
-        // Only the exposed board strip gains room for the physical INFO key.
-        slice(shellX, shellY, shellWidth, infoBandTop - shellY, shellX, shellY, shellWidth, infoBandTop - shellY);
-        slice(shellX, infoBandTop, shellWidth, infoBandHeight, shellX, infoBandTop, shellWidth, 1);
-        // Reuse the photographed board surface, including its components and
-        // resin illumination, rather than introducing a separately drawn plate.
-        slice(135, infoBandTop, 850, infoBandHeight, 135, infoBandTop, 850, 40);
-        slice(shellX, infoBandTop + infoBandHeight, shellWidth, shellY + shellHeight - infoBandTop,
-              shellX, infoBandTop, shellWidth, shellY + shellHeight - infoBandTop);
+        shellGraphics.drawImage(shell, 0, 0, width, height, shellX, shellY, shellWidth, editorHeight);
+        if (glowMask.isValid()) {
+            scaledGlow = juce::Image(juce::Image::ARGB, width, height, true);
+            juce::Graphics glowGraphics(scaledGlow);
+            glowGraphics.setImageResamplingQuality(juce::Graphics::highResamplingQuality);
+            glowGraphics.drawImage(glowMask, 0, 0, width, height, shellX, shellY, shellWidth, editorHeight);
+        }
     }
     if (scaledShell.isValid()) g.drawImage(scaledShell, getLocalBounds().toFloat());
+}
+
+void ShiftyEditor::paintGlow(juce::Graphics& g) {
+    // The translucent shell lights up from inside with what SHIFTY is doing: brightness follows the
+    // output, the light rides up the shell as the formants move up (SHIFT, plus any Motion, ENV or
+    // YOI movement) and down as they move down, and its tint follows the vowel from OO to EE.
+    if (glowLevel < 0.004f || !scaledGlow.isValid()) return;
+    const auto bounds = getLocalBounds().toFloat();
+    const float height = bounds.getHeight();
+    const float position = 0.5f - 0.42f * juce::jlimit(-1.0f, 1.0f, glowShift / 12.0f);
+    const juce::Point<float> centre { bounds.getCentreX(), bounds.getY() + height * position };
+    const auto engine = plugin.engineMode();
+    const float vowel = engine == EngineMode::talk || engine == EngineMode::mouth
+                            ? juce::jlimit(0.0f, 1.0f, glowVowel / 4.0f) : 0.35f;
+    const auto tint = juce::Colour(0xffbfffc8).interpolatedWith(juce::Colour(0xffe2ff9e), vowel);
+    juce::ColourGradient light(tint.withAlpha(0.56f * glowLevel), centre,
+                               tint.withAlpha(0.08f * glowLevel), centre.translated(0.0f, height * 0.62f), true);
+    light.addColour(0.45, tint.withAlpha(0.3f * glowLevel));
+    g.setGradientFill(light);
+    g.drawImageTransformed(scaledGlow, juce::AffineTransform::scale(bounds.getWidth() / scaledGlow.getWidth(),
+                                                                    height / scaledGlow.getHeight()), true);
 }
 
 void ShiftyEditor::resized() {
@@ -727,7 +742,7 @@ void ShiftyEditor::resized() {
     presetNameEditor.setFont(juce::Font(juce::FontOptions(normalTypeface).withHeight(26.0f * scale)));
     presetFolderEditor.setBounds(scaled({300, 357, 420, 40}));
     presetFolderEditor.setFont(juce::Font(juce::FontOptions(normalTypeface).withHeight(22.0f * scale)));
-    if (infoButton) infoButton->setBounds(scaled({486, 1249, 152, 60}));
+    if (infoButton) infoButton->setBounds(scaled({486, 1265, 152, 60}));
     if (infoOverlay) infoOverlay->setBounds(getLocalBounds());
     if (sizeReady) plugin.setEditorScale(static_cast<double>(getWidth()) / baseWidth);
 }
@@ -803,6 +818,7 @@ void ShiftyEditor::drawEngineNote(juce::Graphics& g, const juce::String& text) c
 
 void ShiftyEditor::paint(juce::Graphics& g) {
     paintShell(g);
+    paintGlow(g);
 
     juce::Graphics::ScopedSaveState state(g);
     const float sx = static_cast<float>(getWidth()) / shellWidth;
@@ -827,6 +843,13 @@ void ShiftyEditor::drawHeader(juce::Graphics& g) {
             g.fillRoundedRectangle(pageTabs[i].reduced(2), 9.0f);
         }
         drawText(g, labels[i], pageTabs[i], 16.5f, selected ? ink : screenText);
+    }
+    if (glowLevel > 0.004f) {
+        // The power LED blooms with the same light as the shell.
+        const juce::Point<float> led {943.0f, 137.0f};
+        g.setGradientFill(juce::ColourGradient(lime.withAlpha(0.55f * glowLevel), led,
+                                               lime.withAlpha(0.0f), led.translated(30.0f, 0.0f), true));
+        g.fillEllipse(juce::Rectangle<float>(60.0f, 60.0f).withCentre(led));
     }
     g.setColour(lime.withAlpha(0.9f));
     g.fillEllipse(932.0f, 126.0f, 22.0f, 22.0f);
@@ -1447,37 +1470,25 @@ void ShiftyEditor::drawUtilityPanel(juce::Graphics& g) {
         }
     }
 
-    // The replacement surface stays inside the shell, preserving its transparent exterior.
-    const juce::Rectangle<float> footer {151, 1119, 773, 123};
-    g.setGradientFill(juce::ColourGradient(juce::Colour(0xff8dde80), 151, 1119,
-                                          juce::Colour(0xff46ae60), 924, 1242, false));
-    g.fillRoundedRectangle(footer, 22.0f);
-    g.setColour(juce::Colour(0xffb9f69e).withAlpha(0.65f));
-    g.drawRoundedRectangle(footer.reduced(2.0f), 20.0f, 1.5f);
-    g.setColour(ink.withAlpha(0.26f));
-    g.drawVerticalLine(354, 1136.0f, 1227.0f);
-    g.drawVerticalLine(709, 1136.0f, 1227.0f);
-
+    // The footer plate, its bays and dividers are moulded into the shell art.
     const bool motionOn = isOn("motionEnable");
-    drawText(g, "MOTION", {177, 1126, 168, 30}, 23.0f, ink);
+    const auto track = motionSwitchBounds;
+    const float radius = track.getHeight() * 0.5f, thumb = track.getHeight() - 10.0f;
+    drawText(g, "MOTION", {track.getX() - 5.0f, 1136.0f, track.getWidth() + 10.0f, 28.0f}, 22.0f, ink);
     g.setColour(motionOn ? juce::Colour(0xff134c29) : juce::Colour(0xff235442));
-    g.fillRoundedRectangle(motionSwitchBounds, 29.0f);
+    g.fillRoundedRectangle(track, radius);
     g.setColour(motionOn ? lime : mint.withAlpha(0.8f));
-    g.drawRoundedRectangle(motionSwitchBounds.reduced(1.0f), 28.0f, 2.0f);
-    const float thumbX = motionOn ? motionSwitchBounds.getRight() - 53.0f
-                                  : motionSwitchBounds.getX() + 5.0f;
-    g.setGradientFill(juce::ColourGradient(motionOn ? lime.brighter(0.2f) : mint,
-                                          thumbX, 1165, motionOn ? lime : juce::Colour(0xff97c5a2),
-                                          thumbX, 1211, false));
-    g.fillEllipse(thumbX, 1165.0f, 48.0f, 48.0f);
-    drawText(g, motionOn ? "ON" : "OFF",
-             motionOn ? juce::Rectangle<float>(190, 1171, 88, 34)
-                      : juce::Rectangle<float>(238, 1171, 92, 34),
-             25.0f, motionOn ? lime : mint);
+    g.drawRoundedRectangle(track.reduced(1.0f), radius - 1.0f, 2.0f);
+    const float thumbX = motionOn ? track.getRight() - 5.0f - thumb : track.getX() + 5.0f;
+    g.setGradientFill(juce::ColourGradient(motionOn ? lime.brighter(0.2f) : mint, thumbX, track.getY() + 5.0f,
+                                          motionOn ? lime : juce::Colour(0xff97c5a2), thumbX, track.getBottom() - 5.0f, false));
+    g.fillEllipse(thumbX, track.getY() + 5.0f, thumb, thumb);
+    const auto stateArea = motionOn ? track.withTrimmedRight(thumb + 10.0f) : track.withTrimmedLeft(thumb + 10.0f);
+    drawText(g, motionOn ? "ON" : "OFF", stateArea, 24.0f, motionOn ? lime : mint);
     if (auto* s = controlSwitch("motionEnable")) {
         if (s->button->hasKeyboardFocus(true)) {
             g.setColour(ink);
-            g.drawRoundedRectangle(motionSwitchBounds.expanded(4), 32.0f, 2.0f);
+            g.drawRoundedRectangle(track.expanded(4), radius + 4.0f, 2.0f);
         }
     }
 
@@ -1504,18 +1515,18 @@ void ShiftyEditor::drawUtilityPanel(juce::Graphics& g) {
     int lockCount = 0;
     for (const auto& id : ShiftyProcessor::randomizableParameterIds())
         if (plugin.isParameterLocked(id)) ++lockCount;
-    drawText(g, "NEW VARIATION", {362, 1217, 178, 21}, 15.5f, ink.withAlpha(0.82f));
-    drawText(g, juce::String(lockCount) + " LOCKED", {550, 1217, 150, 21},
+    drawText(g, "NEW VARIATION", randomBounds.withY(1203.0f).withHeight(20.0f).expanded(14.0f, 0.0f), 15.5f, ink.withAlpha(0.82f));
+    drawText(g, juce::String(lockCount) + " LOCKED", locksBounds.withY(1203.0f).withHeight(20.0f).expanded(14.0f, 0.0f),
              16.0f, ink.withAlpha(0.82f));
-    drawAction(*undoButton, undoBounds, "UNDO", 21.0f, false, plugin.canUndo());
-    drawAction(*redoButton, redoBounds, "REDO", 21.0f, false, plugin.canRedo());
+    drawAction(*undoButton, undoBounds, "UNDO", 19.0f, false, plugin.canUndo());
+    drawAction(*redoButton, redoBounds, "REDO", 19.0f, false, plugin.canRedo());
 
     const bool bypassOn = isOn("bypass");
     g.setColour(bypassOn ? ink : ink.withAlpha(0.12f));
     g.fillRoundedRectangle(bypassBounds, 17.0f);
     g.setColour(ink.withAlpha(0.55f));
     g.drawRoundedRectangle(bypassBounds, 17.0f, 1.5f);
-    drawText(g, bypassOn ? "BYPASS ON" : "BYPASS OFF", bypassBounds, 20.0f,
+    drawText(g, bypassOn ? "BYPASS ON" : "BYPASS OFF", bypassBounds, 18.0f,
              bypassOn ? lime : ink);
     if (auto* s = controlSwitch("bypass")) {
         if (s->button->hasKeyboardFocus(true)) {
@@ -1535,6 +1546,14 @@ void ShiftyEditor::timerCallback() {
     const auto previousEngine = live.engine;
     live = plugin.display();
     live.engine = plugin.engineMode();
+    // Glow: about -42 dBFS out is dark, -6 dBFS is full. Quick to light, slower to fade, like a
+    // lamp behind the plastic; the light's position and tint glide rather than jump.
+    const float outDb = juce::Decibels::gainToDecibels(juce::jmax(meterPeaks[0], meterPeaks[1]), -100.0f);
+    const float glowTarget = isOn("bypass") ? 0.0f : juce::jlimit(0.0f, 1.0f, (outDb + 42.0f) / 36.0f);
+    glowLevel += (glowTarget - glowLevel) * (glowTarget > glowLevel ? 0.5f : 0.12f);
+    if (glowLevel < 0.004f) glowLevel = 0.0f;
+    glowShift += (juce::jlimit(-12.0f, 12.0f, live.shift) - glowShift) * 0.3f;
+    glowVowel += (live.morph - glowVowel) * 0.25f;
     updateValueLabels();
     bool needsPageUpdate = live.engine != previousEngine;
     if (page == Page::motion)

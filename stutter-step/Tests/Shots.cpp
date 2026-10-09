@@ -62,6 +62,12 @@ int main (int argc, char** argv)
     run (proc, head, 9000);
     shot (*editor, folder.getChildFile ("03-glass-stairs.png"));
 
+    auto* rate = proc.apvts.getParameter ("rate");
+    rate->setValueNotifyingHost (rate->convertTo0to1 (0.0f)); // 1/4: the 16 steps span four bars
+    run (proc, head, 9000);
+    shot (*editor, folder.getChildFile ("05-quarter-rate.png"));
+    rate->setValueNotifyingHost (rate->convertTo0to1 (2.0f));
+
     editor->setSize (StutterEditor::baseWidth * 3 / 2, StutterEditor::baseWidth * 3 / 2 * StutterEditor::cropH / StutterEditor::cropW);
     shot (*editor, folder.getChildFile ("04-150-percent.png"), 1.0f);
     return 0;

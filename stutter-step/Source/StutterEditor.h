@@ -1,4 +1,5 @@
 #pragma once
+#include <array>
 #include "StutterProcessor.h"
 #include <juce_gui_extra/juce_gui_extra.h>
 #include <memory>
@@ -58,7 +59,8 @@ private:
     std::vector<std::unique_ptr<Knob>> knobs;
     std::unique_ptr<Lane> lane;
     std::unique_ptr<Dots> dots;
-    std::unique_ptr<ScreenKey> rollFrom, prev, next, subSafe, rate8, rate16, rate32, presetMenu;
+    std::unique_ptr<ScreenKey> rollFrom, prev, next, subSafe, presetMenu;
+    std::array<std::unique_ptr<ScreenKey>, 4> rateKeys; // 1/4, 1/8, 1/16, 1/32
     void showPresetMenu();
     std::unique_ptr<PlateKey> lockKey, gapsKey, wideKey;
     std::unique_ptr<SlapSwitch> slapSwitch;

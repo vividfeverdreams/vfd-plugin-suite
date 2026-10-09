@@ -24,7 +24,7 @@ juce::NormalisableRange<float> logRange (float lo, float hi)
 double StutterProcessor::Snapshot::stepSeconds() const noexcept { return 60.0 / juce::jmax (1.0, bpm) * rateBeats (rate); }
 double StutterProcessor::Snapshot::slapSeconds() const noexcept
 {
-    return slapLock ? juce::jlimit (0.01, 0.5, 2.0 * swing * stepSeconds()) : slapTimeMs / 1000.0;
+    return slapLock ? juce::jlimit (0.01, maxLockSeconds, 2.0 * swing * stepSeconds()) : slapTimeMs / 1000.0;
 }
 
 juce::AudioProcessorValueTreeState::ParameterLayout StutterProcessor::createLayout()
@@ -34,7 +34,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout StutterProcessor::createLayo
     const auto pct = AudioParameterFloatAttributes().withStringFromValueFunction ([] (float v, int) { return String (roundToInt (v)) + "%"; });
     layout.add (std::make_unique<AudioParameterFloat> (ParameterID { "swing", 1 }, "Swing", NormalisableRange<float> (50.0f, 75.0f, 0.1f), 60.0f,
         AudioParameterFloatAttributes().withStringFromValueFunction ([] (float v, int) { return String (v, 1) + "%"; })));
-    layout.add (std::make_unique<AudioParameterChoice> (ParameterID { "rate", 1 }, "Rate", StringArray { "1/8", "1/16", "1/32" }, 1));
+    layout.add (std::make_unique<AudioParameterChoice> (ParameterID { "rate", 1 }, "Rate", StringArray { "1/4", "1/8", "1/16", "1/32" }, 2));
     layout.add (std::make_unique<AudioParameterFloat> (ParameterID { "length", 1 }, "Length", NormalisableRange<float> (5.0f, 100.0f, 0.1f), 60.0f, pct));
     layout.add (std::make_unique<AudioParameterFloat> (ParameterID { "smooth", 1 }, "Smooth", logRange (1.0f, 40.0f), 6.0f,
         AudioParameterFloatAttributes().withStringFromValueFunction ([] (float v, int) { return String (v, v < 10 ? 1 : 0) + " ms"; })));
@@ -151,7 +151,8 @@ void StutterProcessor::loadFactory (int index)
 void StutterProcessor::rollNewGroove()
 {
     const auto seed = (std::uint32_t) juce::Random::getSystemRandom().nextInt64();
-    const auto g = generate (seed, rollFrom);
+    const auto current = getPattern();
+    const auto g = generate (seed, rollFrom, &current);
     groove = { juce::String (g.name), g.family, -1, seed % 100000u, false };
     applyGroove (g.pattern, g.swing, g.length);
     grooveRevision.fetch_add (1);
@@ -165,7 +166,7 @@ StutterProcessor::Snapshot StutterProcessor::snapshot() const
     s.length = p[lengthP]->load() / 100.0;
     s.smoothMs = p[smoothP]->load();
     s.depth = p[depthP]->load() / 100.0;
-    s.rate = juce::jlimit (0, 2, (int) p[rateP]->load());
+    s.rate = juce::jlimit (0, 3, (int) p[rateP]->load());
     s.bpm = uiBpm.load();
     s.slapOn = p[slapOnP]->load() > 0.5f;
     s.slapLock = p[slapLockP]->load() > 0.5f;
@@ -198,7 +199,7 @@ void StutterProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mid
                 if (const auto ppq = position->getPpqPosition()) beat0 = *ppq;
         }
     }
-    const int rate = juce::jlimit (0, 2, (int) p[rateP]->load());
+    const int rate = juce::jlimit (0, 3, (int) p[rateP]->load());
     const double stepsPerSample = bpm / 60.0 / sampleRate / rateBeats (rate);
     const double startSteps = beat0 / rateBeats (rate);
     const double stepSeconds = 60.0 / bpm * rateBeats (rate);
@@ -221,7 +222,7 @@ void StutterProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mid
 
     // ---- slap settings ----
     const bool lock = p[slapLockP]->load() > 0.5f;
-    const double slapSeconds = lock ? juce::jlimit (0.01, 0.5, 2.0 * swing * stepSeconds) : p[slapTimeP]->load() / 1000.0;
+    const double slapSeconds = lock ? juce::jlimit (0.01, maxLockSeconds, 2.0 * swing * stepSeconds) : p[slapTimeP]->load() / 1000.0;
     SlapDelay::Settings settings;
     settings.timeLeft = (float) slapSeconds;
     settings.timeRight = (float) slapSeconds + (p[slapWideP]->load() > 0.5f ? 0.014f : 0.0f);
@@ -278,7 +279,7 @@ void StutterProcessor::getStateInformation (juce::MemoryBlock& dest)
     auto state = apvts.copyState();
     juce::ValueTree g ("GROOVE");
     const auto pattern = getPattern();
-    g.setProperty ("schema", 1, nullptr);
+    g.setProperty ("schema", 2, nullptr);
     g.setProperty ("cells", juce::String (cellsToString (pattern)), nullptr);
     g.setProperty ("slap", juce::String (slapToString (pattern)), nullptr);
     g.setProperty ("name", groove.name, nullptr);
@@ -302,14 +303,20 @@ void StutterProcessor::setStateInformation (const void* data, int size)
     if (! state.hasType (apvts.state.getType())) return;
     const auto g = state.getChildWithName ("GROOVE");
     state.removeChild (g, nullptr);
+    // Schema 1 (0.1 and 0.2) had RATE as 1/8, 1/16, 1/32; 1/4 now comes first.
+    if (! g.isValid() || (int) g.getProperty ("schema", 1) < 2)
+        for (auto param : state)
+            if (param.hasType ("PARAM") && param["id"].toString() == "rate")
+                param.setProperty ("value", juce::jlimit (0, 2, (int) (double) param["value"]) + 1, nullptr);
     apvts.replaceState (state);
     if (g.isValid()) {
         setPattern (parsePattern (g["cells"].toString().toRawUTF8(), g["slap"].toString().toRawUTF8()));
         groove.name = g["name"].toString();
         groove.family = familyFromName (g["family"].toString().toStdString());
         // Factory grooves are found by name, so projects keep their preset when the bank grows or reorders.
+        // A rolled groove (saved as preset -1) stays rolled whatever its name.
         const int byName = factoryIndexOf (groove.name.toStdString());
-        groove.presetIndex = byName >= 0 ? byName : juce::jmin (-1, (int) g["preset"]);
+        groove.presetIndex = (int) g["preset"] >= 0 && byName >= 0 ? byName : -1;
         groove.seed = (std::uint32_t) (juce::int64) g["seed"];
         groove.edited = g["edited"];
         lockSwing = g["lockSwing"];

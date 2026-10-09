@@ -73,7 +73,7 @@ struct FactoryGroove
     const char* cells;
     const char* slap;
     float swing;     // 0.5 .. 0.75
-    int rate;        // 0 = 1/8, 1 = 1/16, 2 = 1/32
+    int rate;        // 0 = 1/4, 1 = 1/8, 2 = 1/16, 3 = 1/32
     float length;    // 0..1
     float smoothMs, depth;
     bool lock; float timeMs, feedback, tone, mix; bool gaps, wide;
@@ -89,7 +89,8 @@ struct Generated
     float swing = 0.6f, length = 0.6f;
     std::string name;
 };
-// familyFilter < 0 rolls from every family (weighted so most rolls swing).
-Generated generate (std::uint32_t seed, int familyFilter);
+// familyFilter < 0 rolls from every family (weighted so most rolls swing). The rhythm is composed
+// fresh: at least four steps away from every factory groove and from *avoid (the groove it replaces).
+Generated generate (std::uint32_t seed, int familyFilter, const Pattern* avoid = nullptr);
 
 } // namespace stutter

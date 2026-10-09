@@ -72,7 +72,10 @@ public:
         double slapSeconds() const noexcept;
     };
     Snapshot snapshot() const;
-    static double rateBeats (int rate) noexcept { return rate == 0 ? 0.5 : rate == 2 ? 0.125 : 0.25; }
+    // RATE: 0 = 1/4, 1 = 1/8, 2 = 1/16, 3 = 1/32 (the 16 steps span 4 bars down to half a bar).
+    static double rateBeats (int rate) noexcept { return rate == 0 ? 1.0 : rate == 1 ? 0.5 : rate == 3 ? 0.125 : 0.25; }
+    // LOCK's echo time is capped inside the 1 s delay lines, WIDE's 14 ms included.
+    static constexpr double maxLockSeconds = 0.95;
     static float toneHz (double tone01) noexcept { return (float) (500.0 * std::pow (24.0, tone01)); }
     static float closedGain (double depth01) noexcept { return (float) ((1.0 - depth01) * (1.0 - depth01)); }
 

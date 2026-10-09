@@ -1,8 +1,13 @@
-# SHIFTY 0.5.0
+# SHIFTY 0.5.1
 
 SHIFTY is a formant effect for bass. It changes the "mouth" of a sound (its resonances: bigger and darker, or smaller and brighter, or a different vowel) while the notes stay where they are. Put it after a bass synth or on an audio track. It accepts mono or stereo audio and makes no sound on its own.
 
 This build is a **VST3 and Audio Unit (AU) effect for Apple Silicon Macs running macOS 12 or later**.
+
+## What's new in 0.5.1
+
+- **The footer is part of the device now.** MOTION, RANDOM, LOCKS and UNDO / REDO / BYPASS sit in the moulded footer plate's own bays, and the plate ends in its slant beside the speaker grill instead of covering it. The INFO key sits on the circuit board below without cutting the screw boss or the grill.
+- **The shell glows with the sound.** Light shows through the translucent shell as audio passes: brighter as the output gets louder, rising up the shell as the formants move up (SHIFT, plus any Motion, ENV or YOI movement) and sinking as they move down, tinted from mint (OO) to lime (EE) with the vowel. The power LED blooms with it. Silence and BYPASS leave the shell dark. Nothing changes in the sound.
 
 ## What's new in 0.5.0
 
@@ -141,7 +146,13 @@ cmake -S . -B build -DJUCE_SOURCE_DIR=/absolute/path/to/JUCE -DCMAKE_BUILD_TYPE=
 cmake --build build --target Shifty_VST3 Shifty_AU --parallel 4
 ```
 
-The plug-ins are `build/Shifty_artefacts/Release/VST3/SHIFTY.vst3` and `build/Shifty_artefacts/Release/AU/SHIFTY.component`. The AU identity is type `aufx`, subtype `Shf1`, manufacturer `Yoib`, bundle ID `com.yoiboi.shifty`. The build does not install anything. Pass version `0.5.0` to the installer build script.
+The plug-ins are `build/Shifty_artefacts/Release/VST3/SHIFTY.vst3` and `build/Shifty_artefacts/Release/AU/SHIFTY.component`. The AU identity is type `aufx`, subtype `Shf1`, manufacturer `Yoib`, bundle ID `com.yoiboi.shifty`. The build does not install anything. Pass version `0.5.1` to the installer build script.
+
+The editor's shell art, `Assets/DeviceShell-editor.png`, and its glow mask, `Assets/ShellGlow.png`, are baked from the generated device photo `Assets/DeviceShell-fullbleed.png`. To rebuild them (Python 3 with numpy and Pillow):
+
+```sh
+python3 Tools/make_editor_shell.py Assets/DeviceShell-fullbleed.png Assets/DeviceShell-editor.png Assets/ShellGlow.png
+```
 
 Test targets: `ShiftyDspTests`, `ShiftyImpactTests` and `ShiftyEditorSnapshot`:
 
@@ -152,4 +163,4 @@ Test targets: `ShiftyDspTests`, `ShiftyImpactTests` and `ShiftyEditorSnapshot`:
 | `ShiftyEditorSnapshot --preset-audit` | Every factory preset on three test sounds. |
 | `ShiftyEditorSnapshot --host-latency <SHIFTY.vst3>` | Latency per engine and the parameter list, through the VST3. |
 | `ShiftyEditorSnapshot --au <SHIFTY.component>` | The AU from the build folder, without installing it. |
-| `ShiftyEditorSnapshot --gallery <folder>` | Renders every page and state as PNGs. |
+| `ShiftyEditorSnapshot --gallery <folder>` | Renders every page and state as PNGs, including the glow at low and high SHIFT and bypassed. |

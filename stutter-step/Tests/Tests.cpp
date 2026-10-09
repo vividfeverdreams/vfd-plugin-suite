@@ -5,6 +5,7 @@
 #include <juce_events/juce_events.h>
 #include <cmath>
 #include <cstdio>
+#include <set>
 
 using namespace stutter;
 
@@ -148,6 +149,34 @@ void testGenerator()
     std::printf ("  %.1f%% of %d rolls swung (>= 55%%)\n", 100.0 * swung / rolls, rolls);
     for (int f = 0; f < (int) Family::count; ++f)
         check (generate (99, f).family == (Family) f, "family filter honoured");
+
+    // NEW GROOVE composes new rhythms: never a factory groove or a near copy of one, never a factory
+    // name, never the groove it replaces, and hardly ever the same rhythm twice.
+    std::vector<Pattern> factoryPatterns;
+    for (int i = 0; i < numFactoryGrooves; ++i) factoryPatterns.push_back (parsePattern (factoryGroove (i).cells, factoryGroove (i).slap));
+    const auto steps = [] (const Pattern& x, const Pattern& y) {
+        int d = 0;
+        for (int i = 0; i < numSteps; ++i) d += x[(size_t) i].v != y[(size_t) i].v;
+        return d;
+    };
+    int nearPreset = 0, presetNames = 0, repeatsCurrent = 0;
+    std::set<std::string> distinct;
+    Pattern current = factoryPatterns[0];
+    for (std::uint32_t seed = 1; seed <= 2000; ++seed) {
+        const auto g = generate (seed * 2246822519u, (int) (seed % 9) - 2, &current);
+        int nearest = numSteps;
+        for (const auto& f : factoryPatterns) nearest = std::min (nearest, steps (g.pattern, f));
+        if (nearest < 4) ++nearPreset;
+        if (factoryIndexOf (g.name) >= 0) ++presetNames;
+        if (steps (g.pattern, current) < 4) ++repeatsCurrent;
+        distinct.insert (cellsToString (g.pattern));
+        current = g.pattern;
+    }
+    check (nearPreset == 0, "rolled rhythms stay at least 4 steps from every factory groove", nearPreset, 0);
+    check (presetNames == 0, "rolled grooves never take a factory name", presetNames, 0);
+    check (repeatsCurrent == 0, "each roll differs from the groove it replaces", repeatsCurrent, 0);
+    check (distinct.size() >= 1900, "rolls are almost always new rhythms", (double) distinct.size(), 1900);
+    std::printf ("  %d distinct rhythms in 2000 rolls\n", (int) distinct.size());
 }
 
 void testProcessor()
@@ -157,7 +186,7 @@ void testProcessor()
     FakePlayHead head;
     proc.setPlayHead (&head);
     setParam (proc, "slapOn", 0); setParam (proc, "length", 50); setParam (proc, "smooth", 2); setParam (proc, "depth", 100);
-    setParam (proc, "swing", 50); setParam (proc, "rate", 1);
+    setParam (proc, "swing", 50); setParam (proc, "rate", 2);
     proc.setPattern (parsePattern ("X.......X.......", ""));
     proc.prepareToPlay (48000, 512);
     const auto out = render (proc, head, 96000);
@@ -194,10 +223,30 @@ void testProcessor()
     for (auto v : free) { lo = std::min (lo, v); hi = std::max (hi, v); }
     check (lo < 0.01f && hi > 0.49f, "stopped transport still gates", hi - lo, 0.5);
 
+    // RATE 1/4: one step is a quarter note, so the 16 steps span four bars.
+    StutterProcessor quarter;
+    FakePlayHead head4;
+    quarter.setPlayHead (&head4);
+    setParam (quarter, "slapOn", 0); setParam (quarter, "length", 50); setParam (quarter, "smooth", 2);
+    setParam (quarter, "swing", 50); setParam (quarter, "rate", 0);
+    check (quarter.apvts.getParameter ("rate")->getCurrentValueAsText() == "1/4", "RATE offers 1/4");
+    quarter.setPattern (parsePattern ("X.X.............", ""));
+    quarter.prepareToPlay (48000, 512);
+    const auto slow = render (quarter, head4, 96000);
+    // 120 BPM, 1/4: one step = 24000 samples. Hits at 0 and 48000, each open for half a step.
+    near (slow[6000], 0.5, 1e-3, "1/4 hit passes the input");
+    near (slow[18000], 0.0, 1e-3, "1/4 closes after LENGTH");
+    near (slow[30000], 0.0, 1e-3, "1/4 off step is silent");
+    near (slow[54000], 0.5, 1e-3, "1/4 second hit two quarters later");
+
     // LOCK time.
     auto snap = proc.snapshot();
-    snap.swing = 0.62; snap.bpm = 140; snap.rate = 1; snap.slapLock = true;
+    snap.swing = 0.62; snap.bpm = 140; snap.rate = 2; snap.slapLock = true;
     near (snap.slapSeconds(), 2.0 * 0.62 * 60.0 / 140.0 * 0.25, 1e-9, "LOCK lands the echo on the swung off-step");
+    snap.rate = 0;
+    near (snap.slapSeconds(), 2.0 * 0.62 * 60.0 / 140.0, 1e-9, "LOCK follows the swing at 1/4");
+    snap.bpm = 60;
+    near (snap.slapSeconds(), StutterProcessor::maxLockSeconds, 1e-9, "LOCK stays inside the delay line at slow tempos");
 }
 
 void testSlap()
@@ -253,6 +302,34 @@ void testState()
     near (b.apvts.getRawParameterValue ("slapMix")->load(), 77.0, 0.11, "parameters round-trip");
     near (b.apvts.getRawParameterValue ("swing")->load(), factoryGroove (3).swing * 100.0, 0.11, "factory swing restored");
     check (b.lockSwing && b.rollFrom == 2 && std::abs (b.editorScale - 1.25f) < 1e-6f, "preferences round-trip");
+
+    // Projects saved before 1/4 existed (schema 1) stored RATE as 0 = 1/8, 1 = 1/16, 2 = 1/32.
+    for (const auto& [old, now] : { std::pair { 0, "1/8" }, { 1, "1/16" }, { 2, "1/32" } }) {
+        StutterProcessor saved;
+        juce::MemoryBlock oldBlock;
+        saved.getStateInformation (oldBlock);
+        auto xml = juce::AudioProcessor::getXmlFromBinary (oldBlock.getData(), (int) oldBlock.getSize());
+        xml->getChildByName ("GROOVE")->setAttribute ("schema", 1);
+        for (auto* param : xml->getChildWithTagNameIterator ("PARAM"))
+            if (param->getStringAttribute ("id") == "rate") param->setAttribute ("value", old);
+        juce::MemoryBlock patched;
+        juce::AudioProcessor::copyXmlToBinary (*xml, patched);
+        StutterProcessor reopened;
+        reopened.setStateInformation (patched.getData(), (int) patched.getSize());
+        check (reopened.apvts.getParameter ("rate")->getCurrentValueAsText() == now, "old projects keep their RATE");
+    }
+
+    // A rolled groove stays rolled when reopened, even if an older build gave it a factory name.
+    StutterProcessor rolled;
+    rolled.rollNewGroove();
+    check (rolled.groove.presetIndex < 0 && factoryIndexOf (rolled.groove.name.toStdString()) < 0, "NEW GROOVE is not a preset");
+    rolled.groove.name = "Rubber Shuffle";
+    juce::MemoryBlock rolledBlock;
+    rolled.getStateInformation (rolledBlock);
+    StutterProcessor reopenedRoll;
+    reopenedRoll.setStateInformation (rolledBlock.getData(), (int) rolledBlock.getSize());
+    check (reopenedRoll.groove.presetIndex < 0, "rolled grooves reopen as rolled, not as the preset with that name");
+    check (reopenedRoll.getPattern() == rolled.getPattern(), "rolled pattern round-trips");
 }
 // A held reese-style bass: two detuned saws and a sine sub, about -6 dBFS peak.
 std::vector<float> reese (int numSamples, double sr = 48000.0)

@@ -7,9 +7,9 @@ A rhythmic gate for sustained mid-basses and subs. One click rolls a groove that
 ## Product
 
 - **Insert effect**, stereo in/out, zero latency. VST3 + AU (`aufx`), Apple Silicon, macOS 12+, JUCE 9.0.2, the same stack as the other five plugins.
-- **Gate:** a 16-step pattern of HIT, GHOST (−8.4 dB), TIE (continue the previous hit) and OFF. The pattern follows song position. RATE sets the step size, so the same 16 steps span 2 bars (1/8), 1 bar (1/16) or ½ bar (1/32).
+- **Gate:** a 16-step pattern of HIT, GHOST (−8.4 dB), TIE (continue the previous hit) and OFF. The pattern follows song position. RATE sets the step size, so the same 16 steps span 4 bars (1/4), 2 bars (1/8), 1 bar (1/16) or ½ bar (1/32).
 - **Swing:** classic pair swing. In each pair of steps, the second starts at `2·swing` of the pair (50% straight, 66.7% triplet, 75% dotted). SWING is the hero knob.
-- **NEW GROOVE:** rolls a pattern from seven groove families. ALL is weighted so about 95% of rolls are swung: Shuffle 24, Bounce 20, Skank 14, Drag 14, Gallop 12, Wonk 11, Straight 5. The padlock keeps the current swing; ROLL FROM narrows the family.
+- **NEW GROOVE:** composes a brand-new rhythm in one of seven groove families. ALL is weighted so about 95% of rolls are swung: Shuffle 24, Bounce 20, Skank 14, Drag 14, Gallop 12, Wonk 11, Straight 5. The padlock keeps the current swing; ROLL FROM narrows the family. Since 0.3 a roll is built from the family's one-beat cells set in a phrase form (A A A B, A B A C …, lightly varied) or from an accent grouping across the beats (3+3+2, 3-5-3-5 …), with an occasional fill. It is always at least four steps away from every factory groove and from the groove it replaces, its name is never a factory name, and the screen marks it **NEW · FAMILY** in lime. Rate, depth and the slap settings stay as they are.
 - **Slap:** each step can send to the slap (the lime dots). The echo goes through a 24 dB/oct high-pass at SUB SAFE, so no sub ever repeats, then two short delay lines with TONE in the feedback loop.
   - **LOCK:** echo time = `2·swing·step`, so a downbeat's echo lands exactly on the swung off-step. This is the signature move: the slap plays the ghost note the gate left out.
   - **GAPS:** echoes sound only while the gate is closed (call and response).
@@ -21,7 +21,7 @@ A rhythmic gate for sustained mid-basses and subs. One click rolls a groove that
 | ID | Label | Range | Default |
 |---|---|---|---|
 | `swing` | SWING | 50–75 % | 60 % |
-| `rate` | RATE | 1/8, 1/16, 1/32 | 1/16 |
+| `rate` | RATE | 1/4, 1/8, 1/16, 1/32 (projects from 0.1/0.2 are migrated: schema 1 → 2) | 1/16 |
 | `length` | LENGTH | 5–100 % of the step slot | 60 % |
 | `smooth` | SMOOTH | 1–40 ms, log | 6 ms |
 | `depth` | DEPTH | 0–100 % (closed gain = (1−d)²) | 100 % |
@@ -106,7 +106,15 @@ To join the suite later, move `stutter-step/` next to the others in the suite re
 
 1. Scaffold, parameters, state. 2. Groove model + generator + envelope, with tests. 3. Gate in the processor. 4. Slap. 5. Editor over the shell art. 6. Tests, pluginval/auval, install for an Ableton check. 7. Icon and the suite installer.
 
+## Status (v0.3.0, 9 October 2026)
+
+- **RATE 1/4** added (16 steps = 4 bars). The choice list is now 1/4, 1/8, 1/16, 1/32; saved projects carry GROOVE schema 2, and schema-1 projects have their RATE index moved up one on load, so they keep their rate. LOCK's echo time is capped at 0.95 s (it was 0.5 s) so 1/4 grooves still land on the swung off-step at normal tempos.
+- **NEW GROOVE rewritten** (see Product). It used to fill per-family probability templates, which made rolls resemble the factory grooves, and its name lists contained factory names (Rubber Shuffle, Velvet Strut, Jelly Bounce, Pony Gallop), so a roll could look exactly like a preset. A reopened project also mapped a rolled groove with a factory name back to that preset; rolled grooves now always reopen as rolled.
+- Tests: 116 checks, 0 failures, including 2,000 rolls (1,958 distinct rhythms; none within four steps of a factory groove or of the groove it replaced; no factory names), 1/4 timing, LOCK at 1/4 and the schema-1 RATE migration.
+- `StutterStepShots` also renders `05-quarter-rate.png`.
+
 ## Status (v0.2.0, 9 October 2026)
+
 
 - **Presets:** 43 factory grooves in eight folders (HALFTIME, RIDDIM, TRIPLET, LEFT-FIELD, DUB, SHUFFLE, SUB, STUTTER), browsable from the groove-name menu; see `PRESETS.md`. Projects find their preset by name, so the bank can grow. A fresh instance opens on Lean Back.
 - **Icon:** the teal "SS" robot in `Assets/AppIcon.png`, built into both bundles; see `ARTWORK.md`.

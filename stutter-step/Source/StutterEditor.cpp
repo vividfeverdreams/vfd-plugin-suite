@@ -12,7 +12,7 @@ const juce::Colour bench { 0xff050d0e }, cream { 0xfff4ead2 }, glassText { 0xffd
 
 // Artwork coordinates, measured on Assets/DeviceShell.png (1120 x 1408).
 const juce::Rectangle<float> laneArt { 250, 286, 684, 128 }, dotsArt { 250, 440, 684, 30 };
-const juce::Rectangle<float> outputArt { 540, 514, 110, 32 }, meterArt { 724, 494, 210, 52 };
+const juce::Rectangle<float> subSafeArt { 432, 514, 104, 32 }, outputArt { 552, 514, 104, 32 }, meterArt { 724, 494, 210, 52 };
 const juce::Point<float> ledCentre { 948, 127 };
 constexpr float startAngle = juce::MathConstants<float>::pi * 1.25f, sweep = juce::MathConstants<float>::pi * 1.5f;
 constexpr std::array<float, 4> menuScales { 0.9f, 1.0f, 1.25f, 1.5f };
@@ -24,7 +24,7 @@ juce::String swingWord (double s)
 }
 juce::String percent (double v01) { return juce::String (juce::roundToInt (v01 * 100.0)) + "%"; }
 juce::String hertz (float hz) { return hz >= 1000.0f ? juce::String (hz / 1000.0f, hz >= 10000.0f ? 0 : 1) + " kHz" : juce::String (juce::roundToInt (hz)) + " Hz"; }
-const char* rateNames[] { "1/8", "1/16", "1/32" };
+const char* rateNames[] { "1/4", "1/8", "1/16", "1/32" };
 
 juce::Image loadShell()
 {
@@ -534,17 +534,17 @@ StutterEditor::StutterEditor (StutterProcessor& p)
     subSafe->label = [this] { const int i = juce::roundToInt (param ("subSafe")); return juce::String (i == 0 ? "OFF" : i == 1 ? "80 Hz" : i == 2 ? "120 Hz" : "200 Hz"); };
     subSafe->setTooltip ("Lows below this never reach the slap, so the sub stays clean and mono. Click to cycle.");
     subSafe->onClick = [this] { setParam ("subSafe", (float) ((juce::roundToInt (param ("subSafe")) + 1) % 4)); repaint(); };
-    int rateIndex = 0;
-    for (auto* key : { &rate8, &rate16, &rate32 }) {
-        const int i = rateIndex++;
-        *key = std::make_unique<ScreenKey> (juce::String ("Rate ") + rateNames[i], ScreenKey::Style::key, semiBold);
-        (*key)->label = [i] { return juce::String (rateNames[i]); };
-        (*key)->lit = [this, i] { return juce::roundToInt (param ("rate")) == i; };
-        (*key)->setTooltip ("Step size. The 16 steps span 2 bars at 1/8, 1 bar at 1/16 and half a bar at 1/32.");
-        (*key)->onClick = [this, i] { setParam ("rate", (float) i); repaint(); };
+    for (int i = 0; i < (int) rateKeys.size(); ++i) {
+        auto& key = rateKeys[(size_t) i];
+        key = std::make_unique<ScreenKey> (juce::String ("Rate ") + rateNames[i], ScreenKey::Style::key, semiBold);
+        key->label = [i] { return juce::String (rateNames[i]); };
+        key->lit = [this, i] { return juce::roundToInt (param ("rate")) == i; };
+        key->setTooltip ("Step size. The 16 steps span 4 bars at 1/4, 2 bars at 1/8, 1 bar at 1/16 and half a bar at 1/32.");
+        key->onClick = [this, i] { setParam ("rate", (float) i); repaint(); };
     }
-    for (auto* key : { presetMenu.get(), rollFrom.get(), prev.get(), next.get(), subSafe.get(), rate8.get(), rate16.get(), rate32.get() })
+    for (auto* key : { presetMenu.get(), rollFrom.get(), prev.get(), next.get(), subSafe.get() })
         addAndMakeVisible (*key);
+    for (auto& key : rateKeys) addAndMakeVisible (*key);
 
     outputDrag = std::make_unique<Knob::Fine>();
     outputDrag->setSliderStyle (juce::Slider::RotaryVerticalDrag);
@@ -700,10 +700,9 @@ void StutterEditor::resized()
     presetMenu->setBounds (toEditor ({ 188, 226, 646, 46 }));
     prev->setBounds (toEditor ({ 846, 230, 40, 38 }));
     next->setBounds (toEditor ({ 892, 230, 40, 38 }));
-    rate8->setBounds (toEditor ({ 196, 514, 58, 32 }));
-    rate16->setBounds (toEditor ({ 260, 514, 58, 32 }));
-    rate32->setBounds (toEditor ({ 324, 514, 58, 32 }));
-    subSafe->setBounds (toEditor ({ 410, 514, 110, 32 }));
+    for (int i = 0; i < (int) rateKeys.size(); ++i)
+        rateKeys[(size_t) i]->setBounds (toEditor ({ 196.0f + 56.0f * (float) i, 514, 52, 32 }));
+    subSafe->setBounds (toEditor (subSafeArt));
     outputDrag->setBounds (toEditor (outputArt));
     swingLock->setBounds (toEditor ({ 446, 620, 36, 36 }));
     dice->setBounds (toEditor ({ 585, 662, 310, 108 }));
@@ -793,33 +792,38 @@ void StutterEditor::drawScreen (juce::Graphics& g) const
     const auto nameFont = font (34, true);
     const float nameW = juce::jmin (430.0f, juce::GlyphArrangement::getStringWidth (nameFont, name) + 4.0f);
     text (g, name, { 196, 228, nameW, 42 }, 34, glassText, juce::Justification::centredLeft, true);
-    const juce::String fam = gr.presetIndex >= 0 ? juce::String (factoryGroove (gr.presetIndex).folder) : juce::String (familyName (gr.family));
+    // A factory groove shows its folder; a rolled one is marked NEW in lime, so it never reads as a preset.
+    const bool rolled = gr.presetIndex < 0;
+    const juce::String fam = rolled ? "NEW " + juce::String::charToString (0x00B7) + " " + familyName (gr.family)
+                                    : juce::String (factoryGroove (gr.presetIndex).folder);
+    const auto chipColour = rolled ? lime : aqua;
     const auto chipFont = font (13).withExtraKerningFactor (0.16f);
     const float chipW = juce::GlyphArrangement::getStringWidth (chipFont, fam) + 18.0f;
     const juce::Rectangle<float> chip { 196 + nameW + 14, 236, chipW, 26 };
-    g.setColour (aqua.withAlpha (0.45f));
+    g.setColour (chipColour.withAlpha (0.45f));
     g.drawRoundedRectangle (chip, 6.0f, 1.5f);
-    text (g, fam, chip, 13, aqua, juce::Justification::centred, false, 0.16f);
+    text (g, fam, chip, 13, chipColour, juce::Justification::centred, false, 0.16f);
     text (g, juce::String::charToString (0x25BE), { chip.getRight() + 8, 236, 20, 26 }, 16, glassMuted, juce::Justification::centred);
 
     text (g, "GATE", { 196, 340, 54, 20 }, 13, glassMuted, juce::Justification::centredLeft, false, 0.16f);
     text (g, "SLAP", { 196, 446, 54, 20 }, 13, juce::Colour (0xffa9c96a), juce::Justification::centredLeft, false, 0.16f);
-    // Beat labels at the straight grid; the span label on the right.
+    // Lane labels at the straight grid (bars at 1/4, beats at 1/16, every other beat or bar otherwise);
+    // the span label on the right.
     const int rate = snap.rate;
-    const char* labels16[] { "1", "2", "3", "4" };
-    const char* labelsBar[] { "1", "", "2", "" };
+    const char* labelsEach[] { "1", "2", "3", "4" };
+    const char* labelsHalf[] { "1", "", "2", "" };
     for (int k = 0; k < 4; ++k) {
-        const juce::String l = rate == 1 ? labels16[k] : labelsBar[k];
+        const juce::String l = rate == 0 || rate == 2 ? labelsEach[k] : labelsHalf[k];
         if (l.isNotEmpty()) text (g, l, { laneArt.getX() + k * laneArt.getWidth() / 4 + 3, 418, 30, 18 }, 13, glassMuted);
     }
-    text (g, rate == 0 ? "2 BARS" : rate == 1 ? "1 BAR" : juce::String::fromUTF8 ("\xc2\xbd BAR"), { 834, 418, 100, 18 }, 13, glassMuted,
-          juce::Justification::centredRight, false, 0.14f);
+    const juce::String span = rate == 0 ? "4 BARS" : rate == 1 ? "2 BARS" : rate == 2 ? "1 BAR" : juce::String::fromUTF8 ("\xc2\xbd BAR");
+    text (g, span, { 834, 418, 100, 18 }, 13, glassMuted, juce::Justification::centredRight, false, 0.14f);
     g.setColour (aqua.withAlpha (0.14f));
     g.fillRect (juce::Rectangle<float> (196, 482, 738, 1));
     // Bottom row labels, OUTPUT readout, meter.
     text (g, "RATE", { 196, 494, 100, 16 }, 12, glassMuted, juce::Justification::centredLeft, false, 0.16f);
-    text (g, "SUB SAFE", { 410, 494, 110, 16 }, 12, glassMuted, juce::Justification::centredLeft, false, 0.16f);
-    text (g, "OUTPUT", { 540, 494, 110, 16 }, 12, glassMuted, juce::Justification::centredLeft, false, 0.16f);
+    text (g, "SUB SAFE", subSafeArt.withY (494).withHeight (16), 12, glassMuted, juce::Justification::centredLeft, false, 0.16f);
+    text (g, "OUTPUT", outputArt.withY (494).withHeight (16), 12, glassMuted, juce::Justification::centredLeft, false, 0.16f);
     const auto out = outputArt.reduced (1);
     g.setColour (keyFill.withAlpha (0.8f));
     g.fillRoundedRectangle (out, 7);

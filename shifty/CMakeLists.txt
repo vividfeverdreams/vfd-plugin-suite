@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.22)
-project(Shifty VERSION 0.5.0 LANGUAGES C CXX)
+project(Shifty VERSION 0.5.1 LANGUAGES C CXX)
 
 if (APPLE)
     enable_language(OBJCXX)
@@ -45,7 +45,8 @@ endif()
 
 juce_add_binary_data(ShiftyAssets SOURCES
     ../shared/VfdLogo.svg
-    Assets/DeviceShell-fullbleed.png
+    Assets/DeviceShell-editor.png
+    Assets/ShellGlow.png
     Assets/ChakraPetch-SemiBold.ttf
     Assets/ChakraPetch-BoldItalic.ttf)
 
