@@ -17,7 +17,7 @@ Six free, open-source audio plug-ins for bass music by **Vivid Fever Dreams**, b
 
 ## Download
 
-Ready-to-install builds for **Mac** (VST3 + Audio Unit, Apple Silicon, macOS 12+, signed and notarized) and **Windows** (VST3, x64) are shared free in the Vivid Fever Dreams Instagram channel. You can also build everything from this source (below).
+Free, ready-to-install builds for **Mac** (VST3 + Audio Unit, Apple Silicon, macOS 12+, signed and notarized) and **Windows** (VST3, x64) are on the **[Releases page](https://github.com/vividfeverdreams/vfd-plugin-suite/releases/latest)** and in the Vivid Fever Dreams Instagram channel. You can also build everything from this source (below).
 
 ## Platforms
 
