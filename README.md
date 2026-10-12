@@ -1,17 +1,23 @@
 # Vivid Fever Dreams plug-in suite
 
-Six audio plug-ins built with JUCE 9.0.2, one folder each:
+![The six plug-ins](docs/suite.jpg)
+
+Six free, open-source audio plug-ins for bass music by **Vivid Fever Dreams**, built with JUCE 9.0.2. One folder each:
 
 | Folder | Plug-in | What it is |
 | --- | --- | --- |
-| `yoi-boi/` | YOI-BOI | Talking bass synth (instrument) |
-| `throw-up/` | THROW-UP | Mid-bass reverb throws |
-| `back-scratch/` | BACK-SCRATCH | Tempo-synced scratch patterns |
-| `shifty/` | SHIFTY | Formant shifter for bass |
-| `energy-harvester/` | ENERGY HARVESTER | Tape start, stop and brake |
-| `stutter-step/` | STUTTER-STEP | Swing gate with slap delay |
+| `yoi-boi/` | YOI-BOI | Talking bass synth (instrument): NEW YOI rolls an instant talking bass, 9 vowels, synced talk |
+| `back-scratch/` | BACK-SCRATCH | Tempo-synced live scratch patterns on any track: rolls, chains, 230 presets |
+| `shifty/` | SHIFTY | Formant shifter for bass: a new mouth, same notes; zero-latency TALK engine |
+| `throw-up/` | THROW-UP | Mid-bass reverb throws: one giant THROW knob, Freeze, Shimmer, Swell |
+| `energy-harvester/` | ENERGY HARVESTER | Tape start, stop, brake and rewind gestures that land on the beat |
+| `stutter-step/` | STUTTER-STEP | Swing gate with per-step slap delay; NEW GROOVE makes new rhythms |
 
 `shared/` holds the INFO page and logo that every plug-in uses; the plug-in folders must stay next to it.
+
+## Download
+
+Ready-to-install builds for **Mac** (VST3 + Audio Unit, Apple Silicon, macOS 12+, signed and notarized) and **Windows** (VST3, x64) are shared free in the Vivid Fever Dreams Instagram channel. You can also build everything from this source (below).
 
 ## Platforms
 
@@ -21,3 +27,23 @@ Six audio plug-ins built with JUCE 9.0.2, one folder each:
 ## JUCE
 
 JUCE is not in the repo. Put a JUCE 9.0.2 checkout at `<plug-in>/external/JUCE`. BACK-SCRATCH and ENERGY HARVESTER replace one JUCE file with their copy in `patches/juce-9.0.2/` (see the README there).
+
+## License
+
+Copyright (C) 2026 Vivid Fever Dreams.
+
+This suite is free software: you can redistribute it and/or modify it under the terms of the **GNU Affero General Public License, version 3** ([LICENSE.md](LICENSE.md)), as published by the Free Software Foundation. It is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the license for details.
+
+The AGPLv3 matches the open-source licence of JUCE, which the plug-ins are built on. If you distribute builds of these plug-ins or anything derived from them, you have to offer their source under the same licence.
+
+Third-party parts:
+
+- **JUCE** (not included; fetched at build time) is dual-licensed under the AGPLv3 and the commercial JUCE licence. The files in `patches/juce-9.0.2/` are modified JUCE files under the same terms.
+- **Chakra Petch** fonts (each plug-in's `Assets/`) are under the SIL Open Font License 1.1; the licence text is next to them (`ChakraPetch-OFL.txt`).
+- VST is a registered trademark of Steinberg Media Technologies GmbH. Audio Units is a trademark of Apple Inc.
+
+## Credits
+
+Developed by Vivid Fever Dreams with the use of artificial-intelligence coding tools. Executive producers: C.Y. Lee ([@cxy](https://x.com/cxy)) and Carl Tydingco ([@clt](https://x.com/clt)).
+
+Music: [vividfeverdreams.xyz](https://www.vividfeverdreams.xyz) · Support the live visual project Dream Sequence: [Fractured Atlas](https://fundraising.fracturedatlas.org/dream-sequence)
