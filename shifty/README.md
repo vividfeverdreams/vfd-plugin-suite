@@ -1,8 +1,13 @@
-# SHIFTY 0.5.1
+# SHIFTY 0.5.2
 
 SHIFTY is a formant effect for bass. It changes the "mouth" of a sound (its resonances: bigger and darker, or smaller and brighter, or a different vowel) while the notes stay where they are. Put it after a bass synth or on an audio track. It accepts mono or stereo audio and makes no sound on its own.
 
 This build is a **VST3 and Audio Unit (AU) effect for Apple Silicon Macs running macOS 12 or later**.
+
+## What's new in 0.5.2
+
+- **An OUTPUT knob.** OUTPUT is now a knob on the board beside INFO, in a socket moulded like INFO's, as on ENERGY HARVESTER. Its ring lights from 0 dB (the tick) to the setting; drag it, double-click to reset, or double-click the value to type one. The screen strip's L/R meters use the room it left.
+- **Suite updates on the INFO page.** INFO shows the suite version and lights up when a newer suite is out; INSTALL downloads and opens its installer.
 
 ## What's new in 0.5.1
 

@@ -88,6 +88,7 @@ private:
     void drawPresetsScreen(juce::Graphics&);
     void drawControlPanel(juce::Graphics&);
     void drawUtilityPanel(juce::Graphics&);
+    void drawOutputKnob(juce::Graphics&);
     void drawKnob(juce::Graphics&, const char* id, juce::Point<float> centre,
                   float arcRadius, float pointerRadius, bool large);
     void drawScreenKnob(juce::Graphics&, const char* id, const char* label, juce::Point<float> centre, float radius);

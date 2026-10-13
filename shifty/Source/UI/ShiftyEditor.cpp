@@ -27,6 +27,12 @@ const juce::Rectangle<float> locksBounds {543, 1139, 140, 58};
 const juce::Rectangle<float> undoBounds {719, 1139, 64, 38};
 const juce::Rectangle<float> redoBounds {791, 1139, 64, 38};
 const juce::Rectangle<float> bypassBounds {719, 1185, 136, 36};
+// OUTPUT is a knob on the board left of INFO (as on ENERGY HARVESTER), in a recessed socket like INFO's,
+// with its name and value beside it.
+const juce::Point<float> outputKnobCentre {421.0f, 1295.0f};
+constexpr float outputSocketRadius = 39.0f, outputArcRadius = 33.0f, outputCapRadius = 26.5f;
+const juce::Rectangle<float> outputNameBounds {226, 1262, 144, 26};
+const juce::Rectangle<float> outputValueBounds {226, 1288, 144, 34};
 // Screen (dark LCD) layout, design coordinates. The screen interior spans x 141..981, y 171..507.
 const juce::Rectangle<float> pageTabs[] { {592, 116, 82, 42}, {674, 116, 82, 42}, {756, 116, 82, 42}, {838, 116, 80, 42} };
 const juce::Rectangle<float> engineSelectorBounds {540, 202, 400, 40};
@@ -145,6 +151,20 @@ class ValueLabel final : public juce::Label {
 public:
     ValueLabel(juce::Slider& s, bool shouldForwardDrag)
         : slider(s), dragThrough(shouldForwardDrag) {}
+    /** Values printed straight on the board get a dark drop shadow so they read over the circuitry. */
+    bool shadowed = false;
+    /** A drag on the value moves its control (as it did before OUTPUT had a knob). */
+    void setDragThrough(bool forward) noexcept { dragThrough = forward; }
+    void paint(juce::Graphics& g) override {
+        if (!shadowed || isBeingEdited()) { juce::Label::paint(g); return; }
+        const auto area = getBorderSize().subtractedFrom(getLocalBounds()).toFloat();
+        const float offset = juce::jmax(1.0f, getFont().getHeight() * 0.06f);
+        g.setFont(getFont());
+        g.setColour(juce::Colour(0xff031a11).withAlpha(0.75f));
+        g.drawText(getText(), area.translated(0.0f, offset), getJustificationType(), true);
+        g.setColour(findColour(textColourId));
+        g.drawText(getText(), area, getJustificationType(), true);
+    }
     void mouseDown(const juce::MouseEvent& e) override {
         if (e.mods.isPopupMenu()) {
             slider.mouseDown(e.getEventRelativeTo(&slider));
@@ -339,7 +359,11 @@ ShiftyEditor::ShiftyEditor(ShiftyProcessor& p)
     addControl("drive", {576, 798, 144, 142}, {585, 927, 125, 45}, true, true);
     addControl("mix", {778, 798, 144, 142}, {790, 927, 125, 45}, true, true);
     addControl("subCut", {296, 1042, 120, 60}, {296, 1043, 125, 62}, false, false);
-    addControl("output", {458, 1042, 155, 60}, {462, 1043, 150, 62}, false, false);
+    addControl("output", juce::Rectangle<float>(2.0f * outputSocketRadius, 2.0f * outputSocketRadius).withCentre(outputKnobCentre),
+               outputValueBounds, true, false, false);
+    control("output")->label->setJustificationType(juce::Justification::centredRight);
+    control("output")->label->shadowed = true;
+    control("output")->label->setDragThrough(true);
     // MOTION page, LFO strip
     addControl("motionDepth", {525, 418, 170, 52}, {592, 421, 103, 48}, false, false);
     addControl("motionFreeHz", {335, 418, 180, 52}, {398, 421, 117, 48}, false, false);
@@ -497,6 +521,7 @@ void ShiftyEditor::addControl(const char* id, juce::Rectangle<float> hit,
     else if (c.id == "bite") description = "Bite: TALK resonance and drive into the vowels, MOUTH pitch-synchronous buzz, CLASSIC contrast";
     else if (c.id == "drive") description = "Drive: anti-aliased saturation before the formant engine";
     else if (c.id == "mix") description = "Mix: blend in the formant effect; 100% gives the clearest change";
+    else if (c.id == "output") description = "Output: SHIFTY's final level, from -24 to +6 dB";
     else if (c.id == "vowelMorph") description = "Vowel: morph OO, OH, AH, EH, EE (TALK) or the mouth shape (MOUTH)";
     else if (c.id == "character") description = "Character macro: more resonance, bite and drive (MOUTH: adds the vowel's mouth shape)";
     else if (c.id == "talk") description = "Talk macro: more envelope, YOI and Motion movement";
@@ -722,8 +747,7 @@ void ShiftyEditor::resized() {
     for (auto& c : controls) {
         c.slider->setBounds(scaled(c.hit));
         c.label->setBounds(scaled(c.value));
-        float fontSize = c.id == "shift" ? 46.0f :
-                         (c.id == "subCut" || c.id == "output") ? 31.0f : 31.0f;
+        float fontSize = c.id == "shift" ? 46.0f : c.id == "output" ? 25.0f : 31.0f;
         if (c.id.startsWith("motion") || c.id.startsWith("env") || c.id.startsWith("yoi")) fontSize = 22.0f;
         if (c.id == "vowelMorph" || c.id == "character" || c.id == "talk") fontSize = 20.0f;
         c.label->setFont(juce::Font(juce::FontOptions(normalTypeface)
@@ -1419,6 +1443,68 @@ void ShiftyEditor::drawKnob(juce::Graphics& g, const char* id,
     }
 }
 
+void ShiftyEditor::drawOutputKnob(juce::Graphics& g) {
+    const auto* c = control("output");
+    if (!c) return;
+    const auto centre = outputKnobCentre;
+    const auto circle = [centre](float radius) { return juce::Rectangle<float>(2.0f * radius, 2.0f * radius).withCentre(centre); };
+    const auto socketColour = vfd::themeFor("SHIFTY").socket;
+    // The recessed socket: the same moulding as the INFO key's.
+    const auto socket = circle(outputSocketRadius);
+    g.setColour(juce::Colours::black.withAlpha(0.44f));
+    g.fillEllipse(socket.translated(0.0f, 2.0f));
+    g.setGradientFill(juce::ColourGradient(socketColour.darker(0.5f), centre.x, socket.getY(),
+                                          socketColour.brighter(0.32f), centre.x, socket.getBottom(), false));
+    g.fillEllipse(socket);
+    g.setColour(lime.withAlpha(0.25f));
+    g.drawEllipse(socket.reduced(0.6f), 1.2f);
+    // Level arc in the socket, measured from 0 dB (a small tick) to the setting.
+    const float lo = static_cast<float>(c->slider->getMinimum()), hi = static_cast<float>(c->slider->getMaximum());
+    const auto angleOf = [&](float value) { return startAngle + juce::jlimit(0.0f, 1.0f, (value - lo) / (hi - lo)) * (endAngle - startAngle); };
+    const float zero = angleOf(0.0f), angle = angleOf(static_cast<float>(c->slider->getValue()));
+    juce::Path track;
+    track.addCentredArc(centre.x, centre.y, outputArcRadius, outputArcRadius, 0.0f, startAngle, endAngle, true);
+    g.setColour(juce::Colour(0xff06291c).withAlpha(0.85f));
+    g.strokePath(track, juce::PathStrokeType(4.0f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+    if (std::abs(angle - zero) > 0.01f) {
+        juce::Path arc;
+        arc.addCentredArc(centre.x, centre.y, outputArcRadius, outputArcRadius, 0.0f,
+                          juce::jmin(zero, angle), juce::jmax(zero, angle), true);
+        g.setColour(lime.withAlpha(0.9f));
+        g.strokePath(arc, juce::PathStrokeType(4.0f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+    }
+    const auto onRim = [&](float a, float radius) { return centre + juce::Point<float>(std::sin(a), -std::cos(a)) * radius; };
+    g.setColour(mint.withAlpha(0.8f));
+    g.drawLine({ onRim(zero, outputArcRadius - 3.5f), onRim(zero, outputSocketRadius - 0.5f) }, 1.6f);
+    // The cap: the same pale resin as the plate knobs.
+    const auto cap = circle(outputCapRadius);
+    g.setColour(juce::Colours::black.withAlpha(0.5f));
+    g.fillEllipse(cap.translated(0.0f, 2.0f));
+    juce::ColourGradient resin(juce::Colour(0xfff4fbef), centre.x - outputCapRadius * 0.45f, cap.getY(),
+                               juce::Colour(0xff9fbfa6), centre.x + outputCapRadius * 0.45f, cap.getBottom(), false);
+    resin.addColour(0.45, juce::Colour(0xffdcebd8));
+    g.setGradientFill(resin);
+    g.fillEllipse(cap);
+    g.setColour(ink.withAlpha(0.55f));
+    g.drawEllipse(cap, 1.2f);
+    g.setColour(juce::Colours::white.withAlpha(0.7f));
+    g.drawEllipse(cap.reduced(2.0f), 1.0f);
+    g.setColour(ink);
+    g.drawLine({ onRim(angle, outputCapRadius * 0.3f), onRim(angle, outputCapRadius * 0.8f) }, 4.5f);
+    for (const float radius : { outputCapRadius * 0.3f, outputCapRadius * 0.8f })
+        g.fillEllipse(juce::Rectangle<float>(4.5f, 4.5f).withCentre(onRim(angle, radius)));
+    // The name sits on the board with a shadow, like the value below it.
+    g.setFont(juce::Font(juce::FontOptions(normalTypeface).withHeight(20.0f)).withExtraKerningFactor(0.06f));
+    g.setColour(juce::Colour(0xff031a11).withAlpha(0.75f));
+    g.drawText("OUTPUT", outputNameBounds.translated(0.0f, 1.5f), juce::Justification::centredRight, false);
+    g.setColour(screenText);
+    g.drawText("OUTPUT", outputNameBounds, juce::Justification::centredRight, false);
+    if (c->slider->hasKeyboardFocus(true)) {
+        g.setColour(lime);
+        g.drawEllipse(socket.expanded(3.0f), 1.6f);
+    }
+}
+
 void ShiftyEditor::drawControlPanel(juce::Graphics& g) {
     drawText(g, "SHIFT", {255, 542, 194, 51}, 43.0f, ink);
     drawText(g, "FOCUS", {566, 540, 158, 39}, 31.0f, ink);
@@ -1445,7 +1531,6 @@ void ShiftyEditor::drawControlPanel(juce::Graphics& g) {
 
 void ShiftyEditor::drawUtilityPanel(juce::Graphics& g) {
     drawText(g, "SUB SAFE", {169, 1013, 147, 34}, 25.0f, screenText);
-    drawText(g, "OUTPUT", {476, 1013, 132, 34}, 25.0f, screenText);
     if (isOn("subSafe")) {
         g.setColour(lime.withAlpha(0.62f));
         g.fillEllipse(191.0f, 1054.0f, 37.0f, 37.0f);
@@ -1454,21 +1539,24 @@ void ShiftyEditor::drawUtilityPanel(juce::Graphics& g) {
         g.fillEllipse(188.0f, 1052.0f, 43.0f, 43.0f);
     }
 
+    // OUTPUT is the knob beside INFO, so the meters take the rest of the strip.
+    constexpr int segments = 24;
     for (int channel = 0; channel < 2; ++channel) {
         const float y = channel == 0 ? 1025.0f : 1065.0f;
-        drawText(g, channel == 0 ? "L" : "R", {640.0f, y - 3.0f, 45.0f, 31.0f},
+        drawText(g, channel == 0 ? "L" : "R", {478.0f, y - 3.0f, 45.0f, 31.0f},
                  25.0f, screenText);
         const float peak = meterPeaks[static_cast<size_t>(channel)];
-        for (int segment = 0; segment < 14; ++segment) {
-            const bool lit = peak >= (segment + 1) / 14.0f;
-            juce::Colour colour = segment < 7 ? lime :
-                                  segment < 12 ? juce::Colour(0xff79f1e7) :
-                                                 juce::Colour(0xffff8f67);
+        for (int segment = 0; segment < segments; ++segment) {
+            const bool lit = peak >= (segment + 1) / static_cast<float>(segments);
+            juce::Colour colour = segment < segments / 2 ? lime :
+                                  segment < segments * 6 / 7 ? juce::Colour(0xff79f1e7) :
+                                                               juce::Colour(0xffff8f67);
             g.setColour(lit ? colour : juce::Colour(0xff104d37).withAlpha(0.7f));
-            g.fillRect(juce::Rectangle<float>(691.0f + segment * 18.0f, y,
+            g.fillRect(juce::Rectangle<float>(529.0f + segment * 18.0f, y,
                                                14.0f, 22.0f));
         }
     }
+    drawOutputKnob(g);
 
     // The footer plate, its bays and dividers are moulded into the shell art.
     const bool motionOn = isOn("motionEnable");
