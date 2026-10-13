@@ -12,6 +12,19 @@
 namespace backScratch {
 
 namespace {
+// Play Every in the phrase's own units: "EVERY 2ND BAR", "EVERY 4TH BEAT", or for a phrase longer than one bar
+// or beat "LAST 2 OF EVERY 8 BARS". durationChoice: 0 = 1/2 beat, 1 = 1 beat, 2 = 2 beats, 3 = 1 bar ... 7 = 16 bars.
+juce::String playEveryText(int every, int durationChoice)
+{
+    const char* ordinal = every == 2 ? "2ND" : every == 4 ? "4TH" : "8TH";
+    const int choice = std::clamp(durationChoice, 0, 7);
+    if (choice == 0) return juce::String("EVERY ") + ordinal + " HALF BEAT";
+    if (choice == 1) return juce::String("EVERY ") + ordinal + " BEAT";
+    if (choice == 3) return juce::String("EVERY ") + ordinal + " BAR";
+    const int length = choice == 2 ? 2 : 1 << (choice - 3); // beats for choice 2, bars from choice 4
+    return "LAST " + juce::String(length) + " OF EVERY " + juce::String(length * every) + (choice == 2 ? " BEATS" : " BARS");
+}
+
 constexpr float canvasWidth = 1122.0f, canvasHeight = 1402.0f;
 // Default editor size: the enclosure fills the window edge to edge (design viewport 972 x 1308 at 1/1.3886).
 constexpr int editorWidth = 700, editorHeight = 942, minimumEditorWidth = 420, maximumEditorWidth = 1050;
@@ -245,7 +258,7 @@ BackScratchEditor::BackScratchEditor(BackScratchProcessor& owner)
     }
     setSize(width, juce::roundToInt(width * double(editorHeight) / editorWidth));
     setWantsKeyboardFocus(true);
-    setTitle("BACK-SCRATCH — live scratch variations");
+    setTitle(juce::String::fromUTF8("BACK-SCRATCH — live scratch variations"));
     startTimerHz(30);
 }
 
@@ -777,7 +790,7 @@ void BackScratchEditor::drawPattern(juce::Graphics& g, const BackScratchProcesso
     if (resting || display.every > 1) {
         const auto text = !display.engaged ? juce::String("STANDBY / PRESS ENGAGE")
             : (display.playing && !display.cycleActive ? juce::String("WAITING / ") : juce::String())
-              + "PLAYS LAST OF " + juce::String(display.every);
+              + "PLAYS " + playEveryText(display.every, display.durationChoice);
         // A small screen label on its own dark plate, readable over any curve.
         const juce::Font font(juce::FontOptions(regularTypeface).withHeight(14.0f));
         const float width = juce::GlyphArrangement::getStringWidth(font, text) + 18.0f;
@@ -917,7 +930,7 @@ void BackScratchEditor::drawPerformPage(juce::Graphics& g, const BackScratchProc
         drawText(g, on ? "RESTARTS" : "OFF", rectangle(box.getX() + 30, box.getY() + 28, box.getWidth() - 34, 18), 14,
                  on ? lime : cream.withAlpha(0.5f), juce::Justification::centredLeft);
     }
-    static constexpr std::array<const char*, 4> plays {"EVERY", "LAST OF 2", "LAST OF 4", "LAST OF 8"};
+    static constexpr std::array<const char*, 4> plays {"EVERY", "EVERY 2ND", "EVERY 4TH", "EVERY 8TH"};
     labelled(Control::every, "PLAY", plays[static_cast<size_t>(std::clamp(choice("phraseEvery"), 0, 3))]);
     static constexpr std::array<const char*, 5> looks {"OFF", "1 BEAT", "1 BAR", "2 BARS", "4 BARS"};
     labelled(Control::lookback, "LOOK BACK", looks[static_cast<size_t>(std::clamp(choice("lookback"), 0, 4))]);
@@ -1382,7 +1395,7 @@ void BackScratchEditor::chooseChoice(Control control)
     struct Spec { const char* title; const char* id; std::vector<juce::String> items; };
     const auto spec = [control]() -> Spec {
         if (control == Control::quantize) return {"ENGAGE SNAPS TO", "engageQuantize", {"Next 1/16", "Next 1/8", "Next beat", "Next half bar", "Next bar"}};
-        if (control == Control::every) return {"PLAY THE PATTERN", "phraseEvery", {"Every phrase", "Last of every 2", "Last of every 4", "Last of every 8"}};
+        if (control == Control::every) return {"PLAY THE PATTERN", "phraseEvery", {"Every phrase", "Every 2nd phrase", "Every 4th phrase", "Every 8th phrase"}};
         if (control == Control::lookback) return {"LOOK BACK", "lookback", {"Off", "1 beat", "1 bar", "2 bars", "4 bars"}};
         if (control == Control::chain) return {"SLOT CHAIN", "slotChain", {"Off (selected slot)", "A-B, one per phrase", "A-D, one per phrase", "A-H, one per phrase"}};
         if (control == Control::split) return {"KEEP SUB SPLIT", "subSplit", {"120 Hz", "160 Hz", "200 Hz (classic)", "300 Hz"}};
@@ -1761,7 +1774,7 @@ juce::String BackScratchEditor::getTooltip()
         case Control::engage: return "Start or stop the pattern. The change waits for the next snap point and blends in or out without a click.";
         case Control::quantize: return "Where Engage takes effect: the next 1/16, 1/8, quarter note, half note or bar.";
         case Control::retrigger: return "When on, engaging restarts the pattern from its beginning instead of following song position.";
-        case Control::every: return "Play the pattern on every phrase, or only on the last of every 2, 4 or 8 phrases (a fill).";
+        case Control::every: return "Play the pattern on every phrase, or only on every 2nd, 4th or 8th phrase (a fill at the end of each group).";
         case Control::lookback: return "Scratch audio from earlier: 1 beat to 4 bars back. Great for answering the previous phrase.";
         case Control::mix: return "Blend between the dry track and the scratched sound. Drag sideways; Shift for fine; double-click for 100%.";
         case Control::depth: return "Scale every stroke: shallower below 100%, deeper and faster (up to 4x) above. Double-click for 100%.";

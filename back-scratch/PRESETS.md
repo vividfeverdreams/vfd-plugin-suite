@@ -26,23 +26,23 @@ Version 0.11 has **230 built-in presets in 17 folders**. Open them from the **‚å
 
 ## New presets in 0.11
 
-"Plays" is the Play Every setting: "last of 4" means the pattern plays on bars 4, 8, 12 and so on (counted from the start of the song, or from where you engaged with Retrigger on), and the other bars pass through clean. "Engage snaps to" is the Engage Snap the preset sets. A Keep Sub split of 120 Hz keeps only the sub and kick fundamental clean, so more of the bass growl or snare body is scratched.
+"Plays" is the Play Every setting: "every 4th" means the pattern plays on bars 4, 8, 12 and so on (counted from the start of the song, or from where you engaged with Retrigger on), and the other bars pass through clean. "Engage snaps to" is the Engage Snap the preset sets. A Keep Sub split of 120 Hz keeps only the sub and kick fundamental clean, so more of the bass growl or snare body is scratched.
 
 ### Fills
 
 | Preset | Length | Plays | Settings | What it does |
 | --- | --- | --- | --- | --- |
-| Bar 4 Rewind | 1 bar | last of 4 | Keep Sub split 120 Hz, Engage snaps to the bar | Every fourth bar, beat four rewinds one beat into the downbeat. |
-| Bar 8 Tape Stop | 1 bar | last of 8 | Keep Sub split 120 Hz, Engage snaps to the bar | Every eighth bar, the second half of the bar winds down to a stop. |
-| Last Beat Roll | 1 bar | last of 4 | Keep Sub split 120 Hz, Engage snaps to the bar | Every fourth bar, beat four rolls in sixteenths, then thirty-seconds. |
-| Turnaround Chirps | 1 bar | last of 4 | Keep Sub split 120 Hz, Engage snaps to the bar | Every fourth bar, three triplet chirps close the phrase. |
-| Pre-Drop Rewind | 1 bar | last of 8 | Keep Sub split 120 Hz, Engage snaps to the bar | Every eighth bar, a deep two-beat rewind pulls back before the drop. |
-| Snare Flip | 1 bar | last of 2 | Keep Sub split 120 Hz, Engage snaps to the bar | Every second bar, the last beat flips its snare backwards in sixteenths. |
-| Half Bar Spin | 1 bar | last of 4 | Keep Sub split 120 Hz, Engage snaps to the bar | Every fourth bar, the back half drops to half speed. |
-| Gate Rush | 1 bar | last of 4 | Keep Sub split 120 Hz, Engage snaps to the bar | Every fourth bar, beat four is chopped in thirty-seconds. |
-| Double Back | 1 bar | last of 4 | Keep Sub split 120 Hz, Engage snaps to the bar | Every fourth bar, a short push on beat three and a rewind on beat four. |
-| Stop & Drop | 1 bar | last of 4 | Keep Sub split 120 Hz, Engage snaps to the bar | Every fourth bar, beat four stops dead and spins back up. |
-| Flashback | 1 bar | last of 2 | Keep Sub split 200 Hz, Look Back 2 bars, Engage snaps to the bar | Every second bar, the second half replays the line from two bars earlier. |
+| Bar 4 Rewind | 1 bar | every 4th | Keep Sub split 120 Hz, Engage snaps to the bar | Every fourth bar, beat four rewinds one beat into the downbeat. |
+| Bar 8 Tape Stop | 1 bar | every 8th | Keep Sub split 120 Hz, Engage snaps to the bar | Every eighth bar, the second half of the bar winds down to a stop. |
+| Last Beat Roll | 1 bar | every 4th | Keep Sub split 120 Hz, Engage snaps to the bar | Every fourth bar, beat four rolls in sixteenths, then thirty-seconds. |
+| Turnaround Chirps | 1 bar | every 4th | Keep Sub split 120 Hz, Engage snaps to the bar | Every fourth bar, three triplet chirps close the phrase. |
+| Pre-Drop Rewind | 1 bar | every 8th | Keep Sub split 120 Hz, Engage snaps to the bar | Every eighth bar, a deep two-beat rewind pulls back before the drop. |
+| Snare Flip | 1 bar | every 2nd | Keep Sub split 120 Hz, Engage snaps to the bar | Every second bar, the last beat flips its snare backwards in sixteenths. |
+| Half Bar Spin | 1 bar | every 4th | Keep Sub split 120 Hz, Engage snaps to the bar | Every fourth bar, the back half drops to half speed. |
+| Gate Rush | 1 bar | every 4th | Keep Sub split 120 Hz, Engage snaps to the bar | Every fourth bar, beat four is chopped in thirty-seconds. |
+| Double Back | 1 bar | every 4th | Keep Sub split 120 Hz, Engage snaps to the bar | Every fourth bar, a short push on beat three and a rewind on beat four. |
+| Stop & Drop | 1 bar | every 4th | Keep Sub split 120 Hz, Engage snaps to the bar | Every fourth bar, beat four stops dead and spins back up. |
+| Flashback | 1 bar | every 2nd | Keep Sub split 200 Hz, Look Back 2 bars, Engage snaps to the bar | Every second bar, the second half replays the line from two bars earlier. |
 
 ### Rolls
 
@@ -130,7 +130,7 @@ Version 0.11 has **230 built-in presets in 17 folders**. Open them from the **‚å
 | Call & Response | 1 bar | every phrase | Keep Sub split 200 Hz, Look Back 1 bar | The second half answers with the previous bar's second half. |
 | Vocal Gate | 1 bar | every phrase | Keep Sub split 200 Hz | A sixteenth-note crossfader gate. |
 | Stammer | 1 bar | every phrase | Keep Sub split 200 Hz, Look Back 1 beat | Beats two and four repeat the beat before them. |
-| Hook Echo | 1 bar | last of 2 | Keep Sub split 200 Hz | Every second bar, beat four repeats beat three. |
+| Hook Echo | 1 bar | every 2nd | Keep Sub split 200 Hz | Every second bar, beat four repeats beat three. |
 
 ### Riddim
 

@@ -8,7 +8,7 @@ The **700 × 940** interface keeps its translucent red shell, recessed smoked-gl
 
 - **PERFORM page.** Two soft keys at the bottom of the display switch between **PATTERN** (the graph and drawing tools) and **PERFORM**.
 - **Engage with snap.** Start and stop the pattern on the next 1/16, 1/8, 1/4, 1/2 note or bar line, without a click. Optional **Retrigger** starts the phrase from its beginning when it engages.
-- **Play Every.** Play the pattern only on the last of every 2, 4 or 8 phrases, so a fill can stay on the track.
+- **Play Every.** Play the pattern only on every 2nd, 4th or 8th phrase, so a fill can stay on the track. The graph says when it plays, in bars or beats ("PLAYS EVERY 4TH BAR"; since 0.11.1).
 - **Rolls.** A roll tool (1/8, 1/16, 1/32, 1/16 triplet, accelerating, reverse, chopped), five roll and tape-stop starter shapes, and a Snap to grid switch.
 - **Pattern slots A–H** with **Chain** (A–B, A–D, A–H): a different pattern on each bar, selectable from host automation.
 - **Mix, Output, Depth, Sub Split and Look Back.** Wet/dry blend, output trim, stroke depth up to 200% (and up to 4× speed), Keep Sub split at 120, 160, 200 or 300 Hz, and scratching from up to four bars back.
@@ -43,7 +43,7 @@ Every control has a tooltip. Click a choice to open its menu; drag the Mix, Dept
 | **ENGAGE** | Starts or stops the pattern. While playing, the change waits for the next **SNAP** point, then blends in or out over 3 ms. With the transport stopped it applies at once. The light shows PLAYING or STANDBY, and SNAPS IN / SNAPS OUT while a change waits for its snap point. When disengaged, the track passes through clean (still with the 730-sample latency, so nothing moves). | Engage |
 | **SNAP** | Where Engage changes land: **1/16, 1/8, 1/4, 1/2** note or **1 Bar** (bars follow the host meter). Default 1/16. | Engage Quantize |
 | **RETRIG** | Off (default): the pattern follows song position, as before. On: the phrase restarts from its beginning at the moment Engage takes effect. | Retrigger |
-| **PLAY** | **Every** phrase (default), or only the **last of 2, 4 or 8** phrases. Phrases are counted from the start of the song (or from the engage point with Retrigger on). In the other phrases the track passes clean, the graph dims and shows WAITING. | Play Every |
+| **PLAY** | **Every** phrase (default), or only **every 2nd, 4th or 8th** phrase (the last phrase of each group of 2, 4 or 8). Phrases are counted from the start of the song (or from the engage point with Retrigger on). In the other phrases the track passes clean, the graph dims and shows WAITING. | Play Every |
 | **LOOK BACK** | Off (default), **1 beat, 1 bar, 2 bars or 4 bars**: while the pattern is scratching, it reads audio from that much earlier, so a fill can replay a line from bars ago. Clean passages stay live. | Look Back |
 | **MIX** | Blend of scratched and clean sound, 0–100%. Default 100%, the 0.10 sound. | Mix |
 | **DEPTH** | Scales every stroke, 0–200%. At 0% the source stays in place (gate cuts still apply); 100% (default) is the drawn pattern; above 100% strokes travel further and can reach **4×** source speed (0.10 stopped at 2×). | Depth |
