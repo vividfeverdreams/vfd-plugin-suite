@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.22)
-project(YoiBoi VERSION 0.2.1 LANGUAGES C CXX)
+project(YoiBoi VERSION 0.2.2 LANGUAGES C CXX)
 
 if (APPLE)
     enable_language(OBJCXX)

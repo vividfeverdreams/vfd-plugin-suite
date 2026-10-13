@@ -392,7 +392,7 @@ public:
         label->setKeyboardType(juce::TextInputTarget::decimalKeyboard);
         const bool macro = static_cast<bool>(slider.getProperties().getWithDefault("macro", false));
         const bool modBar = static_cast<bool>(slider.getProperties().getWithDefault("modBar", false));
-        label->setFont(font(macro ? 23.0f : modBar ? 12.5f : 17.0f));
+        label->setFont(font(macro ? 23.0f : modBar ? 13.5f : 17.0f));
         if (modBar) label->setColour(juce::Label::textColourId, cream);
         return label;
     }
@@ -874,7 +874,7 @@ public:
             tab.getProperties().set("fontSize", 18.0f);
             tab.onClick = [this, i] { showPage(i); };
         }
-        tabs[static_cast<size_t>(modPage)].setTooltip("Talk motion, pitch, tone, articulation and velocity (latest sound engine).");
+        tabs[static_cast<size_t>(modPage)].setTooltip("Talk motion, pitch, tone and articulation (latest sound engine).");
         setupButton(zoom, "ZOOM 100%", true);
         zoom.setTitle("Interface zoom and settings");
         zoom.getProperties().set("role", "utility");
@@ -891,7 +891,7 @@ public:
         newYoi.getProperties().set("italic", true);
         newYoi.getProperties().set("role", "primary");
         newYoi.setTooltip("Generate a fresh talking bass. Excluded parameters stay put. Use Save Preset to keep a sound.");
-        newYoi.onClick = [this] { if (callbacks.newYoi) callbacks.newYoi(); toast("New sound ready — not saved"); refreshLibrary(); };
+        newYoi.onClick = [this] { if (callbacks.newYoi) callbacks.newYoi(); toast(juce::String::fromUTF8("New sound ready — not saved")); refreshLibrary(); };
         setupButton(mutate, "MUTATE");
         mutate.getProperties().set("fontSize", 27.0f);
         mutate.getProperties().set("italic", true);
@@ -966,7 +966,7 @@ public:
         lowCut.setTooltip("Remove sub frequencies from the talking body so the direct sine stays clean.");
         lowCut.onClick = [this] { setParam("low_cut", readActual(state, "low_cut", 1) < 0.5f ? 1.0f : 0.0f); };
         bindContext(lowCut, "low_cut");
-        lengthFeel.addItemList({ "STRAIGHT", "TRIPLET · 2/3", "DOTTED · 3/2" }, 1);
+        lengthFeel.addItemList(juce::StringArray { "STRAIGHT", juce::String::fromUTF8("TRIPLET · 2/3"), juce::String::fromUTF8("DOTTED · 3/2") }, 1);
         lengthFeel.setTitle("Length rhythm");
         keepFocusOnClick(lengthFeel);
         lengthFeel.setTooltip("Apply straight, triplet or dotted timing to the Length division. Available when Sync is on.");
@@ -1065,16 +1065,8 @@ public:
             "A short consonant burst at the start of each note.");
         setupModSlider(consonantLevelSlider, "Consonant level", "consonant_level", [](double v) { return juce::String(juce::roundToInt(v * 100)) + "%"; },
             "Loudness of the consonant burst.", false, 0.01);
-        setupModSlider(velMouthSlider, "Velocity to mouth", "vel_mouth", [](double v) { return "MOUTH " + juce::String(juce::roundToInt(v * 100)) + "%"; },
-            "How much softer notes close the mouth.", false, 0.01);
-        setupModSlider(velBiteSlider, "Velocity to bite", "vel_bite", [](double v) { return "BITE " + juce::String(juce::roundToInt(v * 100)) + "%"; },
-            "How much softer notes reduce Bite.", false, 0.01);
-        setupModSlider(velDirtSlider, "Velocity to dirt", "vel_dirt", [](double v) { return "DIRT " + juce::String(juce::roundToInt(v * 100)) + "%"; },
-            "How much softer notes reduce Dirt.", false, 0.01);
-        setupModSlider(attackSlider, "Attack", "attack_ms", [](double v) { return "ATK " + juce::String(v < 10.0 ? std::round(v * 10.0) / 10.0 : std::round(v), v < 10.0 ? 1 : 0) + " MS"; },
-            "Amplitude attack. 3 ms is the original.");
-        setupModSlider(releaseSlider, "Release", "release_ms", [](double v) { return "REL " + juce::String(juce::roundToInt(v)) + " MS"; },
-            "Amplitude release. 75 ms is the original.");
+        // Velocity amounts and the amp envelope stay parameters (host automation, presets) but have no
+        // MOD controls: the macro knobs already cover how the sound feels.
 
         // ---- A/B compare (PLAY page)
         for (auto* b : { &abA, &abB, &abCopy })
@@ -1245,7 +1237,7 @@ public:
     {
         setupButton(button, title, true);
         button.getProperties().set("role", "filter");
-        button.getProperties().set("fontSize", 11.0f);
+        button.getProperties().set("fontSize", 12.0f);
         button.setTooltip(tip);
         button.onClick = [this, id] { setParam(id, readActual(state, id, 0) < 0.5f ? 1.0f : 0.0f); };
         bindContext(button, id);
@@ -1521,21 +1513,20 @@ public:
         if (page == modPage)
         {
             text(g, patchName.toUpperCase() + "  /  MOD", { 104, 116, 330, 20 }, 17, cyan, true);
-            const std::array<const char*, 5> titles { "TALK", "PITCH", "TONE", "ATTACK", "FEEL" };
-            const std::array<std::array<const char*, 5>, 5> captions {{
-                {{ "MOTION", "RATE", "FEEL", "BARS", "" }},
-                {{ "BEND", "GLIDE", "DROP / RISE", "DROP TIME", "" }},
-                {{ "SHAPER", "SQUASH", "WIDTH", "SUB", "" }},
-                {{ "ONSET", "CONSONANT", "LEVEL", "", "" }},
-                {{ "VELOCITY", "", "", "AMP ENVELOPE", "" }} }};
-            for (int column = 0; column < 5; ++column)
+            const std::array<const char*, modColumns> titles { "TALK", "PITCH", "TONE", "ATTACK" };
+            const std::array<std::array<const char*, 4>, modColumns> captions {{
+                {{ "MOTION", "RATE", "FEEL", "BARS" }},
+                {{ "BEND", "GLIDE", "DROP / RISE", "DROP TIME" }},
+                {{ "SHAPER", "SQUASH", "WIDTH", "SUB" }},
+                {{ "ONSET", "CONSONANT", "LEVEL", "" }} }};
+            for (int column = 0; column < modColumns; ++column)
             {
                 const int x = modColumnX(column);
-                text(g, titles[static_cast<size_t>(column)], { x, 142, 128, 18 }, 14, cyan, true);
-                g.setColour(cyan.withAlpha(0.25f)); g.drawLine(static_cast<float>(x), 161.0f, x + 124.0f, 161.0f, 1.0f);
-                for (int row = 0; row < 5; ++row)
+                text(g, titles[static_cast<size_t>(column)], { x, 141, modColumnWidth, 19 }, 15, cyan, true);
+                g.setColour(cyan.withAlpha(0.25f)); g.drawLine(static_cast<float>(x), 162.0f, static_cast<float>(x + modColumnWidth), 162.0f, 1.0f);
+                for (int row = 0; row < 4; ++row)
                     if (const auto* caption = captions[static_cast<size_t>(column)][static_cast<size_t>(row)]; caption[0] != 0)
-                        text(g, caption, { x, modRowY(row), 128, 12 }, 10, cream.withAlpha(0.72f), true);
+                        text(g, caption, { x, modRowY(row), modColumnWidth, 13 }, 11, cream.withAlpha(0.72f), true);
             }
             if (statusUntil <= juce::Time::getMillisecondCounterHiRes())
             {
@@ -1658,14 +1649,12 @@ public:
         bounce8.setBounds(585, 266, 32, 24); bounce16.setBounds(618, 266, 34, 24);
         bounceNew.setBounds(655, 266, 57, 24); bounceMutate.setBounds(713, 266, 56, 24);
         bounceGo.setBounds(584, 292, 100, 32); bounceFolderButton.setBounds(689, 295, 78, 26);
-        // MOD page: five columns of captioned controls.
-        const auto place = [](juce::Component& c, int column, int row) { c.setBounds(modColumnX(column), modRowY(row) + 12, 126, 22); };
+        // MOD page: four columns of captioned controls across the whole screen.
+        const auto place = [](juce::Component& c, int column, int row) { c.setBounds(modColumnX(column), modRowY(row) + 14, modColumnWidth, 25); };
         place(talkModeBox, 0, 0); place(talkRateBox, 0, 1); place(talkFeelBox, 0, 2); place(meterBarsToggle, 0, 3);
         place(bendSlider, 1, 0); place(glideModeBox, 1, 1); place(dropSlider, 1, 2); place(dropTimeSlider, 1, 3);
         place(shaperBox, 2, 0); place(squashSlider, 2, 1); place(widthSlider, 2, 2); place(subResetToggle, 2, 3);
         place(onsetBox, 3, 0); place(consonantBox, 3, 1); place(consonantLevelSlider, 3, 2);
-        place(velMouthSlider, 4, 0); place(velBiteSlider, 4, 1); place(velDirtSlider, 4, 2);
-        place(attackSlider, 4, 3); place(releaseSlider, 4, 4);
         subMode.setBounds(137, 372, 108, 23); lowCut.setBounds(257, 371, 145, 25);
         lengthFeel.setBounds(486, 372, 135, 23);
         if (infoButton) infoButton->setBounds(492, 668, 96, 38);
@@ -1821,8 +1810,10 @@ public:
         const std::array<const char*, 9> names { "EE", "EH", "AH", "OH", "OO", "IH", "UH", "AE", "ER" };
         return names[static_cast<size_t>(juce::jlimit(0, 8, vowel))];
     }
-    static int modColumnX(int column) { return 103 + column * 134; }
-    static int modRowY(int row) { return 166 + row * 39; }
+    // The MOD screen spans x 103..770: four columns 158 wide, 12 apart, and four rows.
+    static constexpr int modColumns = 4, modColumnWidth = 158;
+    static int modColumnX(int column) { return 103 + column * (modColumnWidth + 12); }
+    static int modRowY(int row) { return 168 + row * 45; }
     void updateModControls()
     {
         const juce::ScopedValueSetter<bool> updating(updatingInspector, true);
@@ -2039,8 +2030,7 @@ public:
     struct ModCombo { ParameterCombo* box; juce::String id; int count; };
     struct ModToggle { ParameterButton* button; juce::String id; };
     ParameterCombo talkModeBox, talkRateBox, talkFeelBox, glideModeBox, shaperBox, onsetBox, consonantBox;
-    FocusedSlider bendSlider, dropSlider, dropTimeSlider, squashSlider, widthSlider, consonantLevelSlider,
-                  velMouthSlider, velBiteSlider, velDirtSlider, attackSlider, releaseSlider;
+    FocusedSlider bendSlider, dropSlider, dropTimeSlider, squashSlider, widthSlider, consonantLevelSlider;
     ParameterButton meterBarsToggle, subResetToggle;
     std::vector<ModCombo> modCombos;
     std::vector<ModToggle> modToggles;

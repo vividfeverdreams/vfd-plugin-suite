@@ -1,17 +1,22 @@
-# YOI-BOI 0.2.0
+# YOI-BOI 0.2.2
 
 YOI-BOI is a monophonic talking-bass synthesizer for Apple Silicon macOS, built as a **VST3 instrument**, an **Audio Unit instrument** and a **standalone app**. Play a MIDI phrase, press **NEW YOI**, and shape the result with Mouth, Size, Bite, Dirt, Length and Sub.
+
+## What's new in 0.2.2
+
+- **A roomier MOD page.** The FEEL column is gone (the macro knobs already set how the sound feels), so TALK, PITCH, TONE and ATTACK share the screen in four wider columns. Velocity amounts and the amp envelope keep their values and stay automatable from your host.
+- **Suite updates on the INFO page.** INFO shows the suite version and lights up when a newer suite is out; INSTALL downloads and opens its installer.
 
 ## What's new in 0.2.0
 
 0.2.0 adds a new sound engine (**engine 4**) and a much bigger library. New instances, **New Yoi** and the new factory sounds use it. Projects and presets from 0.1.x keep the engine they were made with and sound exactly as before (see *Older projects*).
 
-- **MOD page** (new tab between SHAPE and LIBRARY), in five columns:
+- **MOD page** (new tab between SHAPE and LIBRARY), in five columns (four since 0.2.2, see above):
   - **Talk:** keep one vowel sweep per note, or make the mouth talk on the beat. **Synced Talk** runs from 1/16 to one bar (straight, triplet or dotted) and is locked to the song position, so it stays on the grid wherever playback starts. **Mod Wheel** and **Aftertouch** let you scrub the vowel motion by hand. **BAR = METER** (off by default) makes "1 Bar" follow the host's time signature, for example three beats in 3/4.
   - **Pitch:** **Bend** range from ±1 to ±24 semitones. **Glide** can be Always (as before) or **Legato** (only between connected notes). **Drop / Rise** starts each note up to two octaves away and settles onto it over **Drop Time**, for dives and risers. The pitch wheel follows instantly even with long glide.
   - **Tone:** a **Shaper** choice for Dirt: Classic (the original), Diode, Fold or Crush. It works inside the 4× oversampled path. **Squash** is a three-band upward/downward compressor on the talking body, in the spirit of OTT. **Width** spreads the body in stereo above 180 Hz while the sub stays mono. **SUB RESET** restarts the sub's cycle on every note for an identical punch. The final ceiling is now a smooth oversampled limit instead of a hard clip.
   - **Attack:** an **Onset** glide into the first vowel from a **W** ("wah") or **Y** ("yoi") mouth, and an optional **Consonant** burst (**T**, **K** or **CH**) with its own level.
-  - **Feel:** **Velocity** can soften Mouth, Bite and Dirt on quieter notes. Amplitude **Attack** and **Release** are adjustable; 3 ms and 75 ms are the original values.
+  - **Feel:** **Velocity** can soften Mouth, Bite and Dirt on quieter notes. Amplitude **Attack** and **Release** are adjustable; 3 ms and 75 ms are the original values. (Since 0.2.2 these are host parameters only.)
 - **More vowels:** besides EE, EH, AH, OH and OO, engine 4 adds **IH, UH, AE and ER**. Pick them on the SHAPE page or drag the points in the motion graph.
 - **Separate Sub output:** YOI-BOI has an optional second stereo output called **Sub**, off by default. When your host enables it, the dedicated sub plays there instead of in the main output, ready for its own processing or sidechain. With it off, nothing changes.
 - **75 new and reworked factory sounds** in folders: Yoi, Riddim, Talk, Growl, Squelch, Wobble, Reese, Sub, Space and Leads/FX. The twelve original sounds are still in **Classic**, unchanged; reworked engine-4 versions with a "II" suffix are in **Yoi**. See [FACTORY-PRESETS.md](FACTORY-PRESETS.md).
@@ -26,7 +31,7 @@ YOI-BOI is a monophonic talking-bass synthesizer for Apple Silicon macOS, built 
 1. Press **PREVIEW**, or play MIDI notes around **36–48**. External MIDI takes priority over Preview. The synth plays one voice with glide, sustain pedal, velocity and pitch bend.
 2. Choose a family (Rubber, Metal, Throat or Squeak) and press **NEW YOI**. **MUTATE** makes a smaller change within the current family.
 3. Right-click a parameter and choose **Exclude from randomization**. New Yoi and Mutate then leave it alone, while manual changes and automation still work. Repeat to include it again. The six padlocks lock whole groups; Length and Sub start locked.
-4. Use **SHAPE** to set the Start, Body and End vowels, the Body point and the Curve. Use **MOD** for talk motion, pitch, tone, attack and feel. **LOCK** protects the Mouth and Length groups together. Undo/Redo covers your sound edits for the current session.
+4. Use **SHAPE** to set the Start, Body and End vowels, the Body point and the Curve. Use **MOD** for talk motion, pitch, tone and attack. **LOCK** protects the Mouth and Length groups together. Undo/Redo covers your sound edits for the current session.
 5. To keep a sound, open **LIBRARY → SAVE PRESET**, enter a name, choose a folder and press **Save**. New Yoi and Mutate never save files by themselves.
 
 Saving your project keeps the current sound, timing and routing, locks, Favorites, generation family, device size and the random sequence. User presets live in `~/Library/Application Support/YOI-BOI/Presets/`, one subfolder per folder, and every open YOI-BOI sees them. Saving a name that already exists in the same folder updates that file.
