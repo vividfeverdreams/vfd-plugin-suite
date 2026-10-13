@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.22)
-project(StutterStep VERSION 0.3.0 LANGUAGES C CXX)
+project(StutterStep VERSION 0.4.0 LANGUAGES C CXX)
 
 if (APPLE)
     enable_language(OBJCXX)

@@ -410,6 +410,88 @@ void testFactoryBank()
 }
 } // namespace
 
+
+static void testUserGrooves()
+{
+    std::puts ("user grooves");
+    const auto root = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("stutter-user-grooves-test");
+    root.deleteRecursively();
+    setenv ("STUTTER_STEP_PRESET_ROOT", root.getFullPathName().toRawUTF8(), 1);
+    check (StutterProcessor::userGrooveRoot() == root, "tests use a temporary USER folder");
+    check (StutterProcessor::userGrooveFiles().isEmpty(), "USER starts empty");
+
+    StutterProcessor a;
+    a.rollNewGroove();
+    setParam (a, "rate", 1); setParam (a, "depth", 70); setParam (a, "slapMix", 55); setParam (a, "slapGaps", 1);
+    a.setCell (3, { Step::ghost, true });
+    const auto saved = a.getPattern();
+    const float swing = a.apvts.getRawParameterValue ("swing")->load(), length = a.apvts.getRawParameterValue ("length")->load();
+    check (a.saveUserGroove ("  My Groove  ").wasOk(), "a rolled groove saves to USER");
+    const auto file = root.getChildFile (juce::String ("My Groove") + StutterProcessor::grooveExtension);
+    check (file.existsAsFile(), "the file is named after the groove");
+    check (a.groove.user == "My Groove" && a.groove.name == "My Groove" && ! a.groove.edited && a.groove.presetIndex == -1,
+           "the saved groove becomes the USER groove");
+    check (a.userGrooveIndex() == 0, "it is the first USER groove");
+
+    StutterProcessor b;
+    check (b.loadUserGroove (file), "a USER groove loads");
+    check (b.getPattern() == saved, "its pattern and slap sends come back");
+    near (b.apvts.getRawParameterValue ("rate")->load(), 1, 1e-6, "its rate comes back");
+    near (b.apvts.getRawParameterValue ("depth")->load(), 70, 0.05, "its depth comes back");
+    near (b.apvts.getRawParameterValue ("slapMix")->load(), 55, 0.05, "its slap mix comes back");
+    near (b.apvts.getRawParameterValue ("slapGaps")->load(), 1, 1e-6, "GAPS comes back");
+    near (b.apvts.getRawParameterValue ("swing")->load(), swing, 0.05, "its swing comes back");
+    near (b.apvts.getRawParameterValue ("length")->load(), length, 0.05, "its length comes back");
+    check (b.groove.user == "My Groove" && b.groove.presetIndex == -1, "a loaded USER groove knows its name");
+
+    // A different groove never replaces a saved one; the loaded USER groove updates its own file.
+    b.rollNewGroove();
+    check (b.saveUserGroove ("My Groove").wasOk() && b.groove.name == "My Groove 2", "a taken name gets a number");
+    StutterProcessor reread;
+    check (reread.loadUserGroove (file) && reread.getPattern() == saved, "the first groove is untouched");
+    a.setCell (0, { Step::hit, false });
+    check (a.groove.edited, "editing a USER groove marks it");
+    check (a.saveUserGroove ("my groove").wasOk() && StutterProcessor::userGrooveFiles().size() == 2 && ! a.groove.edited,
+           "saving the loaded USER groove under its own name updates it");
+    check (a.groove.user == "My Groove" && file.existsAsFile(), "an update keeps the groove's name");
+    check (reread.loadUserGroove (file) && reread.getPattern() == a.getPattern(), "the update reached the file");
+    check (a.saveUserGroove (" ... ").failed() && a.saveUserGroove ("").failed(), "an empty name is refused");
+    check (! StutterProcessor::cleanGrooveName ("../a/b:c").containsAnyOf ("/:\\") && ! StutterProcessor::cleanGrooveName ("..x").startsWithChar ('.'),
+           "names can't leave the USER folder");
+
+    // The arrows run through the factory grooves, then USER, and wrap.
+    StutterProcessor c;
+    c.loadFactory (numFactoryGrooves - 1);
+    c.stepGroove (1);
+    check (c.groove.user == "My Groove", "after the last factory groove comes the first USER groove");
+    c.stepGroove (1);
+    check (c.groove.user == "My Groove 2", "then the next USER groove");
+    c.stepGroove (1);
+    check (c.groove.presetIndex == 0 && c.groove.user.isEmpty(), "then back to the first factory groove");
+    c.stepGroove (-1);
+    check (c.groove.user == "My Groove 2", "and backwards from it to the last USER groove");
+    root.getChildFile (juce::String ("Broken") + StutterProcessor::grooveExtension).replaceWithText ("not a groove");
+    check (! c.loadUserGroove (root.getChildFile (juce::String ("Broken") + StutterProcessor::grooveExtension)), "an unreadable file doesn't load");
+    c.loadFactory (numFactoryGrooves - 1);
+    c.stepGroove (1);
+    check (c.groove.user == "Broken" || c.groove.user == "My Groove", "stepping skips an unreadable file");
+
+    // Projects remember a USER groove.
+    juce::MemoryBlock block;
+    a.getStateInformation (block);
+    StutterProcessor restored;
+    restored.setStateInformation (block.getData(), (int) block.getSize());
+    check (restored.groove.user == "My Groove" && restored.groove.presetIndex == -1 && restored.getPattern() == a.getPattern(),
+           "a project reopens on its USER groove");
+    restored.loadFactory (2);
+    restored.getStateInformation (block);
+    StutterProcessor factory;
+    factory.setStateInformation (block.getData(), (int) block.getSize());
+    check (factory.groove.user.isEmpty() && factory.groove.presetIndex == 2, "a factory groove isn't marked USER");
+    root.deleteRecursively();
+    unsetenv ("STUTTER_STEP_PRESET_ROOT");
+}
+
 int main()
 {
     juce::ScopedJuceInitialiser_GUI init;
@@ -420,6 +502,7 @@ int main()
     testSlap();
     testState();
     testFactoryBank();
+    testUserGrooves();
     std::printf ("%d checks, %d failures\n", checks, failures);
     return failures == 0 ? 0 : 1;
 }

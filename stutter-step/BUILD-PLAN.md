@@ -106,6 +106,12 @@ To join the suite later, move `stutter-step/` next to the others in the suite re
 
 1. Scaffold, parameters, state. 2. Groove model + generator + envelope, with tests. 3. Gate in the processor. 4. Slap. 5. Editor over the shell art. 6. Tests, pluginval/auval, install for an Ableton check. 7. Icon and the suite installer.
 
+## Status (v0.4.0, 13 October 2026)
+
+- **Save grooves to USER.** A SAVE key beside the arrows turns the groove name into a text field (the name pre-selected); Return or OK saves, Escape cancels. The groove menu now ends with a **USER** folder of every saved groove, plus "Save Groove..." and "Show User Grooves Folder". A saved groove shows a USER chip and "USER n / m"; the arrows run through the factory grooves, then USER, and wrap.
+- A user groove is one file, `<Name>.ssgroove` (XML), in `~/Library/Application Support/STUTTER-STEP/Presets` (Windows: `%APPDATA%\STUTTER-STEP\Presets`; `STUTTER_STEP_PRESET_ROOT` overrides it for tests). It holds the pattern with its slap sends, swing, length, rate, smooth, depth and the slap's lock, time, feedback, tone, mix, gaps and wide: what a factory groove sets. SLAP on/off, SUB SAFE, OUTPUT and bypass stay as they are. Saving the loaded user groove under its name updates it; any other taken name gets a number, so a different groove never replaces a saved one. Projects remember the user groove they were on (GROOVE property `user`).
+- Tests: 147 checks, 0 failures (31 new: save, reload, numbering, update, unreadable files, stepping, project state). pluginval strictness 5 SUCCESS.
+
 ## Status (v0.3.0, 9 October 2026)
 
 - **RATE 1/4** added (16 steps = 4 bars). The choice list is now 1/4, 1/8, 1/16, 1/32; saved projects carry GROOVE schema 2, and schema-1 projects have their RATE index moved up one on load, so they keep their rate. LOCK's echo time is capped at 0.95 s (it was 0.5 s) so 1/4 grooves still land on the swung off-step at normal tempos.

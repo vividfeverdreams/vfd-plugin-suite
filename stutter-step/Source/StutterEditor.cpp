@@ -521,15 +521,37 @@ StutterEditor::StutterEditor (StutterProcessor& p)
                                       + (proc.rollFrom < 0 ? juce::String ("ALL GROOVES") : juce::String (familyName ((Family) proc.rollFrom))); };
     rollFrom->setTooltip ("Which groove family NEW GROOVE rolls from. Click to cycle.");
     rollFrom->onClick = [this] { proc.rollFrom = proc.rollFrom + 1 >= (int) Family::count ? -1 : proc.rollFrom + 1; repaint(); };
-    presetMenu = std::make_unique<ScreenKey> ("Factory grooves", ScreenKey::Style::overlay, semiBold);
-    presetMenu->setTooltip ("Browse the factory grooves by folder.");
+    presetMenu = std::make_unique<ScreenKey> ("Grooves", ScreenKey::Style::overlay, semiBold);
+    presetMenu->setTooltip ("Browse the factory grooves by folder, and your saved grooves in USER.");
     presetMenu->onClick = [this] { showPresetMenu(); };
-    prev = std::make_unique<ScreenKey> ("Previous factory groove", ScreenKey::Style::left, semiBold);
-    next = std::make_unique<ScreenKey> ("Next factory groove", ScreenKey::Style::right, semiBold);
-    prev->onClick = [this] { proc.loadFactory ((proc.groove.presetIndex < 0 ? 0 : proc.groove.presetIndex) - 1); repaint(); };
-    next->onClick = [this] { proc.loadFactory ((proc.groove.presetIndex < 0 ? -1 : proc.groove.presetIndex) + 1); repaint(); };
-    prev->setTooltip ("Previous factory groove");
-    next->setTooltip ("Next factory groove");
+    saveKey = std::make_unique<ScreenKey> ("Save groove", ScreenKey::Style::key, semiBold);
+    saveKey->label = [this] { return juce::String (naming ? "OK" : "SAVE"); };
+    saveKey->lit = [this] { return naming; };
+    saveKey->setMouseClickGrabsKeyboardFocus (false); // clicking OK leaves the name field focused, so it saves
+    saveKey->setTooltip ("Save this groove to your USER grooves (in the groove menu). Name it, then press Return.");
+    saveKey->onClick = [this] { if (naming) finishNaming (true); else beginNaming(); };
+    prev = std::make_unique<ScreenKey> ("Previous groove", ScreenKey::Style::left, semiBold);
+    next = std::make_unique<ScreenKey> ("Next groove", ScreenKey::Style::right, semiBold);
+    prev->onClick = [this] { proc.stepGroove (-1); repaint(); };
+    next->onClick = [this] { proc.stepGroove (1); repaint(); };
+    prev->setTooltip ("Previous groove (the factory grooves, then your USER grooves)");
+    next->setTooltip ("Next groove (the factory grooves, then your USER grooves)");
+    nameEditor.setTitle ("Groove name");
+    nameEditor.setMultiLine (false);
+    nameEditor.setInputRestrictions (48);
+    nameEditor.setIndents (10, 0);
+    nameEditor.setJustification (juce::Justification::centredLeft);
+    nameEditor.setColour (juce::TextEditor::backgroundColourId, keyFill);
+    nameEditor.setColour (juce::TextEditor::textColourId, glassText);
+    nameEditor.setColour (juce::TextEditor::outlineColourId, aqua.withAlpha (0.6f));
+    nameEditor.setColour (juce::TextEditor::focusedOutlineColourId, aqua);
+    nameEditor.setColour (juce::TextEditor::highlightColourId, aqua.withAlpha (0.35f));
+    nameEditor.setColour (juce::TextEditor::highlightedTextColourId, glassText);
+    nameEditor.setColour (juce::CaretComponent::caretColourId, aqua);
+    nameEditor.onReturnKey = [this] { finishNaming (true); };
+    nameEditor.onEscapeKey = [this] { finishNaming (false); };
+    nameEditor.onFocusLost = [this] { if (naming) finishNaming (false); };
+    addChildComponent (nameEditor);
     subSafe = std::make_unique<ScreenKey> ("Sub safe", ScreenKey::Style::readout, semiBold);
     subSafe->label = [this] { const int i = juce::roundToInt (param ("subSafe")); return juce::String (i == 0 ? "OFF" : i == 1 ? "80 Hz" : i == 2 ? "120 Hz" : "200 Hz"); };
     subSafe->setTooltip ("Lows below this never reach the slap, so the sub stays clean and mono. Click to cycle.");
@@ -542,7 +564,7 @@ StutterEditor::StutterEditor (StutterProcessor& p)
         key->setTooltip ("Step size. The 16 steps span 4 bars at 1/4, 2 bars at 1/8, 1 bar at 1/16 and half a bar at 1/32.");
         key->onClick = [this, i] { setParam ("rate", (float) i); repaint(); };
     }
-    for (auto* key : { presetMenu.get(), rollFrom.get(), prev.get(), next.get(), subSafe.get() })
+    for (auto* key : { presetMenu.get(), rollFrom.get(), saveKey.get(), prev.get(), next.get(), subSafe.get() })
         addAndMakeVisible (*key);
     for (auto& key : rateKeys) addAndMakeVisible (*key);
 
@@ -674,6 +696,7 @@ void StutterEditor::setParam (const juce::String& id, float value)
 
 void StutterEditor::showPresetMenu()
 {
+    constexpr int userItemBase = 1000, saveItem = 2000, revealItem = 2001;
     juce::PopupMenu menu;
     juce::String folder;
     juce::PopupMenu sub;
@@ -684,10 +707,59 @@ void StutterEditor::showPresetMenu()
         sub.addItem (i + 1, f.name, true, i == proc.groove.presetIndex);
     }
     flush();
+    // USER: every saved groove, by name.
+    const auto files = StutterProcessor::userGrooveFiles();
+    const int loaded = proc.userGrooveIndex();
+    juce::PopupMenu user;
+    for (int i = 0; i < files.size(); ++i)
+        user.addItem (userItemBase + i, files[i].getFileNameWithoutExtension(), true, i == loaded);
+    if (files.isEmpty()) user.addItem (-1, "No saved grooves yet: press SAVE", false);
+    menu.addSeparator();
+    menu.addSubMenu ("USER", user, true, nullptr, loaded >= 0);
+    menu.addSeparator();
+    menu.addItem (saveItem, "Save Groove...");
+    menu.addItem (revealItem, "Show User Grooves Folder", StutterProcessor::userGrooveRoot().isDirectory());
     menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (presetMenu.get()),
-                        [safe = juce::Component::SafePointer<StutterEditor> (this)] (int result) {
-                            if (safe != nullptr && result > 0) { safe->proc.loadFactory (result - 1); safe->repaint(); }
+                        [safe = juce::Component::SafePointer<StutterEditor> (this), files] (int result) {
+                            if (safe == nullptr || result <= 0) return;
+                            if (result == saveItem) safe->beginNaming();
+                            else if (result == revealItem) StutterProcessor::userGrooveRoot().revealToUser();
+                            else if (result >= userItemBase) {
+                                if (! safe->proc.loadUserGroove (files[result - userItemBase]))
+                                    juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon, "Groove not loaded",
+                                        "STUTTER-STEP couldn't read " + files[result - userItemBase].getFullPathName() + ".");
+                            }
+                            else safe->proc.loadFactory (result - 1);
+                            safe->repaint();
                         });
+}
+
+void StutterEditor::beginNaming()
+{
+    if (naming) return;
+    naming = true;
+    saveProblem.clear();
+    nameEditor.setText (StutterProcessor::cleanGrooveName (proc.groove.name), false);
+    nameEditor.setVisible (true);
+    nameEditor.selectAll();
+    if (getPeer() != nullptr) nameEditor.grabKeyboardFocus();
+    saveKey->repaint();
+    repaint();
+}
+
+void StutterEditor::finishNaming (bool save)
+{
+    if (! naming) return;
+    if (save) {
+        const auto result = proc.saveUserGroove (nameEditor.getText());
+        if (result.failed()) { saveProblem = result.getErrorMessage(); repaint(); return; } // keep the field open
+        savedUntil = juce::Time::getMillisecondCounterHiRes() + 2000.0;
+    }
+    naming = false;
+    saveProblem.clear();
+    nameEditor.setVisible (false);
+    saveKey->repaint();
+    repaint();
 }
 
 void StutterEditor::resized()
@@ -697,7 +769,10 @@ void StutterEditor::resized()
     lane->setBounds (toEditor (laneArt));
     dots->setBounds (toEditor (dotsArt));
     rollFrom->setBounds (toEditor ({ 196, 194, 360, 30 }));
-    presetMenu->setBounds (toEditor ({ 188, 226, 646, 46 }));
+    presetMenu->setBounds (toEditor ({ 188, 226, 576, 46 }));
+    saveKey->setBounds (toEditor ({ 772, 230, 66, 38 }));
+    nameEditor.setBounds (toEditor ({ 190, 228, 572, 42 }));
+    nameEditor.applyFontToAllText (font (30.0f * scale(), true));
     prev->setBounds (toEditor ({ 846, 230, 40, 38 }));
     next->setBounds (toEditor ({ 892, 230, 40, 38 }));
     for (int i = 0; i < (int) rateKeys.size(); ++i)
@@ -784,26 +859,41 @@ void StutterEditor::drawScreen (juce::Graphics& g) const
     const auto snap = proc.snapshot();
     const auto& gr = proc.groove;
     // Row A: ROLL FROM is a child key; counter on the right.
-    const juce::String counter = gr.presetIndex >= 0 ? "FACTORY " + juce::String (gr.presetIndex + 1) + " / " + juce::String (numFactoryGrooves)
-                                                     : "SEED " + juce::String ((int) gr.seed).paddedLeft ('0', 5);
-    text (g, counter, { 600, 194, 334, 30 }, 15, glassMuted, juce::Justification::centredRight, false, 0.14f);
-    // Row B: groove name, family chip.
-    const juce::String name = gr.name + (gr.edited ? " *" : "");
-    const auto nameFont = font (34, true);
-    const float nameW = juce::jmin (430.0f, juce::GlyphArrangement::getStringWidth (nameFont, name) + 4.0f);
-    text (g, name, { 196, 228, nameW, 42 }, 34, glassText, juce::Justification::centredLeft, true);
-    // A factory groove shows its folder; a rolled one is marked NEW in lime, so it never reads as a preset.
-    const bool rolled = gr.presetIndex < 0;
+    const bool user = gr.presetIndex < 0 && gr.user.isNotEmpty();
+    const int userIndex = user ? proc.userGrooveIndex() : -1;
+    const juce::String counter = naming ? (saveProblem.isNotEmpty() ? saveProblem.toUpperCase() : juce::String ("NAME THIS GROOVE, THEN RETURN"))
+        : juce::Time::getMillisecondCounterHiRes() < savedUntil ? juce::String ("SAVED TO USER")
+        : gr.presetIndex >= 0 ? "FACTORY " + juce::String (gr.presetIndex + 1) + " / " + juce::String (numFactoryGrooves)
+        : user ? (userIndex >= 0 ? "USER " + juce::String (userIndex + 1) + " / " + juce::String (StutterProcessor::userGrooveFiles().size()) : juce::String ("USER"))
+        : "SEED " + juce::String ((int) gr.seed).paddedLeft ('0', 5);
+    const bool counterLit = naming || juce::Time::getMillisecondCounterHiRes() < savedUntil;
+    text (g, counter, { 560, 194, 374, 30 }, 15, counterLit ? lime : glassMuted, juce::Justification::centredRight, false, 0.14f);
+    if (naming) return drawLanes (g, snap);
+    // Row B: groove name, family chip. A factory groove shows its folder, a saved one USER; a rolled one is marked
+    // NEW in lime, so it never reads as a preset. Name and chip end before SAVE.
+    const bool rolled = gr.presetIndex < 0 && ! user;
     const juce::String fam = rolled ? "NEW " + juce::String::charToString (0x00B7) + " " + familyName (gr.family)
-                                    : juce::String (factoryGroove (gr.presetIndex).folder);
+                                    : user ? juce::String ("USER") : juce::String (factoryGroove (gr.presetIndex).folder);
     const auto chipColour = rolled ? lime : aqua;
     const auto chipFont = font (13).withExtraKerningFactor (0.16f);
     const float chipW = juce::GlyphArrangement::getStringWidth (chipFont, fam) + 18.0f;
+    const juce::String name = gr.name + (gr.edited ? " *" : "");
+    const auto nameFont = font (34, true);
+    const float nameW = juce::jmin (juce::jmin (430.0f, 760.0f - 196.0f - 14.0f - chipW - 28.0f),
+                                    juce::GlyphArrangement::getStringWidth (nameFont, name) + 4.0f);
+    g.setFont (nameFont);
+    g.setColour (glassText);
+    g.drawFittedText (name, juce::Rectangle<float> (196, 228, nameW, 42).toNearestInt(), juce::Justification::centredLeft, 1, 0.75f);
     const juce::Rectangle<float> chip { 196 + nameW + 14, 236, chipW, 26 };
     g.setColour (chipColour.withAlpha (0.45f));
     g.drawRoundedRectangle (chip, 6.0f, 1.5f);
     text (g, fam, chip, 13, chipColour, juce::Justification::centred, false, 0.16f);
     text (g, juce::String::charToString (0x25BE), { chip.getRight() + 8, 236, 20, 26 }, 16, glassMuted, juce::Justification::centred);
+    drawLanes (g, snap);
+}
+
+void StutterEditor::drawLanes (juce::Graphics& g, const StutterProcessor::Snapshot& snap) const
+{
 
     text (g, "GATE", { 196, 340, 54, 20 }, 13, glassMuted, juce::Justification::centredLeft, false, 0.16f);
     text (g, "SLAP", { 196, 446, 54, 20 }, 13, juce::Colour (0xffa9c96a), juce::Justification::centredLeft, false, 0.16f);
@@ -940,6 +1030,7 @@ std::uint64_t StutterEditor::displayKey() const
     mix ((std::uint64_t) (proc.rollFrom + 2));
     mix (proc.uiPlaying.load() ? 1 : 0);
     mix ((std::uint64_t) juce::roundToInt (proc.uiBpm.load() * 10.0));
+    mix (juce::Time::getMillisecondCounterHiRes() < savedUntil ? 3 : naming ? 5 : 7);
     return h;
 }
 

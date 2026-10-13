@@ -44,6 +44,7 @@ private:
     juce::String knobValueText (const Knob&) const;
     float knobNormalised (const Knob&) const;
     void drawScreen (juce::Graphics&) const;
+    void drawLanes (juce::Graphics&, const StutterProcessor::Snapshot&) const; // the screen below the name row
     void drawPlates (juce::Graphics&) const;
     void drawHeader (juce::Graphics&) const;
     void refreshShell();
@@ -59,9 +60,16 @@ private:
     std::vector<std::unique_ptr<Knob>> knobs;
     std::unique_ptr<Lane> lane;
     std::unique_ptr<Dots> dots;
-    std::unique_ptr<ScreenKey> rollFrom, prev, next, subSafe, presetMenu;
+    std::unique_ptr<ScreenKey> rollFrom, prev, next, subSafe, presetMenu, saveKey;
     std::array<std::unique_ptr<ScreenKey>, 4> rateKeys; // 1/4, 1/8, 1/16, 1/32
     void showPresetMenu();
+    // SAVE: the groove name becomes a text field; Return (or OK) saves the groove to USER, Escape cancels.
+    void beginNaming();
+    void finishNaming (bool save);
+    juce::TextEditor nameEditor;
+    bool naming = false;
+    double savedUntil = 0;   // the counter reads SAVED TO USER until then (ms)
+    juce::String saveProblem;
     std::unique_ptr<PlateKey> lockKey, gapsKey, wideKey;
     std::unique_ptr<SlapSwitch> slapSwitch;
     std::unique_ptr<LockButton> swingLock;

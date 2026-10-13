@@ -1,4 +1,5 @@
 #include "StutterProcessor.h"
+#include <cstdlib>
 #if ! STUTTER_HEADLESS
  #include "StutterEditor.h"
 #endif
@@ -143,9 +144,117 @@ void StutterProcessor::loadFactory (int index)
     setParamValue ("slapMix", f.mix * 100.0f);
     setParamValue ("slapGaps", f.gaps ? 1.0f : 0.0f);
     setParamValue ("slapWide", f.wide ? 1.0f : 0.0f);
-    groove = { f.name, f.family, i, 0, false };
+    groove = { f.name, f.family, i, 0, false, {} };
     applyGroove (parsePattern (f.cells, f.slap), f.swing, f.length);
     grooveRevision.fetch_add (1);
+}
+
+namespace {
+// What a user groove recalls besides its pattern, swing and length: the settings a factory groove sets.
+const char* const userGrooveParameters[] { "rate", "smooth", "depth", "slapLock", "slapTime", "slapFeedback",
+                                           "slapTone", "slapMix", "slapGaps", "slapWide" };
+}
+
+juce::File StutterProcessor::userGrooveRoot()
+{
+    if (const char* overridden = std::getenv ("STUTTER_STEP_PRESET_ROOT"); overridden != nullptr && *overridden != 0)
+        return juce::File (juce::String::fromUTF8 (overridden));
+   #if JUCE_MAC
+    // $HOME, so a redirected home (validators, tests) never reaches the real folder.
+    const char* home = std::getenv ("HOME");
+    const juce::File base = home != nullptr && *home == '/' ? juce::File (juce::String::fromUTF8 (home))
+                                                            : juce::File::getSpecialLocation (juce::File::userHomeDirectory);
+    return base.getChildFile ("Library").getChildFile ("Application Support").getChildFile ("STUTTER-STEP").getChildFile ("Presets");
+   #else
+    return juce::File::getSpecialLocation (juce::File::userApplicationDataDirectory).getChildFile ("STUTTER-STEP").getChildFile ("Presets");
+   #endif
+}
+
+juce::Array<juce::File> StutterProcessor::userGrooveFiles()
+{
+    auto files = userGrooveRoot().findChildFiles (juce::File::findFiles, false, juce::String ("*") + grooveExtension);
+    struct ByName { static int compareElements (const juce::File& a, const juce::File& b)
+        { return a.getFileNameWithoutExtension().compareNatural (b.getFileNameWithoutExtension()); } };
+    ByName order;
+    files.sort (order);
+    return files;
+}
+
+juce::String StutterProcessor::cleanGrooveName (const juce::String& typed)
+{
+    auto name = juce::File::createLegalFileName (typed.trim()).trim();
+    while (name.startsWithChar ('.')) name = name.substring (1).trimStart();
+    return name.substring (0, 48).trimEnd();
+}
+
+juce::Result StutterProcessor::saveUserGroove (const juce::String& typed)
+{
+    const auto clean = cleanGrooveName (typed);
+    if (clean.isEmpty()) return juce::Result::fail ("Type a name for the groove.");
+    const auto root = userGrooveRoot();
+    if (const auto made = root.createDirectory(); made.failed()) return made;
+    const bool updating = groove.presetIndex < 0 && groove.user.equalsIgnoreCase (clean);
+    auto name = updating ? groove.user : clean; // an update keeps the file's name
+    for (int n = 2; ! updating && root.getChildFile (name + grooveExtension).exists(); ++n)
+        name = clean + " " + juce::String (n);
+    const auto pattern = getPattern();
+    juce::ValueTree t ("STUTTERGROOVE");
+    t.setProperty ("schema", 1, nullptr);
+    t.setProperty ("family", juce::String (familyName (groove.family)), nullptr);
+    t.setProperty ("cells", juce::String (cellsToString (pattern)), nullptr);
+    t.setProperty ("slap", juce::String (slapToString (pattern)), nullptr);
+    t.setProperty ("swing", p[swingP]->load(), nullptr);
+    t.setProperty ("length", p[lengthP]->load(), nullptr);
+    for (const auto* id : userGrooveParameters)
+        t.setProperty (id, apvts.getRawParameterValue (id)->load(), nullptr);
+    const auto file = root.getChildFile (name + grooveExtension);
+    const auto xml = t.createXml();
+    if (xml == nullptr || ! xml->writeTo (file)) return juce::Result::fail ("Couldn't write " + file.getFullPathName());
+    groove.name = name;
+    groove.user = name;
+    groove.presetIndex = -1;
+    groove.edited = false;
+    grooveRevision.fetch_add (1);
+    return juce::Result::ok();
+}
+
+bool StutterProcessor::loadUserGroove (const juce::File& file)
+{
+    const auto xml = juce::XmlDocument::parse (file);
+    if (xml == nullptr || ! xml->hasTagName ("STUTTERGROOVE")) return false;
+    const auto t = juce::ValueTree::fromXml (*xml);
+    const auto steps = t["cells"].toString(), slapSends = t["slap"].toString();
+    if (steps.length() != numSteps || ! steps.containsOnly ("Xg-.") || ! slapSends.containsOnly ("*.")) return false;
+    for (const auto* id : userGrooveParameters)
+        if (t.hasProperty (id)) setParamValue (id, (float) (double) t[id]);
+    const auto name = file.getFileNameWithoutExtension();
+    groove = { name, familyFromName (t["family"].toString().toStdString()), -1, 0, false, name };
+    applyGroove (parsePattern (steps.toRawUTF8(), slapSends.toRawUTF8()),
+                 (float) (double) t.getProperty ("swing", 60.0) / 100.0f, (float) (double) t.getProperty ("length", 60.0) / 100.0f);
+    grooveRevision.fetch_add (1);
+    return true;
+}
+
+int StutterProcessor::userGrooveIndex() const
+{
+    if (groove.presetIndex >= 0 || groove.user.isEmpty()) return -1;
+    const auto files = userGrooveFiles();
+    for (int i = 0; i < files.size(); ++i)
+        if (files[i].getFileNameWithoutExtension().equalsIgnoreCase (groove.user)) return i;
+    return -1;
+}
+
+void StutterProcessor::stepGroove (int direction)
+{
+    const auto files = userGrooveFiles();
+    const int total = numFactoryGrooves + files.size();
+    const int user = userGrooveIndex();
+    int at = groove.presetIndex >= 0 ? groove.presetIndex : user >= 0 ? numFactoryGrooves + user : (direction > 0 ? -1 : total);
+    for (int tries = 0; tries < total; ++tries) {
+        at = ((at + direction) % total + total) % total;
+        if (at < numFactoryGrooves) { loadFactory (at); return; }
+        if (loadUserGroove (files[at - numFactoryGrooves])) return; // an unreadable file is skipped
+    }
 }
 
 void StutterProcessor::rollNewGroove()
@@ -153,7 +262,7 @@ void StutterProcessor::rollNewGroove()
     const auto seed = (std::uint32_t) juce::Random::getSystemRandom().nextInt64();
     const auto current = getPattern();
     const auto g = generate (seed, rollFrom, &current);
-    groove = { juce::String (g.name), g.family, -1, seed % 100000u, false };
+    groove = { juce::String (g.name), g.family, -1, seed % 100000u, false, {} };
     applyGroove (g.pattern, g.swing, g.length);
     grooveRevision.fetch_add (1);
 }
@@ -287,6 +396,7 @@ void StutterProcessor::getStateInformation (juce::MemoryBlock& dest)
     g.setProperty ("preset", groove.presetIndex, nullptr);
     g.setProperty ("seed", (juce::int64) groove.seed, nullptr);
     g.setProperty ("edited", groove.edited, nullptr);
+    g.setProperty ("user", groove.user, nullptr);
     g.setProperty ("lockSwing", lockSwing, nullptr);
     g.setProperty ("rollFrom", rollFrom, nullptr);
     g.setProperty ("editorScale", editorScale, nullptr);
@@ -319,6 +429,7 @@ void StutterProcessor::setStateInformation (const void* data, int size)
         groove.presetIndex = (int) g["preset"] >= 0 && byName >= 0 ? byName : -1;
         groove.seed = (std::uint32_t) (juce::int64) g["seed"];
         groove.edited = g["edited"];
+        groove.user = groove.presetIndex < 0 ? g["user"].toString() : juce::String();
         lockSwing = g["lockSwing"];
         rollFrom = juce::jlimit (-1, (int) Family::count - 1, (int) g["rollFrom"]);
         editorScale = g["editorScale"];
