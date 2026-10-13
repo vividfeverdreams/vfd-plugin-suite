@@ -1,0 +1,26 @@
+{
+  "YOI-BOI": [
+    "The MOD page drops the FEEL column (the knobs already cover it), so its other four columns get more room.",
+    "INFO shows the suite version and lights up when an update is out; INSTALL downloads and opens it."
+  ],
+  "THROW-UP": [
+    "OUTPUT is now a knob in the footer plate.",
+    "INFO shows the suite version and lights up when an update is out; INSTALL downloads and opens it."
+  ],
+  "BACK-SCRATCH": [
+    "Fill presets now say when they play in plain words, like \"PLAYS EVERY 4TH BAR\"; PLAY reads EVERY 2ND, 4TH or 8TH.",
+    "INFO shows the suite version and lights up when an update is out; INSTALL downloads and opens it."
+  ],
+  "SHIFTY": [
+    "OUTPUT is now a knob beside INFO, like ENERGY HARVESTER's, and the meters are longer.",
+    "INFO shows the suite version and lights up when an update is out; INSTALL downloads and opens it."
+  ],
+  "ENERGY HARVESTER": [
+    "Tooltips stay fully inside the device instead of running off the window's edge.",
+    "INFO shows the suite version and lights up when an update is out; INSTALL downloads and opens it."
+  ],
+  "STUTTER-STEP": [
+    "SAVE keeps any groove you like (NEW GROOVE rolls included) in a USER folder at the end of the groove menu; the arrows step through them too.",
+    "INFO shows the suite version and lights up when an update is out; INSTALL downloads and opens it."
+  ]
+}
