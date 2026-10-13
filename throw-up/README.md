@@ -2,7 +2,7 @@
 
 A reverb thrower for mid-basses and left-field bass music by **YOI-BOI**. The giant **THROW** knob adds a separate, fully wet reverb layer over the original dry bass. You can also throw with the **THROW!** key, with MIDI notes, or let **Auto-catch** throw the end of every phrase for you.
 
-Version **0.2.0** · **VST3** and **Audio Unit** · **Apple Silicon** · **macOS 12 or later**
+Version **0.2.1** · **VST3** and **Audio Unit** · **Apple Silicon** · **macOS 12 or later**
 
 ## Your existing projects are safe
 
@@ -76,10 +76,11 @@ The top display has four pages: **ROOM**, **THROW**, **SPACE** and **MIX**. The 
 | SPACE | **Pre sync** (ms or 1/64–1/2), **Feel** (straight, dotted, triplet), **Swell** (off, 1/4, 1/2, 1 bar, 2 bars), **Shimmer**, **Pitch** |
 | MIX | **Return** trim (−24 to +6 dB, reverb only), **Duck source** (Dry or External), **Duck release**, **Duck threshold**, and the sound version |
 
-The plate holds **THROW**, **Size**, **Decay** (0.15–18 s), **Pre-delay** (0–250 ms; it shows the note value when synced) and **Diffusion**. **Bypass**, **Output** and the IN/OUT meters sit below. The bottom strip holds the **THROW!**, **FREEZE**, **INFO**, **SAFE** and **SEND** keys.
+The plate holds **THROW**, **Size**, **Decay** (0.15–18 s), **Pre-delay** (0–250 ms; it shows the note value when synced) and **Diffusion**. **Bypass**, the **Output** knob (0.2.1; its ring lights from the 0 dB tick) and the IN/OUT meters sit below. The bottom strip holds the **THROW!**, **FREEZE**, **INFO**, **SAFE** and **SEND** keys.
 
 - **Knobs and bars:** drag to adjust; hold **Shift** for fine control. Double-click a control to reset it, and double-click its value to type one (choices accept their names, such as "1/8" or "Dotted").
-- **Output:** a single click types a value and a double-click resets it to 0 dB.
+- **Output:** drag the knob or its value. On the value, a single click types a number and a double-click resets it to 0 dB.
+- **INFO** shows the suite version and lights up when a newer suite is out; INSTALL on the INFO page downloads and opens its installer (0.2.1).
 - **Size:** right-click empty enclosure to choose 90%, 100%, 125% or 150%. Host resizing (80–150%) still works.
 
 ## Duck and sidechain

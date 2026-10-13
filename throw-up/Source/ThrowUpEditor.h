@@ -50,6 +50,7 @@ private:
     void stepPreset (int direction);
     void drawScreen (juce::Graphics&);
     void drawKnob (juce::Graphics&, Control&);
+    void drawOutputKnob (juce::Graphics&, Control&);
     void drawFooter (juce::Graphics&);
     void drawMeters (juce::Graphics&, juce::Rectangle<float>);
     juce::Rectangle<int> scaled (juce::Rectangle<float>) const;

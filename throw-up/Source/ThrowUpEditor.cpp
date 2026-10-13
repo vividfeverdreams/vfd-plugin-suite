@@ -23,6 +23,10 @@ constexpr float endAngle = juce::MathConstants<float>::pi * 2.75f;
 const juce::Colour cream { 0xffffeed3 }, amber { 0xffffca70 }, orange { 0xffff9d43 };
 const juce::Colour muted { 0xffd6b28f }, panel { 0xff291209 }, ink { 0xff55240d };
 const juce::Rectangle<float> bypassBounds { 186, 1113, 178, 56 };
+// OUTPUT: a small knob in the footer plate's middle bay, under its name, with the value beside it.
+const juce::Point<float> outputKnobCentre { 428.0f, 1140.0f };
+constexpr float outputSocketRadius = 35.0f, outputArcRadius = 29.5f, outputCapRadius = 23.5f;
+const juce::Rectangle<float> outputValueBounds { 471.0f, 1119.0f, 100.0f, 42.0f };
 constexpr int baseWidth = 660;
 constexpr int userItemBase = 1000;
 const std::array<const char*, 4> pageNames { "ROOM", "THROW", "SPACE", "MIX" };
@@ -324,8 +328,9 @@ ThrowUpEditor::ThrowUpEditor (ThrowUpProcessor& p)
     addPageControl ("duckSource", "DUCK SRC", "What Duck listens to: the dry input, or the external sidechain input (route a kick or snare to it in your DAW).", Page::mix, 1);
     addPageControl ("duckRelease", "DUCK REL", "How fast the tail returns after the ducking source stops.", Page::mix, 2);
     addPageControl ("duckThreshold", "DUCK THR", "Latest sound: the level above which Duck reaches its full depth.", Page::mix, 3);
-    addControl ("output", "OUTPUT", "Sets final output level in dB.",
-                { 395, 1112, 150, 58 }, { 395, 1112, 150, 58 });
+    addControl ("output", "OUTPUT", "Final output level, from -18 to +6 dB.",
+                juce::Rectangle<float> (2.0f * outputSocketRadius, 2.0f * outputSocketRadius).withCentre (outputKnobCentre),
+                outputValueBounds, true);
 
     // Display page tabs.
     for (size_t i = 0; i < pageTabs.size(); ++i) {
@@ -517,7 +522,8 @@ void ThrowUpEditor::addControl (const char* id, const char* title, const char* t
     if (auto* parameter = pluginProcessor.apvts.getParameter (id))
         c->slider.setDoubleClickReturnValue (true, parameter->convertFrom0to1 (parameter->getDefaultValue()));
     c->value.setName (juce::String (title) + " value");
-    c->value.setJustificationType (physical || c->id == "output" ? juce::Justification::centred : juce::Justification::centredRight);
+    c->value.setJustificationType (c->id == "output" ? juce::Justification::centredLeft
+                                   : physical ? juce::Justification::centred : juce::Justification::centredRight);
     c->value.setBorderSize ({ 0, 0, 0, 0 });
     c->value.setColour (juce::Label::textColourId, physical || c->id == "output" ? ink : cream);
     c->value.setColour (juce::Label::backgroundColourId, juce::Colours::transparentBlack);
@@ -527,7 +533,7 @@ void ThrowUpEditor::addControl (const char* id, const char* title, const char* t
     c->value.setColour (juce::Label::outlineWhenEditingColourId, amber);
     c->value.setEditable (false, true, false);
     c->value.setMouseCursor (juce::MouseCursor::UpDownResizeCursor);
-    // Output's value box is the whole control, so it resets like the knobs.
+    // Output's value also works as a box: drag it, double-click to reset like the knob, click to type.
     c->value.resetOnDoubleClick = c->id == "output";
     c->value.setTooltip (c->value.resetOnDoubleClick
         ? "Drag to adjust. Hold Shift for fine adjustment. Double-click to reset to 0 dB; click to enter a value."
@@ -830,6 +836,7 @@ void ThrowUpEditor::drawScreen (juce::Graphics& g)
 
 void ThrowUpEditor::drawKnob (juce::Graphics& g, Control& c)
 {
+    if (c.id == "output") { drawOutputKnob (g, c); return; }
     const auto centre = c.hit.getCentre();
     const float arcRadius = c.large ? 164.0f : 89.0f;
     const float pointerRadius = c.large ? 94.0f : 41.0f;
@@ -867,6 +874,60 @@ void ThrowUpEditor::drawKnob (juce::Graphics& g, Control& c)
         g.setColour (ink.withAlpha (.75f));
         g.drawEllipse (centre.x - arcRadius - 8.0f, centre.y - arcRadius - 8.0f,
                        (arcRadius + 8.0f) * 2.0f, (arcRadius + 8.0f) * 2.0f, 2.0f);
+    }
+}
+
+void ThrowUpEditor::drawOutputKnob (juce::Graphics& g, Control& c)
+{
+    // The plate knobs' caps are in the artwork; this one is drawn whole: a recessed socket moulded like
+    // the INFO key's, an amber level arc measured from 0 dB (the tick), and the same cream cap.
+    const auto centre = outputKnobCentre;
+    const auto circle = [centre] (float radius) { return juce::Rectangle<float> (2.0f * radius, 2.0f * radius).withCentre (centre); };
+    const auto socketColour = vfd::themeFor ("THROW-UP").socket;
+    const auto socket = circle (outputSocketRadius);
+    g.setColour (juce::Colours::black.withAlpha (.4f));
+    g.fillEllipse (socket.translated (0, 2));
+    g.setGradientFill (juce::ColourGradient (socketColour.darker (.5f), centre.x, socket.getY(),
+                                            socketColour.brighter (.32f), centre.x, socket.getBottom(), false));
+    g.fillEllipse (socket);
+    g.setColour (amber.withAlpha (.3f));
+    g.drawEllipse (socket.reduced (.6f), 1.2f);
+    const auto angleOf = [&c] (double value) {
+        return startAngle + (float) c.slider.valueToProportionOfLength (juce::jlimit (c.slider.getMinimum(), c.slider.getMaximum(), value)) * (endAngle - startAngle);
+    };
+    const float zero = angleOf (0.0), angle = angleOf (c.slider.getValue());
+    juce::Path track;
+    track.addCentredArc (centre.x, centre.y, outputArcRadius, outputArcRadius, 0, startAngle, endAngle, true);
+    g.setColour (panel.withAlpha (.8f));
+    g.strokePath (track, juce::PathStrokeType (4.0f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+    if (std::abs (angle - zero) > .01f) {
+        juce::Path arc;
+        arc.addCentredArc (centre.x, centre.y, outputArcRadius, outputArcRadius, 0, juce::jmin (zero, angle), juce::jmax (zero, angle), true);
+        g.setColour (amber);
+        g.strokePath (arc, juce::PathStrokeType (4.0f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+    }
+    const auto onRim = [centre] (float a, float radius) { return centre + juce::Point<float> (std::sin (a), -std::cos (a)) * radius; };
+    g.setColour (cream.withAlpha (.85f));
+    g.drawLine ({ onRim (zero, outputArcRadius - 3.5f), onRim (zero, outputSocketRadius - .5f) }, 1.6f);
+    const auto cap = circle (outputCapRadius);
+    g.setColour (juce::Colours::black.withAlpha (.45f));
+    g.fillEllipse (cap.translated (0, 2));
+    juce::ColourGradient resin (juce::Colour (0xfffffaee), centre.x - outputCapRadius * .45f, cap.getY(),
+                                juce::Colour (0xffd8bf9c), centre.x + outputCapRadius * .45f, cap.getBottom(), false);
+    resin.addColour (.45, juce::Colour (0xfff7ead3));
+    g.setGradientFill (resin);
+    g.fillEllipse (cap);
+    g.setColour (ink.withAlpha (.5f));
+    g.drawEllipse (cap, 1.2f);
+    g.setColour (juce::Colours::white.withAlpha (.7f));
+    g.drawEllipse (cap.reduced (2.0f), 1.0f);
+    g.setColour (ink);
+    g.drawLine ({ onRim (angle, outputCapRadius * .3f), onRim (angle, outputCapRadius * .8f) }, 4.5f);
+    for (const float radius : { outputCapRadius * .3f, outputCapRadius * .8f })
+        g.fillEllipse (juce::Rectangle<float> (4.5f, 4.5f).withCentre (onRim (angle, radius)));
+    if (c.slider.hasKeyboardFocus (true)) {
+        g.setColour (ink.withAlpha (.75f));
+        g.drawEllipse (socket.expanded (3.0f), 2.0f);
     }
 }
 
@@ -960,7 +1021,7 @@ void ThrowUpEditor::resized()
     for (const auto& c : controls) {
         c->slider.setBounds (scaled (c->hit));
         c->value.setBounds (scaled (c->readout));
-        const float fontSize = c->large ? 43.0f : c->physical || c->id == "output" ? 29.0f : 25.0f;
+        const float fontSize = c->large ? 43.0f : c->id == "output" ? 25.0f : c->physical ? 29.0f : 25.0f;
         c->value.setFont (skin->font (fontSize * uiScale));
     }
     presets->setBounds (scaled ({ 186, 204, 404, 44 }));
