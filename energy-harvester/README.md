@@ -1,8 +1,10 @@
-# ENERGY HARVESTER 0.4.0
+# ENERGY HARVESTER 0.4.2
 
 A tape-gesture effect for bass music: tape starts, tape stops, turntable brakes, stop-and-restart stutters and rewinds. Each gesture can land exactly on the beat, and five screen effects can join it. Plasma-pink hardware interface, with a light show that follows the tape.
 
-Apple Silicon, macOS 12+, VST3 and Audio Unit. Works on matching mono or stereo tracks. No MIDI or network access is used. This build does not include Intel or Windows versions.
+Apple Silicon, macOS 12+, VST3 and Audio Unit (and VST3 on Windows, from the suite). Works on matching mono or stereo tracks. No MIDI is used. The only network access is the INFO page's suite update check (GitHub, at most once a day while the window is open; see the suite README).
+
+**New in 0.4.2:** tooltips stay fully inside the device and wrap between words (long ones used to run off the window's edge), and INFO shows the suite version and offers updates.
 
 ## Use
 

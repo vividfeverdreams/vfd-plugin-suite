@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.22)
 set(CMAKE_OSX_DEPLOYMENT_TARGET "12.0" CACHE STRING "Minimum macOS version")
 set(CMAKE_OSX_ARCHITECTURES "arm64" CACHE STRING "Architecture")
-project(EnergyHarvester VERSION 0.4.1 LANGUAGES C CXX)
+project(EnergyHarvester VERSION 0.4.2 LANGUAGES C CXX)
 if(APPLE)
     enable_language(OBJCXX)
     set(CMAKE_OBJCXX_VISIBILITY_PRESET hidden)

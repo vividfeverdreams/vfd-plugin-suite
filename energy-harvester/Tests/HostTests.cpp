@@ -12,11 +12,31 @@
 #include <cstdlib>
 #include <iomanip>
 #include <map>
+#include <functional>
 
 static void check(bool ok,const char* message){if(!ok)throw std::runtime_error(message);std::cout<<"PASS "<<message<<'\n';}
 static void set(EnergyHarvesterProcessor& p,const char* id,float value){auto* v=p.apvts.getParameter(id);v->setValueNotifyingHost(v->convertTo0to1(value));}
 static juce::Component* named(juce::Component& p,const char* name){if(p.getName()==name)return &p;for(auto* c:p.getChildren())if(auto* f=named(*c,name))return f;return nullptr;}
 static juce::Image snapshot(juce::Component& e,const juce::File& file){auto image=e.createComponentSnapshot(e.getLocalBounds(),true);juce::FileOutputStream s(file);s.setPosition(0);s.truncate();check(s.openedOk()&&juce::PNGImageFormat().writeImageToStream(image,s),"native screenshot saved");return image;}
+// Shows every visible tooltip from the centre and corners of its control and counts the tips that would reach
+// outside the visible device (the canvas margins beyond the viewport are cut off by the window). `look` null
+// measures the editor's own placement; otherwise that look's placement, for comparison with stock JUCE.
+static std::pair<int,int> tooltipsOutsideView(juce::Component& editor,juce::LookAndFeel* look=nullptr){
+    juce::TooltipWindow* tips=nullptr;
+    std::function<void(juce::Component&)> find=[&](juce::Component& c){if(auto* t=dynamic_cast<juce::TooltipWindow*>(&c))tips=t;for(auto* child:c.getChildren())find(*child);};
+    find(editor);check(tips&&tips->getParentComponent(),"tooltip window found");
+    auto& canvas=*tips->getParentComponent();auto& placement=look!=nullptr?*look:tips->getLookAndFeel();
+    const juce::Rectangle<int> visible(21,7,518,691);int outside=0,shown=0;
+    std::function<void(juce::Component&)> walk=[&](juce::Component& c){
+        if(!c.isVisible())return;
+        if(auto* client=dynamic_cast<juce::SettableTooltipClient*>(&c);client!=nullptr&&client->getTooltip().isNotEmpty()){
+            const auto area=canvas.getLocalArea(&c,c.getLocalBounds());
+            for(auto point:{area.getCentre(),area.getTopLeft(),area.getTopRight().translated(-1,0),area.getBottomLeft().translated(0,-1),area.getBottomRight().translated(-1,-1)}){
+                ++shown;if(!visible.contains(placement.getTooltipBounds(client->getTooltip(),point,canvas.getLocalBounds())))++outside;}
+        }
+        for(auto* child:c.getChildren())walk(*child);};
+    walk(canvas);return {outside,shown};
+}
 static void process(EnergyHarvesterProcessor& p,int samples){juce::AudioBuffer<float> b(2,samples);b.clear();juce::MidiBuffer m;p.processBlock(b,m);}
 namespace {
 // Minimal host transport for processor-level regressions.
@@ -285,6 +305,13 @@ int main(int argc,char** argv){try{
         set(p,"latestSound",0);editor.previewTime(0);snapshot(editor,folder.getChildFile("ENERGY-HARVESTER-setup-legacy.png"));
         dynamic_cast<juce::Button*>(named(editor,"LATEST SOUND"))->onClick();
         check(p.apvts.getRawParameterValue("latestSound")->load()==1,"USE LATEST SOUND key upgrades the project");
+        // Tooltips stay inside the visible device on every page and on the INFO page (0.4.2).
+        {juce::LookAndFeel_V4 stock;int stockOutside=0,ownOutside=0,total=0;
+         for(int page:{0,1,2,3}){editor.showPageForTesting(page==3?0:page);if(page==3)dynamic_cast<juce::Button*>(named(editor,"INFO"))->onClick();
+             const auto own=tooltipsOutsideView(editor);ownOutside+=own.first;total+=own.second;stockOutside+=tooltipsOutsideView(editor,&stock).first;
+             if(page==3)named(editor,"VFD Info Page")->keyPressed(juce::KeyPress(juce::KeyPress::escapeKey));}
+         std::cout<<"Tooltip placements: "<<total<<" checked; stock JUCE would cut off "<<stockOutside<<", ENERGY HARVESTER cuts off "<<ownOutside<<"\n";
+         check(total>100&&ownOutside==0,"every tooltip stays inside the visible device");}
         set(p,"latestSound",0);editor.showPageForTesting(0);editor.previewTime(0);snapshot(editor,folder.getChildFile("ENERGY-HARVESTER-legacy.png"));set(p,"latestSound",1);
         set(p,"engine",0);set(p,"subKeep",0);
         for(auto [modeIndex,file]:std::vector<std::pair<int,const char*>>{{1,"ENERGY-HARVESTER-stop-spinning.png"},{4,"ENERGY-HARVESTER-rewinding.png"},{2,"ENERGY-HARVESTER-braking.png"}}){

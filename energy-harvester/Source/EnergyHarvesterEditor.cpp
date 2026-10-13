@@ -182,6 +182,29 @@ public:
         juce::Slider::SliderLayout layout;auto bounds=slider.getLocalBounds();layout.textBoxBounds=bounds.removeFromBottom(22);layout.sliderBounds=bounds.reduced(10,3);return layout;
     }
 };
+// Tooltips in Chakra Petch on the display ink, wrapped between words and kept inside the visible device. The
+// canvas is larger than the window (its margins fall outside the viewport), so JUCE's own placement, which only
+// keeps a tip inside the canvas, could push the start or end of a long tip under the window edge.
+class TipLook final:public juce::LookAndFeel_V4 {
+public:
+    juce::Typeface::Ptr face;
+    static constexpr float maxLineWidth=290;
+    juce::TextLayout layout(const juce::String& text,juce::Colour colour) const {
+        juce::AttributedString s;s.setJustification(juce::Justification::topLeft);s.setWordWrap(juce::AttributedString::WordWrap::byWord);
+        s.append(text,vfd::font(face,12.5f),colour);juce::TextLayout l;l.createLayoutWithBalancedLineLengths(s,maxLineWidth);return l;
+    }
+    static juce::Rectangle<int> visibleArea(juce::Rectangle<int> parent){return parent.getIntersection(viewport.toNearestInt().reduced(6));}
+    juce::Rectangle<int> getTooltipBounds(const juce::String& text,juce::Point<int> pos,juce::Rectangle<int> parent) override {
+        const auto area=visibleArea(parent);const auto l=layout(text,juce::Colours::black);
+        const int w=juce::jmin(area.getWidth(),int(std::ceil(l.getWidth()))+20),h=int(std::ceil(l.getHeight()))+14;
+        return juce::Rectangle<int>(pos.x>area.getCentreX()?pos.x-(w+12):pos.x+24,pos.y>area.getCentreY()?pos.y-(h+6):pos.y+6,w,h).constrainedWithin(area);
+    }
+    void drawTooltip(juce::Graphics& g,const juce::String& text,int width,int height) override {
+        const juce::Rectangle<float> r(0,0,float(width),float(height));
+        g.setColour(ink);g.fillRoundedRectangle(r,5);g.setColour(pink.withAlpha(.6f));g.drawRoundedRectangle(r.reduced(.5f),5,1);
+        layout(text,pearl).draw(g,r.reduced(10,7));
+    }
+};
 // Small flat text key used on the title plate's preset strip.
 class PlateKey final:public juce::Button {
 public:
@@ -341,12 +364,11 @@ public:
         addAndMakeVisible(info);info.setBounds(228,615,104,40);info.setExplicitFocusOrder(11);
         addChildComponent(setup);setup.setBounds(94,88,372,364);setup.doneKey().onClick=[this]{showSetup(false);};
         info.onClick=[this]{overlay.open(&info);};addChildComponent(overlay);overlay.setBounds(viewport.toNearestInt());
-        tooltips.setColour(juce::TooltipWindow::backgroundColourId,ink);tooltips.setColour(juce::TooltipWindow::textColourId,pearl);
-        tooltips.setColour(juce::TooltipWindow::outlineColourId,pink.withAlpha(.6f));
+        tipLook.face=normal;tooltips.setLookAndFeel(&tipLook);tooltips.setOpaque(false); // rounded corners show the device behind
         lastTime=juce::Time::getMillisecondCounterHiRes()*.001;lastPublished=processor.publishedSamples.load();lastPublishTime=lastTime;startTimerHz(30);
         setSize(560,720);
     }
-    ~HarvestCanvas() override {time.setLookAndFeel(nullptr);division.setLookAndFeel(nullptr);fx.setLookAndFeel(nullptr);output.setLookAndFeel(nullptr);}
+    ~HarvestCanvas() override {tooltips.setLookAndFeel(nullptr);time.setLookAndFeel(nullptr);division.setLookAndFeel(nullptr);fx.setLookAndFeel(nullptr);output.setLookAndFeel(nullptr);}
     void configureSlider(juce::Slider& s,const char* name,int order) {
         s.setName(name);s.setTitle(name);s.setSliderStyle(juce::Slider::LinearHorizontal);
         s.setTextBoxStyle(juce::Slider::TextBoxRight,false,74,30);s.setLookAndFeel(&look);
@@ -539,7 +561,7 @@ private:
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> timeAttachment,divisionAttachment,fxAttachment,outputAttachment;
     PlateKey previous{"PREVIOUS PRESET",normal,"<"},presetField{"PRESET",normal,"Default"},next{"NEXT PRESET",normal,">"},save{"SAVE PRESET",normal,"SAVE"};
     SetupScreen setup;std::unique_ptr<juce::AlertWindow> dialog;std::vector<energy::presets::Preset> menuPresets;
-    energy::ui::HarvestLights lights;juce::TooltipWindow tooltips{this,600};
+    energy::ui::HarvestLights lights;TipLook tipLook;juce::TooltipWindow tooltips{this,600};
     double lastTime=0,lastPublishTime=0;std::uint64_t lastPublished=0;
     int lastState=-1,lastMode=-1,currentPage=0;float lastProgress=-1;bool lastReduced=false,lastBypassed=false,lastGate=false,audioStalled=false;
     friend class EnergyHarvesterEditor;
