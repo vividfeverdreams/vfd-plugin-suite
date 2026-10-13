@@ -1,19 +1,22 @@
-VIVID FEVER DREAMS SUITE 1.5.0 - PRIVATE BETA INSTALL
+VIVID FEVER DREAMS SUITE 1.6.0 - BETA INSTALL
 
-Includes YOI-BOI 0.2.1, THROW-UP 0.2.0, BACK-SCRATCH 0.11.0,
-SHIFTY 0.5.1, ENERGY HARVESTER 0.4.1, and STUTTER-STEP 0.3.0.
+Includes YOI-BOI 0.2.2, THROW-UP 0.2.1, BACK-SCRATCH 0.11.1,
+SHIFTY 0.5.2, ENERGY HARVESTER 0.4.2, and STUTTER-STEP 0.4.0.
 
-NEW IN 1.5.0
-SHIFTY: the footer sits in the device's own plate, clear of the speaker
-grill, and the shell glows with the sound. Every menu drops from the
-control you clicked (1.4.0 shipped an older SHIFTY without that fix).
-STUTTER-STEP: NEW GROOVE composes a brand-new rhythm every time, never a
-copy of a preset, and RATE has a 1/4 setting (16 steps over four bars).
-YOI-BOI and ENERGY HARVESTER: right-click menus open at the pointer.
-The whole suite now also runs on Windows (VST3), as a separate download.
-Every plug-in comes as a VST3 and as an Audio Unit (AU) on the Mac.
-The installer and plug-ins are now signed with the developer's Apple
-Developer ID and notarized by Apple: no security workarounds needed.
+NEW IN 1.6.0
+Updates: every plug-in's INFO page shows the suite version and lights
+up when a newer suite is out. INSTALL downloads the new installer,
+checks it and opens it. (1.5.0 and older have no update check, so this
+version has to be installed by hand once.)
+SHIFTY and THROW-UP: OUTPUT is now a knob.
+STUTTER-STEP: SAVE keeps any groove, rolled ones included, in a USER
+folder at the end of the groove menu.
+YOI-BOI: the MOD page drops the FEEL column, so the rest has more room.
+ENERGY HARVESTER: tooltips stay inside the window.
+BACK-SCRATCH: fills say when they play, like "PLAYS EVERY 4TH BAR".
+Every plug-in comes as a VST3 and as an Audio Unit (AU) on the Mac,
+signed with the developer's Apple Developer ID and notarized by Apple.
+The suite also runs on Windows (VST3), as a separate download.
 
 REQUIREMENTS
 Apple Silicon Mac (M1 or later) and macOS 12 or later.
@@ -38,3 +41,7 @@ version, instead of overwriting them. Uninstall moves plug-ins to the
 Trash, so you can put them back.
 Installation details: README.md
 Log: ~/Library/Logs/Vivid Fever Dreams Suite/installer.log
+
+SOURCE CODE
+Free software under the GNU AGPLv3:
+https://github.com/vividfeverdreams/vfd-plugin-suite

@@ -19,5 +19,9 @@ These beta builds are not signed with a Microsoft certificate yet. If Windows sh
 
 The Windows and Mac versions are the same plug-ins, so a project saved on a Mac opens with the same settings on a PC and the other way round. Your own presets live in %APPDATA%\<plug-in name>\Presets.
 
+From suite 1.6.0, each plug-in's INFO page shows the suite version and lights up when a newer suite is out; INSTALL downloads the new installer, checks it and opens it.
+
+Source code (free software, GNU AGPLv3): https://github.com/vividfeverdreams/vfd-plugin-suite
+
 Executive producers: C.Y. Lee (@cxy) and Carl Tydingco (@clt)
 https://www.vividfeverdreams.xyz
