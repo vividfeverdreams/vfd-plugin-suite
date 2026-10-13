@@ -16,3 +16,14 @@ External destinations:
 - Donations: https://fundraising.fracturedatlas.org/dream-sequence
 
 The integration checks validate the four destinations without opening browsers or submitting anything to the external sites.
+
+## Suite updates
+
+`VfdUpdate.h` keeps the suite version (`VfdSuiteVersion.h`) next to GitHub's latest release of `vividfeverdreams/vfd-plugin-suite`, for the foot of the INFO page and a small light on the INFO key.
+
+- **When it checks:** once per session, after an editor has been on screen for 1.5 s, or when CHECK FOR UPDATES is clicked. The answer is cached for a day in `~/Library/Application Support/Vivid Fever Dreams/Updates/latest-release.json` (Windows: `%LOCALAPPDATA%\Vivid Fever Dreams\Updates`) and shared by every VFD plug-in. Host scans and offscreen editors never check. Drafts and pre-releases are ignored, so a release can be staged as a pre-release first.
+- **INSTALL:** downloads this platform's installer from the release (Mac: the asset ending `-Install.zip`; Windows: the one ending `-Setup.exe`) into the same folder, checks its SHA-256 against the release's `SHA256SUMS.txt`, and opens it. On the Mac the zip is expanded with `ditto` and the installer must pass `codesign` with the suite's Developer ID team (LZXM44W38L) and `spctl` (notarization) before it is opened. Only files attached to this repository's releases are used. The installers themselves refuse to replace plug-ins while a DAW that loads them is running.
+- **Threads:** one background thread per plug-in binary, owned by its open editors through `juce::SharedResourcePointer`. Closing the last editor cancels a check or download. Nothing touches audio or parameters.
+- **Releasing:** bump `VFD_SUITE_VERSION` (and `SUITE_VERSION` in the Windows workflow) for every suite release; `release-mac.sh` refuses a mismatch. Publish the Mac zip, the Windows Setup.exe and `SHA256SUMS.txt` on the GitHub release.
+- **Text:** `python3 shared/tools/check_text_literals.py` (from the suite root) finds non-ASCII text in plain string literals, which JUCE shows as junk ("â€"); wrap it in `juce::String::fromUTF8`.
+- **Tests:** `shared/Tests` (see its CMakeLists.txt). `--live` checks GitHub and downloads and verifies the current release's installer without opening it.

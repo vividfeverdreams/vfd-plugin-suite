@@ -15,6 +15,10 @@ Six free, open-source audio plug-ins for bass music by **Vivid Fever Dreams**, b
 
 `shared/` holds the INFO page and logo that every plug-in uses; the plug-in folders must stay next to it.
 
+## Updates
+
+From suite 1.6.0, each plug-in's **INFO** page shows the suite version and checks this repository's latest release (at most once a day, while a plug-in window is open). When a newer suite is out, the INFO key lights up and **INSTALL** downloads that release's installer, checks it (the release's SHA-256 checksum; on the Mac also the Developer ID signature and notarization) and opens it. The installer then asks you to quit your DAW before it replaces the plug-ins. Details: [shared/README.md](shared/README.md).
+
 ## Download
 
 Free, ready-to-install builds for **Mac** (VST3 + Audio Unit, Apple Silicon, macOS 12+, signed and notarized) and **Windows** (VST3, x64) are on the **[Releases page](https://github.com/vividfeverdreams/vfd-plugin-suite/releases/latest)** and in the Vivid Fever Dreams Instagram channel. You can also build everything from this source (below).

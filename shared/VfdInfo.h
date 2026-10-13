@@ -2,8 +2,9 @@
 
 #include <juce_gui_extra/juce_gui_extra.h>
 #include <array>
+#include "VfdUpdate.h"
 
-// Shared visual identity only. This component never reads or changes audio state.
+// Shared visual identity, credits and suite updates. These components never read or change audio state.
 namespace vfd {
 
 struct Theme {
@@ -35,7 +36,7 @@ inline juce::Font font(juce::Typeface::Ptr typeface, float height)
                                           : juce::FontOptions(height));
 }
 
-class InfoButton final : public juce::Button {
+class InfoButton final : public juce::Button, private juce::ChangeListener, private juce::Timer {
 public:
     InfoButton(Theme colours, juce::Typeface::Ptr typeface)
         : Button("INFO"), theme(colours), face(std::move(typeface))
@@ -46,7 +47,12 @@ public:
         setTooltip("About Vivid Fever Dreams");
         setWantsKeyboardFocus(true);
         setMouseCursor(juce::MouseCursor::PointingHandCursor);
+        updates->addChangeListener(this);
+        changeListenerCallback(nullptr);
+        startTimer(1500); // look for a newer suite once the editor is on screen
     }
+
+    ~InfoButton() override { updates->removeChangeListener(this); }
 
     void paintButton(juce::Graphics& g, bool over, bool down) override
     {
@@ -81,15 +87,48 @@ public:
         g.setFont(font(face, 12.5f).withExtraKerningFactor(0.16f));
         g.setColour(theme.keyInk);
         g.drawText("INFO", cap.translated(0, -0.3f), juce::Justification::centred, false);
+        if (updateWaiting) {
+            // A newer suite is out: a small lit LED in the key's corner.
+            const juce::Point<float> led { cap.getRight() - 9.5f, cap.getY() + 7.5f };
+            g.setGradientFill(juce::ColourGradient(theme.accent.withAlpha(0.7f), led, theme.accent.withAlpha(0.0f),
+                                                   led.translated(8.0f, 0), true));
+            g.fillEllipse(juce::Rectangle<float>(16.0f, 16.0f).withCentre(led));
+            g.setColour(theme.accent.brighter(0.3f));
+            g.fillEllipse(juce::Rectangle<float>(6.0f, 6.0f).withCentre(led));
+            g.setColour(theme.keyInk.withAlpha(0.4f));
+            g.drawEllipse(juce::Rectangle<float>(6.0f, 6.0f).withCentre(led), 0.6f);
+        }
         if (hasKeyboardFocus(true)) {
             g.setColour(theme.accent);
             g.drawRoundedRectangle(socket.reduced(0.5f), 10, 1.5f);
         }
     }
 
+    bool showsUpdate() const noexcept { return updateWaiting; }
+
 private:
+    void changeListenerCallback(juce::ChangeBroadcaster*) override
+    {
+        const bool waiting = updates->hasUpdate();
+        if (waiting == updateWaiting) return;
+        updateWaiting = waiting;
+        setTooltip(waiting ? "About Vivid Fever Dreams. Suite " + updates->getRelease().version + " is available."
+                           : juce::String("About Vivid Fever Dreams"));
+        repaint();
+    }
+
+    void timerCallback() override
+    {
+        // Only editors on screen check, so host scans and offscreen tests stay offline.
+        if (! isShowing() || getPeer() == nullptr) return;
+        stopTimer();
+        updates->checkAutomatically();
+    }
+
     Theme theme;
     juce::Typeface::Ptr face;
+    juce::SharedResourcePointer<update::Service> updates;
+    bool updateWaiting = false;
 };
 
 class InfoOverlay final : public juce::Component {
@@ -154,6 +193,133 @@ class InfoOverlay final : public juce::Component {
         float height;
     };
 
+    /** Suite version and updates, at the foot of the page. */
+    class UpdateRow final : public juce::Component, private juce::ChangeListener {
+        class ActionButton final : public juce::Button {
+        public:
+            ActionButton(Theme colours, juce::Typeface::Ptr typeface)
+                : Button("Suite update"), theme(colours), face(std::move(typeface))
+            {
+                setWantsKeyboardFocus(true);
+                setMouseCursor(juce::MouseCursor::PointingHandCursor);
+            }
+            bool primary = false;
+            float progress = -1.0f; // download progress, or negative
+            void paintButton(juce::Graphics& g, bool over, bool down) override
+            {
+                const auto bounds = getLocalBounds().toFloat().reduced(1);
+                if (primary) {
+                    g.setColour(theme.accent.withAlpha(down ? 0.75f : over ? 0.95f : 0.85f));
+                    g.fillRoundedRectangle(bounds, 8);
+                } else {
+                    g.setColour(theme.text.withAlpha(down ? 0.16f : over ? 0.11f : 0.05f));
+                    g.fillRoundedRectangle(bounds, 8);
+                    if (progress >= 0) {
+                        juce::Graphics::ScopedSaveState clip(g);
+                        juce::Path pill;
+                        pill.addRoundedRectangle(bounds, 8);
+                        g.reduceClipRegion(pill);
+                        g.setColour(theme.accent.withAlpha(0.28f));
+                        g.fillRect(bounds.withWidth(bounds.getWidth() * juce::jlimit(0.0f, 1.0f, progress)));
+                    }
+                    g.setColour(hasKeyboardFocus(true) || over ? theme.accent : theme.line);
+                    g.drawRoundedRectangle(bounds, 8, 1);
+                }
+                if (primary && hasKeyboardFocus(true)) {
+                    g.setColour(theme.text);
+                    g.drawRoundedRectangle(bounds.expanded(1.5f), 9, 1.2f);
+                }
+                g.setFont(font(face, 13).withExtraKerningFactor(0.08f));
+                g.setColour(primary ? theme.panel : theme.accent);
+                g.drawFittedText(getButtonText(), getLocalBounds().reduced(8, 0), juce::Justification::centred, 1, 0.8f);
+            }
+        private:
+            Theme theme;
+            juce::Typeface::Ptr face;
+        };
+
+    public:
+        UpdateRow(Theme colours, juce::Typeface::Ptr typeface)
+            : theme(colours), face(typeface), action(colours, typeface)
+        {
+            setName("Suite updates");
+            addAndMakeVisible(action);
+            action.onClick = [this] { act(); };
+            updates->addChangeListener(this);
+            changeListenerCallback(nullptr);
+        }
+        ~UpdateRow() override { updates->removeChangeListener(this); }
+
+        juce::Button& button() noexcept { return action; }
+        void checkAutomatically() { updates->checkAutomatically(); }
+
+        // Centred like the page's other sections: the version as the heading, the key, then one line of status.
+        void resized() override { action.setBounds((getWidth() - 214) / 2, 26, 214, 32); }
+
+        void paint(juce::Graphics& g) override
+        {
+            g.setFont(font(face, 11).withExtraKerningFactor(0.13f));
+            g.setColour(theme.muted);
+            g.drawText("SUITE " + update::Service::installedVersion(), 0, 0, getWidth(), 20,
+                       juce::Justification::centred, false);
+            g.setFont(font(face, 13));
+            g.setColour(status.stage == update::Service::Stage::failed ? theme.accent : theme.text.withAlpha(0.8f));
+            g.drawFittedText(status.message, 0, 66, getWidth(), 32, juce::Justification::centredTop, 2, 0.9f);
+        }
+
+    private:
+        using Stage = update::Service::Stage;
+
+        void act()
+        {
+            switch (status.stage) {
+                case Stage::available:
+                    if (updates->getRelease().canInstall()) updates->install(); else updates->openReleasePage();
+                    break;
+                case Stage::opened: updates->showInstaller(); break;
+                case Stage::failed:
+                    if (status.installFailed) updates->openReleasePage(); else updates->checkNow();
+                    break;
+                case Stage::checking: case Stage::downloading: case Stage::verifying: break;
+                case Stage::idle: case Stage::upToDate: updates->checkNow(); break;
+            }
+        }
+
+        void changeListenerCallback(juce::ChangeBroadcaster*) override
+        {
+            status = updates->getStatus();
+            const auto version = updates->getRelease().version;
+            juce::String label = "CHECK FOR UPDATES";
+            switch (status.stage) {
+                case Stage::idle: break;
+                case Stage::checking: label = "CHECKING..."; break;
+                case Stage::upToDate: label = "CHECK AGAIN"; break;
+                case Stage::available: label = (updates->getRelease().canInstall() ? "INSTALL " : "GET ") + version; break;
+                case Stage::downloading: label = "DOWNLOADING " + juce::String(juce::roundToInt(status.progress * 100)) + "%"; break;
+                case Stage::verifying: label = "VERIFYING..."; break;
+                case Stage::opened: label = "SHOW INSTALLER"; break;
+                case Stage::failed: label = status.installFailed ? "OPEN RELEASES PAGE" : "TRY AGAIN"; break;
+            }
+            if (status.message.isEmpty())
+                status.message = "Updates come from the suite's GitHub releases page.";
+            action.setButtonText(label);
+            action.setTitle(label);
+            action.setTooltip(status.stage == Stage::available ? status.message
+                              : status.stage == Stage::opened ? juce::String("Show the downloaded installer")
+                              : juce::String("Updates come from github.com/") + update::repository);
+            action.primary = status.stage == Stage::available;
+            action.progress = status.stage == Stage::downloading ? status.progress : -1.0f;
+            action.repaint();
+            repaint();
+        }
+
+        Theme theme;
+        juce::Typeface::Ptr face;
+        ActionButton action;
+        update::Service::Status status;
+        juce::SharedResourcePointer<update::Service> updates;
+    };
+
     class Panel final : public juce::Component {
     public:
         Panel(juce::String plugin, Theme colours, const char* svg, size_t svgSize,
@@ -163,16 +329,18 @@ class InfoOverlay final : public juce::Component {
               clt("@clt", "https://x.com/clt", theme, face, 19),
               music("vividfeverdreams.xyz", "https://www.vividfeverdreams.xyz", theme, face, 17),
               donate("Dream Sequence on Fractured Atlas",
-                     "https://fundraising.fracturedatlas.org/dream-sequence", theme, face, 16)
+                     "https://fundraising.fracturedatlas.org/dream-sequence", theme, face, 16),
+              updateRow(theme, face)
         {
             setName("Credits and support");
             logo = juce::Drawable::createFromImageData(svg, svgSize);
             if (logo != nullptr) logo->replaceColour(juce::Colours::black, theme.text);
             addAndMakeVisible(close);
+            addAndMakeVisible(updateRow);
             close.onClick = std::move(closeAction);
             int order = 1;
             for (auto* button : focusOrder()) {
-                addAndMakeVisible(button);
+                if (button != &updateRow.button()) addAndMakeVisible(button); // that one lives in its row
                 button->setExplicitFocusOrder(order++);
             }
             setup(about, "ABOUT " + plugin, 11, theme.muted, true);
@@ -186,7 +354,8 @@ class InfoOverlay final : public juce::Component {
             setup(donateCopy, "You can also donate to my live interactive visual project.", 14, theme.text);
         }
 
-        std::array<juce::Button*, 5> focusOrder() { return { &close, &cxy, &clt, &music, &donate }; }
+        std::array<juce::Button*, 6> focusOrder() { return { &close, &cxy, &clt, &music, &donate, &updateRow.button() }; }
+        UpdateRow& updates() noexcept { return updateRow; }
 
         void resized() override
         {
@@ -202,6 +371,7 @@ class InfoOverlay final : public juce::Component {
             music.setBounds(122, 467, 236, 30);
             donateCopy.setBounds(28, 509, 424, 28);
             donate.setBounds(60, 538, 360, 32);
+            updateRow.setBounds(28, 598, 424, 98);
         }
 
         void paint(juce::Graphics& g) override
@@ -218,6 +388,7 @@ class InfoOverlay final : public juce::Component {
             g.setColour(theme.line.withAlpha(0.7f));
             g.drawHorizontalLine(308, 28, 452);
             g.drawHorizontalLine(396, 28, 452);
+            g.drawHorizontalLine(584, 28, 452);
             g.setColour(theme.muted);
             g.fillEllipse(238.5f, 363.5f, 3, 3);
         }
@@ -240,6 +411,7 @@ class InfoOverlay final : public juce::Component {
         std::unique_ptr<juce::Drawable> logo;
         CloseButton close;
         Link cxy, clt, music, donate;
+        UpdateRow updateRow;
         juce::Label about, title, credit, producers, support, musicCopy, donateCopy;
     };
 
@@ -262,6 +434,7 @@ public:
         returnFocus = source;
         setVisible(true);
         toFront(false);
+        if (getPeer() != nullptr) panel.updates().checkAutomatically();
         // The page covers the editor and contains keyboard focus without going modal: JUCE's modal state is
         // shared by every instance of a plug-in, so a modal page here would block the other open instances.
         // Editors can also be rendered without a peer by host validation tools.
@@ -277,7 +450,7 @@ public:
 
     void resized() override
     {
-        constexpr float width = 480, height = 595;
+        constexpr float width = 480, height = 708;
         const auto scale = juce::jmin(1.0f, juce::jmin((getWidth() - 28.0f) / width, (getHeight() - 28.0f) / height));
         panel.setBounds(0, 0, static_cast<int>(width), static_cast<int>(height));
         // Whole-pixel offsets keep the page's text and hairlines crisp on 1x displays.

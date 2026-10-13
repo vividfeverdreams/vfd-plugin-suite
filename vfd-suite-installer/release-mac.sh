@@ -14,6 +14,7 @@ PROFILE="${3:-VFD-NOTARY}"
 W="$(cd "$(dirname "$0")/.." && pwd -P)"; O="$(cd "$W/.." && pwd -P)/outputs"
 [[ -f "$W/vfd-suite-installer/whats-new-$V.json" ]] || { echo "Missing whats-new-$V.json" >&2; exit 1; }
 grep -q "SUITE $V " "$W/vfd-suite-installer/START HERE.txt" || { echo "START HERE.txt is not for $V" >&2; exit 1; }
+grep -q "VFD_SUITE_VERSION \"$V\"" "$W/shared/VfdSuiteVersion.h" || { echo "shared/VfdSuiteVersion.h is not $V (the INFO page's update check compares it with GitHub)" >&2; exit 1; }
 xcrun notarytool history --keychain-profile "$PROFILE" >/dev/null || { echo "No notary profile $PROFILE" >&2; exit 1; }
 for old in "Vivid-Fever-Dreams-Suite-v$V" "Vivid-Fever-Dreams-Suite-v$V-Beta-Install" \
            "Vivid-Fever-Dreams-Suite-v$V-Beta-Install.zip" "Vivid-Fever-Dreams-Suite-v$V-Beta-Install.sha256" \
