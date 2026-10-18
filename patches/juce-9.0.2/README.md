@@ -11,4 +11,4 @@ Two plugins replace one JUCE file, `modules/juce_audio_plugin_client/juce_audio_
 
 Each hook only compiles when its plugin defines the flag. Without it, the file behaves like stock JUCE. The `.diff` next to each copy shows the change against stock 9.0.2 (line endings ignored).
 
-The Windows workflow (`.github/workflows/windows.yml`) clones JUCE 9.0.2 for each plugin and copies these files in. On a Mac, do the same by hand: put a JUCE 9.0.2 checkout at `<plugin>/external/JUCE`, then copy the patched file over the stock one for `back-scratch` and `energy-harvester`.
+The Windows and Linux workflows (`.github/workflows/windows.yml`, `linux.yml`) clone JUCE 9.0.2 for each plugin and copy these files in. On a Mac or a Linux computer, do the same by hand: put a JUCE 9.0.2 checkout at `<plugin>/external/JUCE`, then copy the patched file over the stock one for `back-scratch` and `energy-harvester`.

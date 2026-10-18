@@ -98,7 +98,7 @@ juce::File userRoot() {
     const juce::File base=home!=nullptr&&*home=='/'?juce::File(juce::String::fromUTF8(home)):juce::File::getSpecialLocation(juce::File::userHomeDirectory);
     return base.getChildFile("Library").getChildFile("Application Support").getChildFile("ENERGY HARVESTER").getChildFile("Presets");
    #else
-    // %APPDATA%\ENERGY HARVESTER\Presets on Windows.
+    // %APPDATA%\ENERGY HARVESTER\Presets on Windows, ~/.config/ENERGY HARVESTER/Presets on Linux.
     return juce::File::getSpecialLocation(juce::File::userApplicationDataDirectory).getChildFile("ENERGY HARVESTER").getChildFile("Presets");
    #endif
 }

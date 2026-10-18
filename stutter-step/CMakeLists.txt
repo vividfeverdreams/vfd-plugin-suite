@@ -32,6 +32,7 @@ juce_add_plugin(StutterStep
     NEEDS_MIDI_OUTPUT FALSE
     IS_MIDI_EFFECT FALSE
     EDITOR_WANTS_KEYBOARD_FOCUS TRUE
+    NEEDS_CURL TRUE
     COPY_PLUGIN_AFTER_BUILD FALSE)
 
 set(STUTTER_CORE_SOURCES
@@ -50,7 +51,8 @@ target_link_libraries(StutterStep PRIVATE
     juce::juce_recommended_warning_flags)
 target_compile_definitions(StutterStep PUBLIC
     JUCE_WEB_BROWSER=0
-    JUCE_USE_CURL=0
+    # Linux: https for the INFO page's update check goes through libcurl, loaded only when used.
+    JUCE_LOAD_CURL_SYMBOLS_LAZILY=1
     JUCE_VST3_CAN_REPLACE_VST2=0)
 
 if (APPLE)
@@ -60,6 +62,9 @@ if (APPLE)
             COMMAND /usr/bin/codesign --verify --deep --strict "$<TARGET_BUNDLE_DIR:${format_target}>"
             VERBATIM)
     endforeach()
+elseif (CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    # libcurl is opened when an update check runs, so a computer without it still loads the plug-in.
+    target_link_options(StutterStep_VST3 PRIVATE "LINKER:--as-needed")
 endif()
 
 option(STUTTER_BUILD_TESTS "Build the console test app" ON)

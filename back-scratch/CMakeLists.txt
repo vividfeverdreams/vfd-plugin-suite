@@ -33,6 +33,7 @@ juce_add_plugin(BackScratch
     NEEDS_MIDI_OUTPUT FALSE
     IS_MIDI_EFFECT FALSE
     EDITOR_WANTS_KEYBOARD_FOCUS TRUE
+    NEEDS_CURL TRUE
     COPY_PLUGIN_AFTER_BUILD FALSE)
 
 target_sources(BackScratch PRIVATE
@@ -54,7 +55,8 @@ target_link_libraries(BackScratch PRIVATE
 target_compile_definitions(BackScratch PUBLIC
     BACK_SCRATCH_QUEUE_BRIDGE=1
     JUCE_WEB_BROWSER=0
-    JUCE_USE_CURL=0
+    # Linux: https for the INFO page's update check goes through libcurl, loaded only when used.
+    JUCE_LOAD_CURL_SYMBOLS_LAZILY=1
     JUCE_VST3_CAN_REPLACE_VST2=0)
 
 if (APPLE)
@@ -64,6 +66,9 @@ if (APPLE)
             COMMAND /usr/bin/codesign --verify --deep --strict "$<TARGET_BUNDLE_DIR:${format_target}>"
             VERBATIM)
     endforeach()
+elseif (CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    # libcurl is opened when an update check runs, so a computer without it still loads the plug-in.
+    target_link_options(BackScratch_VST3 PRIVATE "LINKER:--as-needed")
 endif()
 
 juce_add_console_app(BackScratchTests PRODUCT_NAME "BACK-SCRATCH Tests")

@@ -22,6 +22,7 @@ juce::String releaseJson(const juce::String& tag, bool draft = false, bool prere
          + ",\"prerelease\":" + (prerelease ? "true" : "false") + ",\"assets\":["
            "{\"name\":\"SHA256SUMS.txt\",\"size\":356,\"browser_download_url\":\"" + prefix + "SHA256SUMS.txt\"},"
            "{\"name\":\"Vivid-Fever-Dreams-Suite-v9.9.9-Beta-Windows-VST3.zip\",\"size\":7,\"browser_download_url\":\"" + prefix + "Vivid-Fever-Dreams-Suite-v9.9.9-Beta-Windows-VST3.zip\"},"
+           "{\"name\":\"Vivid-Fever-Dreams-Suite-v9.9.9-Beta-Linux-x64.tar.gz\",\"size\":9,\"browser_download_url\":\"" + prefix + "Vivid-Fever-Dreams-Suite-v9.9.9-Beta-Linux-x64.tar.gz\"},"
            "{\"name\":\"Vivid-Fever-Dreams-Suite-v9.9.9-Beta-Install.zip\",\"size\":100,\"browser_download_url\":\"" + prefix + "Vivid-Fever-Dreams-Suite-v9.9.9-Beta-Install.zip\"},"
            "{\"name\":\"Vivid-Fever-Dreams-Suite-v9.9.9-Beta-Windows-Setup.exe\",\"size\":32,\"browser_download_url\":\"" + prefix + "Vivid-Fever-Dreams-Suite-v9.9.9-Beta-Windows-Setup.exe\"}]}";
 }
@@ -51,6 +52,9 @@ void testLogic()
     const auto windows = parseRelease(juce::JSON::parse(releaseJson("v9.9.9")), Platform::windows);
     check(windows.assetName == "Vivid-Fever-Dreams-Suite-v9.9.9-Beta-Windows-Setup.exe" && windows.assetSize == 32,
           "Windows picks Setup.exe, not the VST3 zip");
+    const auto linuxRelease = parseRelease(juce::JSON::parse(releaseJson("v9.9.9")), Platform::other);
+    check(linuxRelease.version == "9.9.9" && ! linuxRelease.canInstall() && linuxRelease.sumsUrl == base + "SHA256SUMS.txt",
+          "Linux sees the release but has no installer to open (GET opens the releases page)");
     check(! parseRelease(juce::JSON::parse(releaseJson("v9.9.9", true)), Platform::mac).isKnown()
               && ! parseRelease(juce::JSON::parse(releaseJson("v9.9.9", false, true)), Platform::mac).isKnown(),
           "drafts and pre-releases are ignored");
@@ -65,9 +69,11 @@ void testLogic()
               && ! parseRelease(juce::JSON::parse("not json"), Platform::mac).isKnown(),
           "GitHub errors and junk name no release");
 
-    const auto restored = Release::fromVar(juce::JSON::parse(juce::JSON::toString(mac.toVar())));
-    check(restored.version == mac.version && restored.assetUrl == mac.assetUrl && restored.assetSize == mac.assetSize
-              && restored.sumsUrl == mac.sumsUrl && restored.page == mac.page,
+    // The cache keeps an installer only for this computer, so round-trip this platform's answer.
+    const auto local = parseRelease(juce::JSON::parse(releaseJson("v9.9.9")), thisPlatform());
+    const auto restored = Release::fromVar(juce::JSON::parse(juce::JSON::toString(local.toVar())));
+    check(restored.version == local.version && restored.assetUrl == local.assetUrl && restored.assetSize == local.assetSize
+              && restored.sumsUrl == local.sumsUrl && restored.page == local.page,
           "the shared answer survives the cache file");
     auto tampered = mac.toVar();
     tampered.getDynamicObject()->setProperty("assetUrl", "https://example.com/x-Install.zip");
@@ -150,7 +156,8 @@ void testInterface(const juce::File& shots)
         Release newer = parseRelease(juce::JSON::parse(releaseJson("v9.9.9")), thisPlatform());
         service->applyForTesting(newer);
         service->dispatchPendingMessages();
-        check(key.showsUpdate() && button->getButtonText() == "INSTALL 9.9.9", name + ": a newer release lights INFO and offers INSTALL");
+        const juce::String offer = newer.canInstall() ? "INSTALL 9.9.9" : "GET 9.9.9"; // Linux: no installer
+        check(key.showsUpdate() && button->getButtonText() == offer, name + ": a newer release lights INFO and offers " + offer);
         shot("available");
         if (shots != juce::File()) save(key.createComponentSnapshot(key.getLocalBounds(), true, 4.0f), shots.getChildFile(name + "-info-key-update.png"));
         service->showStageForTesting(Service::Stage::downloading, "Downloading the installer. Keep this window open.", 0.42f);
@@ -186,8 +193,12 @@ void testLive()
     const auto latest = service->getRelease();
     std::cout << "GitHub latest: " << latest.version << " (" << latest.assetName << ", " << latest.assetSize << " bytes); installed "
               << Service::installedVersion() << "; status: " << service->getStatus().message << '\n';
-    check(latest.canInstall() && latest.sumsUrl.isNotEmpty(), "live: GitHub names the latest release, its installer and checksums");
     check(Service::updatesFolder().getChildFile("latest-release.json").existsAsFile(), "live: the answer is cached for the other plug-ins");
+    if (thisPlatform() == Platform::other) {
+        check(latest.isKnown() && latest.sumsUrl.isNotEmpty(), "live: GitHub names the latest release (Linux gets it from the releases page)");
+        return;
+    }
+    check(latest.canInstall() && latest.sumsUrl.isNotEmpty(), "live: GitHub names the latest release, its installer and checksums");
     const auto started = juce::Time::getMillisecondCounterHiRes();
     juce::String error;
     const auto installer = service->prepareForTesting(latest, error);

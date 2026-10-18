@@ -1,0 +1,149 @@
+# Linux builds of the suite: each plug-in's VST3 (x86_64, GCC), checked with pluginval, then the Linux
+# tarball (vfd-suite-installer/linux). Mac builds and the Mac installer are made locally (see each plug-in's README).
+#
+# The jobs run in an Ubuntu 22.04 container, so the plug-ins need nothing newer than glibc 2.35 and load on
+# Ubuntu 22.04, Debian 12 and later distributions. A plug-in is rebuilt only when something that goes into its
+# VST3 changes (its folder except docs and tests, shared/ or patches/); otherwise its last validated bundle
+# comes from the cache. Bump BUILD_RECIPE when the build steps below change.
+name: Linux build
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: linux-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  SUITE_VERSION: "1.6.0" # keep equal to shared/VfdSuiteVersion.h
+  JUCE_TAG: "9.0.2"
+  PLUGINVAL_VERSION: "v1.0.4"
+  BUILD_RECIPE: "1"
+  DEBIAN_FRONTEND: noninteractive
+
+jobs:
+  plugin:
+    name: ${{ matrix.bundle }}
+    runs-on: ubuntu-24.04
+    container: ubuntu:22.04
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { folder: yoi-boi, target: YoiBoi_VST3, bundle: YOI-BOI, tests: YOIBOI_BUILD_TESTS }
+          - { folder: throw-up, target: ThrowUp_VST3, bundle: THROW-UP, tests: THROW_UP_BUILD_TESTS }
+          - { folder: back-scratch, target: BackScratch_VST3, bundle: BACK-SCRATCH, tests: BACK_SCRATCH_BUILD_TESTS }
+          - { folder: shifty, target: Shifty_VST3, bundle: SHIFTY, tests: SHIFTY_BUILD_TESTS }
+          - { folder: energy-harvester, target: EnergyHarvester_VST3, bundle: ENERGY HARVESTER, tests: ENERGY_HARVESTER_BUILD_TESTS }
+          - { folder: stutter-step, target: StutterStep_VST3, bundle: STUTTER-STEP, tests: STUTTER_BUILD_TESTS }
+    steps:
+      - name: Build tools and JUCE's Linux dependencies
+        run: |
+          apt-get update -qq
+          apt-get install -y -qq --no-install-recommends git ca-certificates curl unzip xvfb xauth \
+            cmake ninja-build g++ pkg-config libasound2-dev libcurl4-openssl-dev libfontconfig1-dev \
+            libfreetype-dev libx11-dev libxcomposite-dev libxcursor-dev libxext-dev libxi-dev libxinerama-dev \
+            libxrandr-dev libxrender-dev > /dev/null
+
+      - uses: actions/checkout@v4
+
+      - name: Reuse the last validated build
+        id: cache
+        uses: actions/cache@v4
+        with:
+          path: dist
+          key: linux-vst3-r${{ env.BUILD_RECIPE }}-${{ matrix.folder }}-${{ hashFiles(format('{0}/**', matrix.folder), format('!{0}/**/*.md', matrix.folder), format('!{0}/Tests/**', matrix.folder), 'shared/**', 'patches/**') }}
+
+      - name: JUCE ${{ env.JUCE_TAG }}
+        if: steps.cache.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          git clone --quiet --depth 1 --branch "$JUCE_TAG" https://github.com/juce-framework/JUCE.git "${{ matrix.folder }}/external/JUCE"
+          rm -rf "${{ matrix.folder }}/external/JUCE/.git"
+          patched="patches/juce-$JUCE_TAG/${{ matrix.folder }}/juce_audio_plugin_client_VST3.cpp"
+          if [ -f "$patched" ]; then
+            cp "$patched" "${{ matrix.folder }}/external/JUCE/modules/juce_audio_plugin_client/"
+            echo "Applied $patched"
+          fi
+
+      - name: Build
+        if: steps.cache.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake -S "${{ matrix.folder }}" -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -D${{ matrix.tests }}=OFF
+          cmake --build build --target ${{ matrix.target }}
+          mkdir -p dist
+          cp -R "$(find build -type d -path '*Release/VST3/*.vst3' -prune | head -1)" dist/
+          so="dist/${{ matrix.bundle }}.vst3/Contents/x86_64-linux/${{ matrix.bundle }}.so"
+          readelf -d "$so" | grep NEEDED
+          if readelf -d "$so" | grep -q 'NEEDED.*libcurl'; then echo "libcurl must load lazily, not be NEEDED"; exit 1; fi
+          find dist -maxdepth 4 | sort
+
+      - name: pluginval (strictness 5)
+        if: steps.cache.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -sSL -o pluginval.zip "https://github.com/Tracktion/pluginval/releases/download/$PLUGINVAL_VERSION/pluginval_Linux.zip"
+          unzip -q -o pluginval.zip -d pluginval
+          exe="$(find pluginval -name pluginval -type f | head -1)"
+          chmod +x "$exe"
+          log="dist/pluginval-${{ matrix.folder }}.txt"
+          # A scratch home, so nothing the plug-in saves lands in the cached bundle folder.
+          if HOME="$RUNNER_TEMP/home" xvfb-run -a "$exe" --strictness-level 5 --validate-in-process \
+               --validate "dist/${{ matrix.bundle }}.vst3" > "$log" 2>&1; then
+            tail -n 3 "$log"
+          else
+            tail -n 60 "$log"
+            exit 1
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-vst3-${{ matrix.folder }}
+          path: dist
+          if-no-files-found: error
+
+  package:
+    needs: plugin
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: linux-vst3-*
+          path: artifacts
+
+      - name: Collect the bundles
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist/VST3 dist/pluginval
+          for folder in artifacts/linux-vst3-*; do
+            cp -R "$folder"/*.vst3 dist/VST3/
+            cp "$folder"/pluginval-*.txt dist/pluginval/ 2>/dev/null || true
+          done
+          ls dist/VST3
+          test "$(ls -d dist/VST3/*.vst3 | wc -l)" -eq 6
+
+      - name: Tarball
+        shell: bash
+        run: |
+          set -euo pipefail
+          tarball="$(vfd-suite-installer/linux/package.sh dist/VST3 "$SUITE_VERSION" dist)"
+          (cd dist && sha256sum "$(basename "$tarball")")
+          ls -la dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Vivid-Fever-Dreams-Suite-v${{ env.SUITE_VERSION }}-Beta-Linux
+          path: |
+            dist/*.tar.gz
+            dist/pluginval
+          if-no-files-found: error

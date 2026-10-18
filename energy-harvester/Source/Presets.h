@@ -17,7 +17,7 @@ const std::vector<Preset>& factory();
 juce::StringArray factoryFolders();
 // ENERGY_HARVESTER_PRESET_ROOT overrides the location (tests); otherwise $HOME/Library/Application Support/
 // ENERGY HARVESTER/Presets on macOS, using $HOME so a redirected home (validators, tests) never reaches the real
-// folder, and %APPDATA%\ENERGY HARVESTER\Presets on Windows.
+// folder, %APPDATA%\ENERGY HARVESTER\Presets on Windows and ~/.config/ENERGY HARVESTER/Presets on Linux.
 juce::File userRoot();
 juce::StringArray userFolders(const juce::File& root);
 std::vector<Preset> userPresets(const juce::File& root);

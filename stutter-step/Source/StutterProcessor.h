@@ -65,7 +65,7 @@ public:
     // groove sets (swing, length, rate, smooth, depth and the slap's lock, time, feedback, tone, mix, gaps, wide).
     static constexpr const char* grooveExtension = ".ssgroove";
     // STUTTER_STEP_PRESET_ROOT overrides it (tests); otherwise $HOME/Library/Application Support/STUTTER-STEP/
-    // Presets on macOS and %APPDATA%\STUTTER-STEP\Presets on Windows.
+    // Presets on macOS, %APPDATA%\STUTTER-STEP\Presets on Windows and ~/.config/STUTTER-STEP/Presets on Linux.
     static juce::File userGrooveRoot();
     static juce::Array<juce::File> userGrooveFiles();   // sorted by name
     static juce::String cleanGrooveName (const juce::String&);
