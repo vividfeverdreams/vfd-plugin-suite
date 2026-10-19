@@ -41,6 +41,7 @@ juce_add_plugin(YoiBoi
     NEEDS_MIDI_OUTPUT FALSE
     IS_MIDI_EFFECT FALSE
     EDITOR_WANTS_KEYBOARD_FOCUS TRUE
+    NEEDS_CURL TRUE
     COPY_PLUGIN_AFTER_BUILD FALSE)
 
 target_sources(YoiBoi PRIVATE
@@ -68,7 +69,8 @@ target_include_directories(YoiBoi PRIVATE Source ../shared)
 target_compile_features(YoiBoi PRIVATE cxx_std_20)
 target_compile_definitions(YoiBoi PUBLIC
     JUCE_WEB_BROWSER=0
-    JUCE_USE_CURL=0
+    # Linux: https for the INFO page's update check goes through libcurl, loaded only when used.
+    JUCE_LOAD_CURL_SYMBOLS_LAZILY=1
     JUCE_VST3_CAN_REPLACE_VST2=0)
 target_link_libraries(YoiBoi PRIVATE
     YoiBoiAssets
@@ -88,6 +90,11 @@ if (APPLE)
             COMMAND /usr/bin/codesign --force --deep --sign - "$<TARGET_BUNDLE_DIR:${bundle_target}>"
             COMMAND /usr/bin/codesign --verify --deep --strict "$<TARGET_BUNDLE_DIR:${bundle_target}>"
             VERBATIM)
+    endforeach()
+elseif (CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    # libcurl is opened when an update check runs, so a computer without it still loads the plug-in.
+    foreach(bundle_target IN ITEMS YoiBoi_VST3 YoiBoi_Standalone)
+        target_link_options(${bundle_target} PRIVATE "LINKER:--as-needed")
     endforeach()
 endif()
 

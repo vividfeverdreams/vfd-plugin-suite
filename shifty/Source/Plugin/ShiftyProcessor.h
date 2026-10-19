@@ -113,7 +113,8 @@ public:
 
     /** User presets live in <root>/Application Support/SHIFTY/Presets[/<Folder>] on
         macOS. Releases up to 0.4.2 used <root>/SHIFTY/Presets; its files are copied
-        once, never moved, deleted or overwritten. root is ~/Library on macOS. */
+        once, never moved, deleted or overwritten. root is ~/Library on macOS. Elsewhere
+        they live in <root>/SHIFTY/Presets: %APPDATA% on Windows, ~/.config on Linux. */
     static juce::File presetDirectoryForRoot(const juce::File& userDataRoot);
     static juce::File legacyPresetDirectoryForRoot(const juce::File& userDataRoot);
     static int migrateLegacyPresets(const juce::File& legacyDirectory, const juce::File& newDirectory);

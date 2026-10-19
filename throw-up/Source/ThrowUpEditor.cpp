@@ -662,7 +662,12 @@ void ThrowUpEditor::rebuildPresetMenu()
 
 void ThrowUpEditor::openSaveDialog()
 {
-    auto* window = new juce::AlertWindow ("SAVE PRESET", "Saved to Application Support/THROW-UP/Presets. Existing presets are never replaced.",
+   #if JUCE_MAC
+    const juce::String presetFolder = "Application Support/THROW-UP/Presets";
+   #else
+    const auto presetFolder = ThrowUpProcessor::userPresetRoot().getFullPathName();
+   #endif
+    auto* window = new juce::AlertWindow ("SAVE PRESET", "Saved to " + presetFolder + ". Existing presets are never replaced.",
                                           juce::MessageBoxIconType::NoIcon, this);
     window->setLookAndFeel (skin.get());
     const auto current = pluginProcessor.getUserPresetName().isNotEmpty() ? pluginProcessor.getUserPresetName()

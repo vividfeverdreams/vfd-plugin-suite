@@ -28,12 +28,13 @@ juce_add_plugin(ThrowUp
   # VST3 class IDs and parameter IDs are unchanged; VST3 gains an event bus.
   IS_SYNTH FALSE NEEDS_MIDI_INPUT TRUE NEEDS_MIDI_OUTPUT FALSE IS_MIDI_EFFECT FALSE
   AU_MAIN_TYPE kAudioUnitType_MusicEffect
-  EDITOR_WANTS_KEYBOARD_FOCUS TRUE COPY_PLUGIN_AFTER_BUILD FALSE)
+  EDITOR_WANTS_KEYBOARD_FOCUS TRUE NEEDS_CURL TRUE COPY_PLUGIN_AFTER_BUILD FALSE)
 target_sources(ThrowUp PRIVATE Source/ThrowUpProcessor.cpp Source/ThrowUpEditor.cpp Source/ReverbEngine.cpp Source/Presets.cpp)
 target_include_directories(ThrowUp PUBLIC Source PRIVATE ../shared)
 target_link_libraries(ThrowUp PRIVATE ThrowUpAssets juce::juce_audio_utils juce::juce_dsp
   juce::juce_recommended_config_flags juce::juce_recommended_warning_flags)
-target_compile_definitions(ThrowUp PUBLIC JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0 JUCE_VST3_CAN_REPLACE_VST2=0)
+# Linux: https for the INFO page's update check goes through libcurl, loaded only when used.
+target_compile_definitions(ThrowUp PUBLIC JUCE_WEB_BROWSER=0 JUCE_LOAD_CURL_SYMBOLS_LAZILY=1 JUCE_VST3_CAN_REPLACE_VST2=0)
 # juce_add_plugin publishes JUCE_STANDALONE_APPLICATION=JucePlugin_Build_Standalone
 # on the shared-code target's interface. Keep it for the plugin targets, but stop
 # it leaking into the console test hosts that link ThrowUp; those define
@@ -53,6 +54,9 @@ foreach(_throwup_format ThrowUp_VST3 ThrowUp_AU)
       add_custom_command(TARGET ${_throwup_format} POST_BUILD
         COMMAND /usr/bin/codesign --force --deep --sign - "$<TARGET_BUNDLE_DIR:${_throwup_format}>"
         COMMAND /usr/bin/codesign --verify --deep --strict "$<TARGET_BUNDLE_DIR:${_throwup_format}>" VERBATIM)
+    elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+      # libcurl is opened when an update check runs, so a computer without it still loads the plug-in.
+      target_link_options(${_throwup_format} PRIVATE "LINKER:--as-needed")
     endif()
   endif()
 endforeach()

@@ -12,8 +12,9 @@
 // An open editor asks for a check once per session; the answer is cached for a day and shared by every VFD
 // plug-in on the computer. INSTALL downloads this platform's installer from the latest release, verifies it
 // (the release's SHA-256 checksum, and on the Mac the Developer ID signature and notarization) and opens it.
-// The installer replaces the plug-ins and refuses to while a DAW that loads them is running, so nothing here
-// touches a loaded plug-in. Everything runs on one background thread owned by the open editors; closing the
+// Linux has no installer to open, so there the newer release's page is offered instead. The installer
+// replaces the plug-ins and refuses to while a DAW that loads them is running, so nothing here touches a
+// loaded plug-in. Everything runs on one background thread owned by the open editors; closing the
 // last editor cancels it. No audio state is read or changed.
 namespace vfd::update {
 

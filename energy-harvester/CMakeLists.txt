@@ -14,11 +14,12 @@ juce_add_plugin(EnergyHarvester COMPANY_NAME "VIVID FEVER DREAMS" BUNDLE_ID com.
     PLUGIN_MANUFACTURER_CODE Yoib PLUGIN_CODE Enh1 FORMATS VST3 AU PRODUCT_NAME "ENERGY HARVESTER"
     ICON_BIG "${CMAKE_CURRENT_SOURCE_DIR}/Assets/AppIcon.png" ICON_SMALL "${CMAKE_CURRENT_SOURCE_DIR}/Assets/AppIcon.png"
     DESCRIPTION "Magnetic tape-start effect" IS_SYNTH FALSE NEEDS_MIDI_INPUT FALSE NEEDS_MIDI_OUTPUT FALSE
-    IS_MIDI_EFFECT FALSE EDITOR_WANTS_KEYBOARD_FOCUS TRUE COPY_PLUGIN_AFTER_BUILD FALSE
+    IS_MIDI_EFFECT FALSE EDITOR_WANTS_KEYBOARD_FOCUS TRUE NEEDS_CURL TRUE COPY_PLUGIN_AFTER_BUILD FALSE
     AU_MAIN_TYPE kAudioUnitType_Effect AU_SANDBOX_SAFE TRUE)
 target_sources(EnergyHarvester PRIVATE Source/Dsp/HarvestEngine.cpp Source/Dsp/FxRack.cpp Source/EnergyHarvesterProcessor.cpp Source/EnergyHarvesterEditor.cpp Source/Ui/HarvestLights.cpp Source/Presets.cpp)
 target_include_directories(EnergyHarvester PUBLIC Source PRIVATE ../shared)
-target_compile_definitions(EnergyHarvester PUBLIC JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0 JUCE_VST3_CAN_REPLACE_VST2=0 ENERGY_HARVESTER_QUEUE_BRIDGE=1)
+# Linux: https for the INFO page's update check goes through libcurl, loaded only when used.
+target_compile_definitions(EnergyHarvester PUBLIC JUCE_WEB_BROWSER=0 JUCE_LOAD_CURL_SYMBOLS_LAZILY=1 JUCE_VST3_CAN_REPLACE_VST2=0 ENERGY_HARVESTER_QUEUE_BRIDGE=1)
 target_link_libraries(EnergyHarvester PRIVATE EnergyAssets juce::juce_audio_utils juce::juce_dsp juce::juce_recommended_config_flags juce::juce_recommended_warning_flags)
 if(APPLE)
     target_link_options(EnergyHarvester_VST3 PRIVATE "LINKER:-exported_symbols_list,${CMAKE_CURRENT_SOURCE_DIR}/cmake/Vst3Exports.txt")
@@ -28,6 +29,9 @@ if(APPLE)
     add_custom_command(TARGET EnergyHarvester_AU POST_BUILD
         COMMAND /usr/bin/codesign --force --deep --sign - "$<TARGET_BUNDLE_DIR:EnergyHarvester_AU>"
         COMMAND /usr/bin/codesign --verify --deep --strict "$<TARGET_BUNDLE_DIR:EnergyHarvester_AU>" VERBATIM)
+elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    # libcurl is opened when an update check runs, so a computer without it still loads the plug-in.
+    target_link_options(EnergyHarvester_VST3 PRIVATE "LINKER:--as-needed")
 endif()
 option(ENERGY_HARVESTER_BUILD_TESTS "Build the DSP, host and plug-in checks" ON)
 if(NOT ENERGY_HARVESTER_BUILD_TESTS)
