@@ -1,9 +1,9 @@
 ; Vivid Fever Dreams Suite for Windows: the six VST3 plug-ins, chosen one by one.
 ; Built by .github/workflows/windows.yml with Inno Setup 6:
-;   ISCC.exe /DSuiteVersion=1.5.0 /DSourceDir=<folder of .vst3 bundles> VividFeverDreamsSuite.iss
+;   ISCC.exe /DSuiteVersion=1.6.1 /DSourceDir=<folder of .vst3 bundles> VividFeverDreamsSuite.iss
 
 #ifndef SuiteVersion
-  #define SuiteVersion "1.5.0"
+  #define SuiteVersion "1.6.1"
 #endif
 #ifndef SourceDir
   #define SourceDir "..\..\dist\VST3"
@@ -46,12 +46,12 @@ Name: "full"; Description: "All six plug-ins"
 Name: "custom"; Description: "Choose plug-ins"; Flags: iscustom
 
 [Components]
-Name: "yoiboi"; Description: "YOI-BOI 0.2.1  -  talking bass synth (instrument)"; Types: full
-Name: "throwup"; Description: "THROW-UP 0.2.0  -  mid-bass reverb throws"; Types: full
-Name: "backscratch"; Description: "BACK-SCRATCH 0.11.0  -  tempo-synced scratch patterns"; Types: full
-Name: "shifty"; Description: "SHIFTY 0.5.1  -  formant shifter for bass"; Types: full
-Name: "energyharvester"; Description: "ENERGY HARVESTER 0.4.1  -  tape start, stop and brake"; Types: full
-Name: "stutterstep"; Description: "STUTTER-STEP 0.3.0  -  swing gate with slap delay"; Types: full
+Name: "yoiboi"; Description: "YOI-BOI 0.2.3  -  talking bass synth (instrument)"; Types: full
+Name: "throwup"; Description: "THROW-UP 0.2.2  -  mid-bass reverb throws"; Types: full
+Name: "backscratch"; Description: "BACK-SCRATCH 0.11.2  -  tempo-synced scratch patterns"; Types: full
+Name: "shifty"; Description: "SHIFTY 0.5.3  -  formant shifter for bass"; Types: full
+Name: "energyharvester"; Description: "ENERGY HARVESTER 0.4.3  -  tape start, stop and brake"; Types: full
+Name: "stutterstep"; Description: "STUTTER-STEP 0.4.1  -  swing gate with slap delay"; Types: full
 
 [InstallDelete]
 ; Replace each chosen bundle whole, so no file from an older version is left inside it.

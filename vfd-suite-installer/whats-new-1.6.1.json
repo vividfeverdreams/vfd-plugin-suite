@@ -1,0 +1,23 @@
+{
+  "YOI-BOI": [
+    "A die beside the Favorite star (and beside YOUR SOUNDS on LIBRARY) loads a random sound from the Library view you're on, never the one already loaded."
+  ],
+  "THROW-UP": [
+    "A dice key beside the preset arrows loads a random room from the bank the arrows browse, never the one already loaded.",
+    "The preset box shows the right name when one user preset replaces another."
+  ],
+  "BACK-SCRATCH": [
+    "A shuffle key beside the preset arrows loads a random preset, factory or yours, never the one already loaded. With slot B-H selected it loads into that slot."
+  ],
+  "SHIFTY": [
+    "RANDOM now switches the engine (TALK, MOUTH or CLASSIC) and Vowel Color too, so every click sounds different. Right-click the engine selector to lock it.",
+    "A die beside PRESETS loads a random preset from the list you're viewing."
+  ],
+  "ENERGY HARVESTER": [
+    "A die beside the preset arrows loads a random preset, never the one already loaded.",
+    "A preset saved under a name that's already taken now lists under its numbered name."
+  ],
+  "STUTTER-STEP": [
+    "A shuffle key beside SAVE loads a random stored groove, factory or USER, never the one already loaded. NEW GROOVE still makes a brand-new one."
+  ]
+}

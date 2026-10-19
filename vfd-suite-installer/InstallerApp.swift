@@ -163,7 +163,7 @@ final class InstallerDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate
                  size: 12, weight: .semibold, color: NSColor(white: 0.72, alpha: 1), to: content)
         addLabel("The complete suite", frame: NSRect(x: 120, y: 222 + Self.rowsHeight, width: 520, height: 44),
                  size: 30, weight: .bold, color: .white, to: content)
-        let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.6.0"
+        let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.6.1"
         addLabel("MACOS 12+   /   APPLE SILICON   /   VST3 + AUDIO UNIT   /   SUITE \(version)",
                  frame: NSRect(x: 44, y: 190 + Self.rowsHeight, width: 614, height: 18), size: 10, weight: .medium,
                  color: NSColor(white: 0.57, alpha: 1), to: content)

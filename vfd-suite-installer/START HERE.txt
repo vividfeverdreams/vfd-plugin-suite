@@ -1,22 +1,20 @@
-VIVID FEVER DREAMS SUITE 1.6.0 - BETA INSTALL
+VIVID FEVER DREAMS SUITE 1.6.1 - BETA INSTALL
 
-Includes YOI-BOI 0.2.2, THROW-UP 0.2.1, BACK-SCRATCH 0.11.1,
-SHIFTY 0.5.2, ENERGY HARVESTER 0.4.2, and STUTTER-STEP 0.4.0.
+Includes YOI-BOI 0.2.3, THROW-UP 0.2.2, BACK-SCRATCH 0.11.2,
+SHIFTY 0.5.3, ENERGY HARVESTER 0.4.3, and STUTTER-STEP 0.4.1.
 
-NEW IN 1.6.0
-Updates: every plug-in's INFO page shows the suite version and lights
-up when a newer suite is out. INSTALL downloads the new installer,
-checks it and opens it. (1.5.0 and older have no update check, so this
-version has to be installed by hand once.)
-SHIFTY and THROW-UP: OUTPUT is now a knob.
-STUTTER-STEP: SAVE keeps any groove, rolled ones included, in a USER
-folder at the end of the groove menu.
-YOI-BOI: the MOD page drops the FEEL column, so the rest has more room.
-ENERGY HARVESTER: tooltips stay inside the window.
-BACK-SCRATCH: fills say when they play, like "PLAYS EVERY 4TH BAR".
+NEW IN 1.6.1
+Random presets: every plug-in has a die or shuffle key next to its
+preset name that loads a random saved preset, never the one already
+loaded.
+SHIFTY: RANDOM now switches the engine and Vowel Color too.
+Right-click the engine selector to lock it.
+Linux: the suite now also runs on 64-bit Linux (VST3), as a separate
+download. Thanks to Rolandjg for building the Linux version.
+Already on 1.6.0? Open any plug-in's INFO page and click INSTALL.
 Every plug-in comes as a VST3 and as an Audio Unit (AU) on the Mac,
 signed with the developer's Apple Developer ID and notarized by Apple.
-The suite also runs on Windows (VST3), as a separate download.
+The suite also runs on Windows and Linux (VST3), as separate downloads.
 
 REQUIREMENTS
 Apple Silicon Mac (M1 or later) and macOS 12 or later.
