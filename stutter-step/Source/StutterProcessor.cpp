@@ -1,5 +1,6 @@
 #include "StutterProcessor.h"
 #include <cstdlib>
+#include <vector>
 #if ! STUTTER_HEADLESS
  #include "StutterEditor.h"
 #endif
@@ -255,6 +256,23 @@ void StutterProcessor::stepGroove (int direction)
         if (at < numFactoryGrooves) { loadFactory (at); return; }
         if (loadUserGroove (files[at - numFactoryGrooves])) return; // an unreadable file is skipped
     }
+}
+
+bool StutterProcessor::loadRandomGroove (juce::Random& random)
+{
+    // The same list the arrows step through: the factory grooves, then the user grooves, less the loaded one.
+    const auto files = userGrooveFiles();
+    const int user = userGrooveIndex();
+    std::vector<int> candidates;
+    for (int i = 0; i < numFactoryGrooves + files.size(); ++i)
+        if (i != groove.presetIndex && (user < 0 || i != numFactoryGrooves + user)) candidates.push_back (i);
+    while (! candidates.empty()) {
+        const auto pick = candidates.begin() + random.nextInt ((int) candidates.size());
+        if (*pick < numFactoryGrooves) { loadFactory (*pick); return true; }
+        if (loadUserGroove (files[*pick - numFactoryGrooves])) return true;
+        candidates.erase (pick); // an unreadable file is skipped
+    }
+    return false;
 }
 
 void StutterProcessor::rollNewGroove()

@@ -60,7 +60,7 @@ private:
     std::vector<std::unique_ptr<Knob>> knobs;
     std::unique_ptr<Lane> lane;
     std::unique_ptr<Dots> dots;
-    std::unique_ptr<ScreenKey> rollFrom, prev, next, subSafe, presetMenu, saveKey;
+    std::unique_ptr<ScreenKey> rollFrom, prev, next, randomKey, subSafe, presetMenu, saveKey;
     std::array<std::unique_ptr<ScreenKey>, 4> rateKeys; // 1/4, 1/8, 1/16, 1/32
     void showPresetMenu();
     // SAVE: the groove name becomes a text field; Return (or OK) saves the groove to USER, Escape cancels.

@@ -70,5 +70,13 @@ int main (int argc, char** argv)
 
     editor->setSize (StutterEditor::baseWidth * 3 / 2, StutterEditor::baseWidth * 3 / 2 * StutterEditor::cropH / StutterEditor::cropW);
     shot (*editor, folder.getChildFile ("04-150-percent.png"), 1.0f);
+
+    // The random key beside the arrows: a stored groove at random, at 100% and at the smallest size (80%, drag only).
+    proc.loadRandomGroove();
+    run (proc, head, 9000);
+    editor->setSize (StutterEditor::baseWidth, StutterEditor::baseWidth * StutterEditor::cropH / StutterEditor::cropW);
+    shot (*editor, folder.getChildFile ("06-random-groove.png"));
+    editor->setSize (StutterEditor::baseWidth * 4 / 5, StutterEditor::baseWidth * 4 / 5 * StutterEditor::cropH / StutterEditor::cropW);
+    shot (*editor, folder.getChildFile ("07-80-percent.png"), 1.0f);
     return 0;
 }

@@ -10,6 +10,7 @@ A rhythmic gate for sustained mid-basses and subs. One click rolls a groove that
 - **Gate:** a 16-step pattern of HIT, GHOST (−8.4 dB), TIE (continue the previous hit) and OFF. The pattern follows song position. RATE sets the step size, so the same 16 steps span 4 bars (1/4), 2 bars (1/8), 1 bar (1/16) or ½ bar (1/32).
 - **Swing:** classic pair swing. In each pair of steps, the second starts at `2·swing` of the pair (50% straight, 66.7% triplet, 75% dotted). SWING is the hero knob.
 - **NEW GROOVE:** composes a brand-new rhythm in one of seven groove families. ALL is weighted so about 95% of rolls are swung: Shuffle 24, Bounce 20, Skank 14, Drag 14, Gallop 12, Wonk 11, Straight 5. The padlock keeps the current swing; ROLL FROM narrows the family. Since 0.3 a roll is built from the family's one-beat cells set in a phrase form (A A A B, A B A C …, lightly varied) or from an accent grouping across the beats (3+3+2, 3-5-3-5 …), with an occasional fill. It is always at least four steps away from every factory groove and from the groove it replaces, its name is never a factory name, and the screen marks it **NEW · FAMILY** in lime. Rate, depth and the slap settings stay as they are.
+- **Random groove (0.4.1):** the shuffle key between SAVE and the arrows loads a stored groove at random from what the arrows step through (the 43 factory grooves and every USER groove), never the one already loaded, and loads it exactly as the arrows and the menu do. It is a shuffle, not a die, because the die on NEW GROOVE means "compose a new rhythm".
 - **Slap:** each step can send to the slap (the lime dots). The echo goes through a 24 dB/oct high-pass at SUB SAFE, so no sub ever repeats, then two short delay lines with TONE in the feedback loop.
   - **LOCK:** echo time = `2·swing·step`, so a downbeat's echo lands exactly on the swung off-step. This is the signature move: the slap plays the ghost note the gate left out.
   - **GAPS:** echoes sound only while the gate is closed (call and response).
@@ -105,6 +106,11 @@ To join the suite later, move `stutter-step/` next to the others in the suite re
 ## Milestones
 
 1. Scaffold, parameters, state. 2. Groove model + generator + envelope, with tests. 3. Gate in the processor. 4. Slap. 5. Editor over the shell art. 6. Tests, pluginval/auval, install for an Ableton check. 7. Icon and the suite installer.
+
+## Status (v0.4.1, 14 October 2026)
+
+- **Random groove.** A shuffle key (two crossing arrows with the chevrons' open heads) sits between SAVE and the arrows, the same size and style as the arrow keys; SAVE moved left to make room and the arrows kept their place on the counter's right edge. One click loads a random factory or USER groove through `loadFactory` / `loadUserGroove`, the arrows' own path, so the name, chip, counter, swing padlock, host notifications and project state behave as for a manual pick. It never picks the loaded groove and skips unreadable USER files. NEW GROOVE is unchanged.
+- Tests: 163 checks, 0 failures (16 new: every factory groove comes up and never the loaded one, factory and USER both come up, unreadable files skipped, the same state and host notifications as loading from the menu, swing padlock, project state). pluginval strictness 5 SUCCESS. `StutterStepShots` also renders `06-random-groove.png` and `07-80-percent.png` (the smallest size).
 
 ## Status (v0.4.0, 13 October 2026)
 

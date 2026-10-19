@@ -492,6 +492,106 @@ static void testUserGrooves()
     unsetenv ("STUTTER_STEP_PRESET_ROOT");
 }
 
+// What a host and the screen see of a processor: every parameter, the pattern and the groove's identity.
+static bool sameGroove (StutterProcessor& a, StutterProcessor& b)
+{
+    for (int i = 0; i < a.getParameters().size(); ++i)
+        if (std::abs (a.getParameters()[i]->getValue() - b.getParameters()[i]->getValue()) > 1e-6f) return false;
+    return a.getPattern() == b.getPattern() && a.groove.name == b.groove.name && a.groove.family == b.groove.family
+        && a.groove.presetIndex == b.groove.presetIndex && a.groove.user == b.groove.user && a.groove.edited == b.groove.edited;
+}
+
+struct HostCounter final : juce::AudioProcessorListener
+{
+    int values = 0, gestures = 0, changes = 0;
+    void audioProcessorParameterChanged (juce::AudioProcessor*, int, float) override { ++values; }
+    void audioProcessorParameterChangeGestureBegin (juce::AudioProcessor*, int) override { ++gestures; }
+    void audioProcessorChanged (juce::AudioProcessor*, const ChangeDetails&) override { ++changes; }
+};
+
+static void testRandomGroove()
+{
+    std::puts ("random groove");
+    const auto root = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("stutter-random-grooves-test");
+    root.deleteRecursively();
+    setenv ("STUTTER_STEP_PRESET_ROOT", root.getFullPathName().toRawUTF8(), 1);
+
+    // USER empty: only factory grooves, every one of them in time, never the one already loaded.
+    juce::Random random (7);
+    StutterProcessor a;
+    std::set<int> seen;
+    int repeats = 0, misses = 0, notFactory = 0;
+    for (int i = 0; i < 2000; ++i) {
+        const int before = a.groove.presetIndex;
+        if (! a.loadRandomGroove (random)) { ++misses; continue; }
+        repeats += a.groove.presetIndex == before ? 1 : 0;
+        notFactory += a.groove.presetIndex < 0 || a.groove.user.isNotEmpty() ? 1 : 0;
+        seen.insert (a.groove.presetIndex);
+    }
+    check (misses == 0, "a random groove always loads", misses, 0);
+    check (repeats == 0, "a random pick is never the groove already loaded", repeats, 0);
+    check (notFactory == 0, "with no USER grooves it picks factory grooves", notFactory, 0);
+    check ((int) seen.size() == numFactoryGrooves, "every factory groove comes up", (double) seen.size(), numFactoryGrooves);
+
+    // It loads exactly as the arrows and the menu do: same state, same host notifications, swing lock honoured.
+    StutterProcessor picked, manual;
+    HostCounter pickedHost, manualHost;
+    picked.addListener (&pickedHost);
+    manual.addListener (&manualHost);
+    juce::Random once (11);
+    check (picked.loadRandomGroove (once) && picked.groove.presetIndex != 0, "a fresh instance moves off its first groove");
+    manual.loadFactory (picked.groove.presetIndex);
+    check (sameGroove (picked, manual), "a random factory groove matches loading it from the menu");
+    check (pickedHost.gestures > 0 && pickedHost.values > 0 && pickedHost.changes > 0, "the host hears about a random groove");
+    check (pickedHost.gestures == manualHost.gestures && pickedHost.values == manualHost.values && pickedHost.changes == manualHost.changes,
+           "and hears exactly what a manual pick sends");
+    picked.removeListener (&pickedHost);
+    manual.removeListener (&manualHost);
+    juce::MemoryBlock block;
+    picked.getStateInformation (block);
+    StutterProcessor reopened;
+    reopened.setStateInformation (block.getData(), (int) block.getSize());
+    check (reopened.groove.presetIndex == picked.groove.presetIndex && reopened.getPattern() == picked.getPattern(),
+           "a project reopens on the random groove");
+    StutterProcessor locked;
+    locked.lockSwing = true;
+    setParam (locked, "swing", 73.0f);
+    locked.loadRandomGroove (random);
+    near (locked.apvts.getRawParameterValue ("swing")->load(), 73.0, 0.05, "the swing padlock holds through a random groove");
+
+    // With USER grooves: factory and USER both come up, never the loaded USER groove, and never an unreadable file.
+    StutterProcessor saver;
+    for (const auto* name : { "Rand One", "Rand Two", "Rand Three" }) {
+        saver.rollNewGroove();
+        saver.saveUserGroove (name);
+    }
+    root.getChildFile (juce::String ("Broken") + StutterProcessor::grooveExtension).replaceWithText ("not a groove");
+    StutterProcessor b;
+    std::set<juce::String> users;
+    int factoryPicks = 0, broken = 0, userRepeats = 0;
+    misses = 0;
+    for (int i = 0; i < 3000; ++i) {
+        const auto before = b.groove.user;
+        if (! b.loadRandomGroove (random)) { ++misses; continue; }
+        if (b.groove.presetIndex >= 0) { ++factoryPicks; continue; }
+        users.insert (b.groove.user);
+        broken += b.groove.user == "Broken" ? 1 : 0;
+        userRepeats += b.groove.user == before ? 1 : 0;
+    }
+    check (misses == 0, "a random groove always loads with USER grooves too", misses, 0);
+    check (factoryPicks > 0 && users.size() == 3, "factory and every readable USER groove come up", (double) users.size(), 3);
+    check (broken == 0, "an unreadable USER file is never loaded", broken, 0);
+    check (userRepeats == 0, "a random pick is never the USER groove already loaded", userRepeats, 0);
+    for (int i = 0; i < 400 && b.groove.user.isEmpty(); ++i) b.loadRandomGroove (random);
+    StutterProcessor fromMenu;
+    check (b.groove.user.isNotEmpty() && fromMenu.loadUserGroove (root.getChildFile (b.groove.user + StutterProcessor::grooveExtension))
+               && sameGroove (b, fromMenu),
+           "a random USER groove matches loading it from the menu");
+    check (b.userGrooveIndex() >= 0, "and shows as USER n / m");
+    root.deleteRecursively();
+    unsetenv ("STUTTER_STEP_PRESET_ROOT");
+}
+
 int main()
 {
     juce::ScopedJuceInitialiser_GUI init;
@@ -503,6 +603,7 @@ int main()
     testState();
     testFactoryBank();
     testUserGrooves();
+    testRandomGroove();
     std::printf ("%d checks, %d failures\n", checks, failures);
     return failures == 0 ? 0 : 1;
 }

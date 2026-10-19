@@ -117,11 +117,11 @@ struct StutterEditor::Knob
     juce::Rectangle<float> hit() const { const float r = rArc + arcW; return { cx - r, cy - r, 2 * r, 2 * r }; }
 };
 
-// Dark keys on the screen glass: RATE, SUB SAFE, preset arrows and ROLL FROM.
+// Dark keys on the screen glass: RATE, SUB SAFE, preset arrows, random groove and ROLL FROM.
 class StutterEditor::ScreenKey final : public juce::Button
 {
 public:
-    enum class Style { key, text, readout, left, right, overlay };
+    enum class Style { key, text, readout, left, right, shuffle, overlay };
     ScreenKey (const juce::String& name, Style st, juce::Typeface::Ptr f) : juce::Button (name), style (st), face (f)
     {
         setMouseCursor (juce::MouseCursor::PointingHandCursor);
@@ -168,6 +168,31 @@ public:
             chevron.lineTo (c.x + d * 0.6f * side, c.y + d);
             g.setColour (glassText);
             g.strokePath (chevron, juce::PathStrokeType (2.6f * s, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+            return;
+        }
+        if (style == Style::shuffle) {
+            // Shuffle: two crossing lines with the arrows' open heads, the falling one broken where they cross.
+            // A die would read as NEW GROOVE's, which composes a new rhythm rather than picking a stored one.
+            const auto c = r.getCentre();
+            const float x0 = c.x - 9.5f * s, x1 = c.x + 9.5f * s, xa = x0 + 2.5f * s, xb = x1 - 4.0f * s;
+            const float h = 5.5f * s, head = 2.8f * s, gap = 2.4f * s, mid = (xa + xb) * 0.5f;
+            juce::Path p;
+            for (const float dir : { 1.0f, -1.0f }) {
+                bool drawing = false;
+                for (int i = 0; i <= 48; ++i) {
+                    const float x = x0 + (x1 - x0) * (float) i / 48.0f, u = juce::jlimit (0.0f, 1.0f, (x - xa) / (xb - xa));
+                    const juce::Point<float> pt { x, c.y + dir * h * (1.0f - 2.0f * u * u * (3.0f - 2.0f * u)) };
+                    if (dir < 0 && std::abs (x - mid) < gap) { drawing = false; continue; }
+                    if (drawing) p.lineTo (pt); else p.startNewSubPath (pt);
+                    drawing = true;
+                }
+                const float y = c.y - dir * h;
+                p.startNewSubPath (x1 - head, y - head);
+                p.lineTo (x1, y);
+                p.lineTo (x1 - head, y + head);
+            }
+            g.setColour (glassText);
+            g.strokePath (p, juce::PathStrokeType (2.4f * s, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
             return;
         }
         g.setColour (on ? panel : style == Style::readout ? glassText : glassMuted);
@@ -536,6 +561,9 @@ StutterEditor::StutterEditor (StutterProcessor& p)
     next->onClick = [this] { proc.stepGroove (1); repaint(); };
     prev->setTooltip ("Previous groove (the factory grooves, then your USER grooves)");
     next->setTooltip ("Next groove (the factory grooves, then your USER grooves)");
+    randomKey = std::make_unique<ScreenKey> ("Random groove", ScreenKey::Style::shuffle, semiBold);
+    randomKey->onClick = [this] { proc.loadRandomGroove(); repaint(); };
+    randomKey->setTooltip ("Random groove: loads one of the factory grooves or your USER grooves. NEW GROOVE makes a brand-new one instead.");
     nameEditor.setTitle ("Groove name");
     nameEditor.setMultiLine (false);
     nameEditor.setInputRestrictions (48);
@@ -564,7 +592,7 @@ StutterEditor::StutterEditor (StutterProcessor& p)
         key->setTooltip ("Step size. The 16 steps span 4 bars at 1/4, 2 bars at 1/8, 1 bar at 1/16 and half a bar at 1/32.");
         key->onClick = [this, i] { setParam ("rate", (float) i); repaint(); };
     }
-    for (auto* key : { presetMenu.get(), rollFrom.get(), saveKey.get(), prev.get(), next.get(), subSafe.get() })
+    for (auto* key : { presetMenu.get(), rollFrom.get(), saveKey.get(), randomKey.get(), prev.get(), next.get(), subSafe.get() })
         addAndMakeVisible (*key);
     for (auto& key : rateKeys) addAndMakeVisible (*key);
 
@@ -769,10 +797,12 @@ void StutterEditor::resized()
     lane->setBounds (toEditor (laneArt));
     dots->setBounds (toEditor (dotsArt));
     rollFrom->setBounds (toEditor ({ 196, 194, 360, 30 }));
-    presetMenu->setBounds (toEditor ({ 188, 226, 576, 46 }));
-    saveKey->setBounds (toEditor ({ 772, 230, 66, 38 }));
-    nameEditor.setBounds (toEditor ({ 190, 228, 572, 42 }));
+    presetMenu->setBounds (toEditor ({ 188, 226, 530, 46 }));
+    // SAVE, then random and the arrows spaced as a group, ending on the counter's right edge.
+    saveKey->setBounds (toEditor ({ 726, 230, 66, 38 }));
+    nameEditor.setBounds (toEditor ({ 190, 228, 526, 42 }));
     nameEditor.applyFontToAllText (font (30.0f * scale(), true));
+    randomKey->setBounds (toEditor ({ 800, 230, 40, 38 }));
     prev->setBounds (toEditor ({ 846, 230, 40, 38 }));
     next->setBounds (toEditor ({ 892, 230, 40, 38 }));
     for (int i = 0; i < (int) rateKeys.size(); ++i)
@@ -879,7 +909,7 @@ void StutterEditor::drawScreen (juce::Graphics& g) const
     const float chipW = juce::GlyphArrangement::getStringWidth (chipFont, fam) + 18.0f;
     const juce::String name = gr.name + (gr.edited ? " *" : "");
     const auto nameFont = font (34, true);
-    const float nameW = juce::jmin (juce::jmin (430.0f, 760.0f - 196.0f - 14.0f - chipW - 28.0f),
+    const float nameW = juce::jmin (juce::jmin (430.0f, 714.0f - 196.0f - 14.0f - chipW - 28.0f),
                                     juce::GlyphArrangement::getStringWidth (nameFont, name) + 4.0f);
     g.setFont (nameFont);
     g.setColour (glassText);

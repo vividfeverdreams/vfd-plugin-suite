@@ -75,6 +75,9 @@ public:
     bool loadUserGroove (const juce::File&);
     int userGrooveIndex() const;                 // the loaded user groove's place in userGrooveFiles(), or -1
     void stepGroove (int direction);             // through the factory grooves, then the user grooves
+    // A stored groove at random from what the arrows offer (factory and USER), never the one already loaded, and
+    // loaded exactly as the arrows load it. NEW GROOVE composes a new rhythm instead. False if nothing else loads.
+    bool loadRandomGroove (juce::Random& = juce::Random::getSystemRandom());
     std::atomic<std::uint32_t> grooveRevision { 1 }; // bumps on any groove or pattern change; the editor polls it
 
     // ---- values the screen draws ----
