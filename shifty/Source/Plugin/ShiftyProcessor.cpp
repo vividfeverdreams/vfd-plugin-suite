@@ -800,6 +800,7 @@ juce::StringArray ShiftyProcessor::randomizableParameterIds()
 
 bool ShiftyProcessor::isParameterLocked(const juce::String& id) const
 {
+    if (id == engineLockId) return (randomLocks.load() & engineLockBit) != 0;
     for (size_t i = 0; i < std::size(ids); ++i)
         if (id == ids[i]) return (randomLocks.load() & (1u << i)) != 0;
     return false;
@@ -807,13 +808,13 @@ bool ShiftyProcessor::isParameterLocked(const juce::String& id) const
 
 void ShiftyProcessor::setParameterLocked(const juce::String& id, bool locked)
 {
-    for (size_t i = 0; i < std::size(ids); ++i) {
-        if (id != ids[i]) continue;
-        if (locked) randomLocks.fetch_or(1u << i);
-        else randomLocks.fetch_and(~(1u << i));
-        updateHostDisplay(ChangeDetails{}.withNonParameterStateChanged(true));
-        return;
-    }
+    uint32_t bit = id == engineLockId ? engineLockBit : 0u;
+    for (size_t i = 0; i < std::size(ids) && bit == 0; ++i)
+        if (id == ids[i]) bit = 1u << i;
+    if (bit == 0) return;
+    if (locked) randomLocks.fetch_or(bit);
+    else randomLocks.fetch_and(~bit);
+    updateHostDisplay(ChangeDetails{}.withNonParameterStateChanged(true));
 }
 
 void ShiftyProcessor::randomizeParameters()
@@ -826,8 +827,14 @@ void ShiftyProcessor::randomizeParameters()
     };
     auto logRange = [&range](float lo, float hi) { return std::exp(range(std::log(lo), std::log(hi))); };
     // Character and movement ranges are chosen for quick mid-bass variations.
-    // Output, bypass and optional vowel color are included only when unlocked.
-    // The engine is never randomised, so latency stays put.
+    // Output and bypass are included only when unlocked.
+    // The engine is picked like a control (TALK, MOUTH or CLASSIC, never the
+    // original 0.4.2 sound). Latency follows it and the host is told at once,
+    // as with a preset; Undo restores both.
+    if ((locks & engineLockBit) == 0) {
+        constexpr EngineMode engines[] { EngineMode::talk, EngineMode::mouth, EngineMode::classic };
+        applyEngine(engines[variationRandom.nextInt(3)], classicLowLatency());
+    }
     const float randomShift = range(2.0f, 12.0f) * (variationRandom.nextBool() ? 1.0f : -1.0f);
     const float values[] = {
         randomShift, range(.35f, 1.0f), range(.35f, 1.0f),
@@ -837,7 +844,9 @@ void ShiftyProcessor::randomizeParameters()
         range(.5f, 8.0f), variationRandom.nextBool() ? 1.0f : 0.0f,
         logRange(.1f, 10.0f),
         variationRandom.nextBool() ? 1.0f : 0.0f,
-        variationRandom.nextBool() ? 1.0f : 0.0f,
+        // Vowel Color: on three times in four, since without it CLASSIC has
+        // nothing to move on a plain synth.
+        variationRandom.nextInt(4) != 0 ? 1.0f : 0.0f,
         // 0.5.0
         range(0.0f, 4.0f), (float)variationRandom.nextInt(3), range(0.0f, .8f), range(0.0f, .8f),
         range(-.6f, .8f), logRange(1.0f, 30.0f), logRange(40.0f, 400.0f),
@@ -864,6 +873,7 @@ void ShiftyProcessor::getStateInformation(juce::MemoryBlock& dest)
     tree.setProperty("presetName", currentPresetName(), nullptr);
     tree.setProperty("presetFolder", currentPresetFolder(), nullptr);
     tree.setProperty("randomLockMask", (int)randomLocks.load(), nullptr);
+    tree.setProperty("randomLockVersion", 2, nullptr);
     tree.setProperty("engineMode", static_cast<int>(engineMode()), nullptr);
     tree.setProperty("classicLowLatency", classicLowLatency(), nullptr);
     tree.setProperty("editorScale", editorScale(), nullptr);
@@ -891,7 +901,16 @@ void ShiftyProcessor::setStateInformation(const void* data, int size)
                 tree.addChild(child, -1, nullptr);
             }
             auto locks = (uint32_t)(int)tree.getProperty("randomLockMask", (int)defaultRandomLocks);
-            if (missingVowel) locks |= (1u << 15);
+            if (!tree.hasProperty("randomLockVersion")) {
+                // Saved before 0.5.3, when the engine had no lock. A mask still
+                // at the old default (Vowel Color locked) was never touched and
+                // takes today's default; "everything locked" stays everything.
+                if (locks == legacyDefaultRandomLocks) locks = defaultRandomLocks;
+                else if ((locks & (engineLockBit - 1u)) == engineLockBit - 1u) locks |= engineLockBit;
+            }
+            // A session that made its own lock choices before Vowel Color
+            // existed keeps it out of RANDOM.
+            if (missingVowel && tree.hasProperty("randomLockMask")) locks |= (1u << 15);
             randomLocks.store(locks & allRandomLocks);
             // Projects saved before 0.5.0 carry no engine: they made the 0.4.2
             // sound, so they keep it until the user upgrades.

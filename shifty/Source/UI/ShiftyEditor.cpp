@@ -36,8 +36,10 @@ const juce::Rectangle<float> outputValueBounds {226, 1288, 144, 34};
 // Screen (dark LCD) layout, design coordinates. The screen interior spans x 141..981, y 171..507.
 const juce::Rectangle<float> pageTabs[] { {592, 116, 82, 42}, {674, 116, 82, 42}, {756, 116, 82, 42}, {838, 116, 80, 42} };
 const juce::Rectangle<float> engineSelectorBounds {540, 202, 400, 40};
+const juce::Rectangle<float> engineLockBounds {505, 200, 30, 44}; // centred between the star and the selector
 const juce::Rectangle<float> motionTabBounds {180, 202, 330, 40};
 const juce::Rectangle<float> folderChipBounds {640, 204, 290, 38};
+const juce::Rectangle<float> randomPresetBounds {318, 203, 42, 42};
 const juce::Rectangle<float> lowLatencyBounds {300, 254, 180, 40};
 const juce::Rectangle<float> vowelSwitchBounds {300, 316, 180, 40};
 const juce::Rectangle<float> voiceSetBounds {300, 330, 300, 42};
@@ -198,7 +200,7 @@ juce::Rectangle<float> knobLockBounds(const juce::String& id) {
 }
 
 void drawPadlock(juce::Graphics& g, juce::Rectangle<float> bounds,
-                 bool locked, juce::Colour colour) {
+                 bool locked, juce::Colour colour, juce::Colour keyhole = mint) {
     const auto box = bounds.withSizeKeepingCentre(20.0f, 17.0f).translated(0, 5.0f);
     g.setColour(colour);
     if (locked) g.fillRoundedRectangle(box, 3.0f);
@@ -213,7 +215,7 @@ void drawPadlock(juce::Graphics& g, juce::Rectangle<float> bounds,
     g.strokePath(shackle, juce::PathStrokeType(2.5f,
                    juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
     if (locked) {
-        g.setColour(mint);
+        g.setColour(keyhole);
         g.fillEllipse(box.getCentreX() - 1.8f, box.getY() + 5.0f, 3.6f, 3.6f);
         g.fillRect(box.getCentreX() - 0.8f, box.getY() + 7.0f, 1.6f, 4.0f);
     }
@@ -396,7 +398,7 @@ ShiftyEditor::ShiftyEditor(ShiftyProcessor& p)
         button->onClick = std::move(action);
         addAndMakeVisible(*button);
     };
-    addAction(randomButton, "Randomize", "Create a new variation using every unlocked parameter. Undo restores the previous sound.",
+    addAction(randomButton, "Randomize", "Create a new variation using every unlocked control, the engine included. Undo restores the previous sound.",
               [this] { plugin.randomizeParameters(); updateValueLabels(); updatePage(); repaint(); });
     addAction(locksButton, "Randomization locks", "Choose which parameters RANDOM keeps unchanged. Locks do not affect manual changes or preset loading.",
               [this] { showLocksMenu(); });
@@ -409,6 +411,9 @@ ShiftyEditor::ShiftyEditor(ShiftyProcessor& p)
     addAction(latestButton, "Use latest sound",
               "Switch this sound from the original 0.4 engine to the current CLASSIC engine. Undo returns to the original.",
               [this] { plugin.useLatestSound(); updatePage(); repaint(); });
+    addAction(randomPresetButton, "Random preset",
+              "Load a random preset from the list as it is filtered now (tab, folder and search). Undo returns to the previous sound.",
+              [this] { loadRandomPreset(); });
 
     for (auto& c : controls) {
         c.slider->onValueChange = [this] { updateValueLabels(); repaint(); };
@@ -681,6 +686,7 @@ void ShiftyEditor::updatePage() {
     }
     latestButton->setVisible(onVoice && original);
     presetSearch.setVisible(onPresets && !savingPreset);
+    randomPresetButton->setVisible(onPresets && !savingPreset);
     presetNameEditor.setVisible(onPresets && savingPreset);
     presetFolderEditor.setVisible(onPresets && savingPreset);
     resized();
@@ -760,6 +766,7 @@ void ShiftyEditor::resized() {
     undoButton->setBounds(scaled(undoBounds));
     redoButton->setBounds(scaled(redoBounds));
     latestButton->setBounds(scaled(latestButtonBounds));
+    randomPresetButton->setBounds(scaled(randomPresetBounds));
     presetSearch.setBounds(scaled({645, 253, 275, 40}));
     presetSearch.setFont(juce::Font(juce::FontOptions(normalTypeface).withHeight(22.0f * scale)));
     presetNameEditor.setBounds(scaled({300, 305, 540, 44}));
@@ -904,6 +911,8 @@ void ShiftyEditor::drawSoundScreen(juce::Graphics& g) {
         drawSegments(g, engineSelectorBounds, {"TALK", "MOUTH", "CLASSIC"},
                      engine == EngineMode::talk ? 0 : engine == EngineMode::mouth ? 1 : 2, 19.0f);
     }
+    if (plugin.isParameterLocked(ShiftyProcessor::engineLockId))
+        drawPadlock(g, engineLockBounds, true, screenText, juce::Colour(0xff073828));
 
     const juce::Rectangle<float> graph {230.0f, 257.0f, 700.0f, 184.0f};
     g.setColour(juce::Colour(0xff236944).withAlpha(0.48f));
@@ -1361,6 +1370,22 @@ void ShiftyEditor::drawPresetsScreen(juce::Graphics& g) {
                  {262, 404, 597, 30}, 18.0f, replaces ? juce::Colour(0xffff8f67) : muted);
         return;
     }
+    {
+        // Random preset: a die showing five.
+        const bool hot = randomPresetButton->isMouseOver();
+        const auto die = randomPresetBounds.reduced(6.0f);
+        g.setColour((hot ? lime : screenText).withAlpha(hot ? 0.16f : 0.08f));
+        g.fillRoundedRectangle(die, 6.0f);
+        g.setColour(hot ? lime : screenText);
+        g.drawRoundedRectangle(die, 6.0f, 2.0f);
+        const float r = 2.7f, inset = die.getWidth() * 0.27f;
+        for (const auto pip : { die.getTopLeft() + juce::Point<float>(inset, inset), die.getTopRight() + juce::Point<float>(-inset, inset),
+                                die.getCentre(),
+                                die.getBottomLeft() + juce::Point<float>(inset, -inset), die.getBottomRight() + juce::Point<float>(-inset, -inset) })
+            g.fillEllipse(pip.x - r, pip.y - r, 2.0f * r, 2.0f * r);
+        if (randomPresetButton->hasKeyboardFocus(true))
+            g.drawRoundedRectangle(randomPresetBounds, 8.0f, 1.5f);
+    }
     const char* filters[] = {"FACTORY", "USER", "FAV"};
     const juce::Rectangle<float> areas[] = {{186, 251, 146, 42}, {333, 251, 126, 42},
                                            {460, 251, 117, 42}};
@@ -1600,7 +1625,7 @@ void ShiftyEditor::drawUtilityPanel(juce::Graphics& g) {
     };
     drawAction(*randomButton, randomBounds, "RANDOM", 29.0f, true, true);
     drawAction(*locksButton, locksBounds, "LOCKS", 27.0f, false, true);
-    int lockCount = 0;
+    int lockCount = plugin.isParameterLocked(ShiftyProcessor::engineLockId) ? 1 : 0;
     for (const auto& id : ShiftyProcessor::randomizableParameterIds())
         if (plugin.isParameterLocked(id)) ++lockCount;
     drawText(g, "NEW VARIATION", randomBounds.withY(1203.0f).withHeight(20.0f).expanded(14.0f, 0.0f), 15.5f, ink.withAlpha(0.82f));
@@ -1701,6 +1726,26 @@ void ShiftyEditor::loadSelectedPreset() {
     updateValueLabels();
     updatePage();
     repaint();
+}
+
+void ShiftyEditor::loadRandomPreset() {
+    // From the list as filtered now, never the sound already loaded. The 24
+    // original 0.4.2 sounds barely change a plain synth, so the dice skips them
+    // unless the list holds nothing else (e.g. the Classic folder).
+    std::vector<int> picks, originals;
+    const auto currentFolder = plugin.currentPresetFolder(), currentName = plugin.currentPresetName();
+    for (int i = 0; i < static_cast<int>(presetItems.size()); ++i) {
+        const auto& item = presetItems[static_cast<size_t>(i)];
+        if (item.folder == currentFolder && item.name == currentName) continue;
+        const bool original = item.factoryIndex >= 0
+            && ShiftyProcessor::factoryPresets()[static_cast<size_t>(item.factoryIndex)].engine == EngineMode::original;
+        (original ? originals : picks).push_back(i);
+    }
+    if (picks.empty()) picks = originals;
+    if (picks.empty()) return;
+    selectedPreset = picks[static_cast<size_t>(presetDice.nextInt(static_cast<int>(picks.size())))];
+    firstPreset = juce::jlimit(0, std::max(0, static_cast<int>(presetItems.size()) - 4), selectedPreset - 1);
+    loadSelectedPreset();
 }
 
 void ShiftyEditor::beginPresetSave() {
@@ -1890,12 +1935,30 @@ void ShiftyEditor::showParameterLockMenu(const juce::String& id, juce::Component
         });
 }
 
+void ShiftyEditor::showEngineLockMenu() {
+    juce::PopupMenu menu;
+    menu.addSectionHeader("Engine");
+    menu.addItem(1, "Lock for randomization", true, plugin.isParameterLocked(ShiftyProcessor::engineLockId));
+    menu.addItem(2, "All randomization locks...");
+    menu.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(this).withMousePosition(),
+        [safe = juce::Component::SafePointer<ShiftyEditor>(this)](int result) {
+            if (safe == nullptr) return;
+            const auto* id = ShiftyProcessor::engineLockId;
+            if (result == 1) safe->plugin.setParameterLocked(id, !safe->plugin.isParameterLocked(id));
+            else if (result == 2) safe->showLocksMenu();
+            safe->repaint();
+        });
+}
+
 void ShiftyEditor::showLocksMenu() {
     juce::PopupMenu menu;
     menu.addSectionHeader("Keep these values when using RANDOM");
-    const auto ids = ShiftyProcessor::randomizableParameterIds();
+    auto ids = ShiftyProcessor::randomizableParameterIds();
+    ids.insert(0, ShiftyProcessor::engineLockId);
     for (int i = 0; i < ids.size(); ++i)
-        if (auto* parameter = plugin.parameters().getParameter(ids[i]))
+        if (ids[i] == ShiftyProcessor::engineLockId)
+            menu.addItem(i + 1, "Engine (TALK / MOUTH / CLASSIC)", true, plugin.isParameterLocked(ids[i]));
+        else if (auto* parameter = plugin.parameters().getParameter(ids[i]))
             menu.addItem(i + 1, parameter->getName(80), true, plugin.isParameterLocked(ids[i]));
     menu.addSeparator();
     menu.addItem(1001, "Lock all");
@@ -1916,12 +1979,14 @@ void ShiftyEditor::showLocksMenu() {
 }
 
 void ShiftyEditor::mouseDown(const juce::MouseEvent& e) {
-    // Right click on the shell (anywhere a control does not claim it): editor size.
+    const auto p = designPoint(e.position);
+    // Right click on the engine selector: its randomization lock. Anywhere
+    // else on the shell a control does not claim: editor size.
     if (e.mods.isPopupMenu()) {
-        showSizeMenu();
+        if (page == Page::sound && engineSelectorBounds.contains(p)) showEngineLockMenu();
+        else showSizeMenu();
         return;
     }
-    const auto p = designPoint(e.position);
     if (p.y >= 115.0f && p.y <= 161.0f && p.x >= pageTabs[0].getX() && p.x < pageTabs[3].getRight()) {
         for (int i = 0; i < 4; ++i)
             if (pageTabs[i].contains(p.x, juce::jlimit(pageTabs[i].getY(), pageTabs[i].getBottom() - 1.0f, p.y)))

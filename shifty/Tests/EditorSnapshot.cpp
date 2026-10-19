@@ -502,6 +502,9 @@ int renderGallery(const juce::File& directory) {
           [set](shifty::ShiftyProcessor& p) { set(p, "shift", 12.0f); set(p, "vowelMorph", 4.0f); }, {} },
         { "24-glow-bypassed", EngineMode::talk, false, Page::sound, Tab::lfo, 1.0,
           [set](shifty::ShiftyProcessor& p) { set(p, "bypass", 1.0f); }, {} },
+        // The engine locked out of RANDOM shows a padlock beside the selector.
+        { "25-sound-engine-locked", EngineMode::mouth, false, Page::sound, Tab::lfo, 1.0,
+          [](shifty::ShiftyProcessor& p) { p.setParameterLocked(shifty::ShiftyProcessor::engineLockId, true); }, {} },
     };
     bool ok = classicOriginal >= 0;
     for (const auto& shot : shots) {

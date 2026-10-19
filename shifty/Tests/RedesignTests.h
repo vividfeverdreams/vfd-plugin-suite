@@ -5,6 +5,7 @@
 // with FeatureTests.h.
 
 #include "FeatureTests.h"
+#include <set>
 #include "../Source/UI/ShiftyEditor.h"
 
 namespace shifty::tests {
@@ -56,13 +57,44 @@ void checkEnginesAndLatency(Checks& checks)
                    "Redo re-applies an engine change");
     processor.removeListener(&recorder);
 
-    // RANDOM never touches the engine, so latency never moves under the host.
-    processor.setEngine(EngineMode::classic, true);
+    // RANDOM picks the engine unless it is locked; latency follows, and Undo
+    // brings back the engine and latency together.
     setAllLocks(processor, false);
+    bool seen[4] {};
+    bool latencyFollows = true, undoRestores = true;
+    processor.addListener(&recorder);
+    const int latencyChangesBefore = recorder.latencyChanges;
+    for (int i = 0; i < 60; ++i) {
+        const auto engineBefore = processor.engineMode();
+        const int latencyBefore = processor.getLatencySamples();
+        processor.randomizeParameters();
+        const auto engine = processor.engineMode();
+        seen[static_cast<int>(engine)] = true;
+        latencyFollows = latencyFollows && processor.getLatencySamples()
+            == ShiftyProcessor::latencyFor(engine, processor.classicLowLatency(), 48000.0);
+        if (i % 10 == 0) {
+            processor.undo();
+            undoRestores = undoRestores && processor.engineMode() == engineBefore
+                           && processor.getLatencySamples() == latencyBefore;
+            processor.redo();
+        }
+    }
+    checks.require(seen[static_cast<int>(EngineMode::talk)] && seen[static_cast<int>(EngineMode::mouth)]
+                       && seen[static_cast<int>(EngineMode::classic)],
+                   "RANDOM visits TALK, MOUTH and CLASSIC when the engine is unlocked");
+    checks.require(!seen[static_cast<int>(EngineMode::original)], "RANDOM never picks the original 0.4.2 sound");
+    checks.require(latencyFollows, "after RANDOM the reported latency matches the engine");
+    checks.require(recorder.latencyChanges > latencyChangesBefore, "RANDOM tells the host when the latency changes");
+    checks.require(undoRestores, "Undo after RANDOM restores the engine and its latency");
+    processor.removeListener(&recorder);
+
+    // A locked engine stays put, so latency never moves under the host.
+    processor.setEngine(EngineMode::classic, true);
+    processor.setParameterLocked(ShiftyProcessor::engineLockId, true);
     for (int i = 0; i < 50; ++i) processor.randomizeParameters();
     checks.require(processor.engineMode() == EngineMode::classic && processor.classicLowLatency()
                        && processor.getLatencySamples() == 1024,
-                   "RANDOM never changes the engine or the latency");
+                   "RANDOM keeps a locked engine and its latency");
 
     // The engine travels with the session.
     const auto session = sessionOf(processor);
@@ -72,7 +104,8 @@ void checkEnginesAndLatency(Checks& checks)
     checks.require(restored.engineMode() == EngineMode::classic && restored.classicLowLatency()
                        && restored.getLatencySamples() == 2048,
                    "a session restores its engine and latency (CLASSIC low latency, 2048 at 96 kHz)");
-    checks.section("engines: TALK by default, latency per engine, undoable, never randomized or automated");
+    checks.require(restored.isParameterLocked(ShiftyProcessor::engineLockId), "a session remembers the engine lock");
+    checks.section("engines: TALK by default, latency per engine, undoable, randomized unless locked, never automated");
 }
 
 void checkOriginalSoundUpgrade(Checks& checks)
@@ -402,6 +435,71 @@ void checkEditorMouse(Checks& checks)
 }
 } // namespace
 
+void checkRandomPreset(Checks& checks)
+{
+    ShiftyProcessor host;
+    const auto root = juce::File::getSpecialLocation(juce::File::tempDirectory)
+                          .getNonexistentChildFile("shifty-dice", "", false);
+    host.setUserDataRootForTesting(root);
+    {
+        ShiftyEditor editor(host);
+        const auto size = ShiftyEditor::sizeFor(1.0);
+        editor.setSize(size.x, size.y);
+        juce::Button* dice = nullptr;
+        for (auto* child : editor.getChildren())
+            if (child->getName() == "Random preset") dice = dynamic_cast<juce::Button*>(child);
+        checks.require(dice != nullptr, "the presets page has a Random preset button");
+        if (dice == nullptr) return;
+        editor.showPageForTesting(ShiftyEditor::Page::sound);
+        checks.require(!dice->isVisible(), "the dice is hidden away from the presets page");
+        editor.showPageForTesting(ShiftyEditor::Page::presets);
+        checks.require(dice->isVisible() && dice->getTooltip().isNotEmpty(), "the dice shows on the presets page, with a tooltip");
+
+        // Factory, all folders: a different sound every time, never an original 0.4.2 sound.
+        editor.selectPresetFilterForTesting(0, {});
+        std::set<juce::String> folders;
+        bool repeats = false, originals = false, undoable = true;
+        for (int i = 0; i < 80; ++i) {
+            const auto before = host.currentPresetFolder() + "/" + host.currentPresetName();
+            dice->onClick();
+            const auto after = host.currentPresetFolder() + "/" + host.currentPresetName();
+            repeats = repeats || after == before;
+            originals = originals || host.isOriginalSound();
+            folders.insert(host.currentPresetFolder());
+            if (i % 20 == 0) {
+                host.undo();
+                undoable = undoable && host.currentPresetFolder() + "/" + host.currentPresetName() == before;
+                host.redo();
+            }
+        }
+        checks.require(!repeats, "the dice never reloads the preset already loaded");
+        checks.require(!originals, "from all folders the dice skips the original 0.4.2 sounds");
+        checks.require(folders.size() >= 6, "the dice reaches across the factory folders");
+        checks.require(undoable, "a dice roll is one Undo step");
+
+        // A folder filter limits the dice to that folder.
+        editor.selectPresetFilterForTesting(0, "Growl");
+        bool inFolder = true;
+        for (int i = 0; i < 20; ++i) {
+            dice->onClick();
+            inFolder = inFolder && host.currentPresetFolder() == "Growl";
+        }
+        checks.require(inFolder, "with a folder chosen the dice stays in it");
+        // The Classic folder holds only originals, so they are the candidates there.
+        editor.selectPresetFilterForTesting(0, "Classic");
+        dice->onClick();
+        checks.require(host.isOriginalSound() && host.currentPresetFolder() == "Classic",
+                       "in the Classic folder the dice picks an original sound");
+        // Nothing to pick: harmless.
+        editor.selectPresetFilterForTesting(1, {});
+        const auto before = host.currentPresetName();
+        dice->onClick();
+        checks.require(host.currentPresetName() == before, "an empty list leaves the sound alone");
+    }
+    root.deleteRecursively();
+    checks.section("random preset: filtered list, no repeats, skips originals, one Undo step");
+}
+
 inline int runRedesignTests()
 {
     Checks checks;
@@ -411,6 +509,7 @@ inline int runRedesignTests()
     checkUserPresetFolders(checks);
     checkEditorSize(checks);
     checkEditorMouse(checks);
+    checkRandomPreset(checks);
     if (checks.failures == 0)
         std::cout << "SHIFTY 0.5.0 feature tests passed.\n";
     else

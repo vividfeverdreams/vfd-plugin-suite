@@ -88,6 +88,7 @@ void setAllLocks(ShiftyProcessor& processor, bool locked)
 {
     for (const auto* id : expectedParameterIds)
         processor.setParameterLocked(id, locked);
+    processor.setParameterLocked(ShiftyProcessor::engineLockId, locked);
 }
 
 void setNormalized(ShiftyProcessor& processor, const char* id, float normalized)
@@ -179,9 +180,10 @@ void checkRandomLocksAndRanges(Checks& checks)
     for (const auto* id : expectedParameterIds) {
         checks.require(eligible.contains(id), juce::String("randomization includes ") + id);
         checks.require(processor.isParameterLocked(id)
-                           == (juce::String(id) == "output" || juce::String(id) == "bypass" || juce::String(id) == "vowel"),
+                           == (juce::String(id) == "output" || juce::String(id) == "bypass"),
                        juce::String("default lock for ") + id);
     }
+    checks.require(!processor.isParameterLocked(ShiftyProcessor::engineLockId), "the engine is unlocked by default");
 
     // Keep arbitrary exact settings locked across many complete randomizations.
     setPattern(processor, false);
@@ -253,9 +255,47 @@ void checkSourceFirstDefaultsAndMigration(Checks& checks)
     ShiftyProcessor processor;
     checks.require(processor.parameters().getRawParameterValue("vowel")->load() == 0.0f,
                    "new instance uses only the source formant envelope");
-    for (int i = 0; i < 32; ++i) processor.randomizeParameters();
-    checks.require(processor.parameters().getRawParameterValue("vowel")->load() == 0.0f,
-                   "Random never introduces vowel color with the default locks");
+    // 0.5.3: Vowel Color is unlocked by default, so RANDOM in CLASSIC can give a
+    // plain synth a shape (CLASSIC alone has no envelope to move on a saw).
+    bool colored = false;
+    for (int i = 0; i < 32; ++i) {
+        processor.randomizeParameters();
+        colored = colored || processor.parameters().getRawParameterValue("vowel")->load() > 0.5f;
+    }
+    checks.require(colored, "Random can introduce vowel color with the default locks");
+
+    // Lock masks saved before 0.5.3 (no randomLockVersion).
+    {
+        const auto stateWithLocks = [](ShiftyProcessor& source, int mask, bool versioned) {
+            juce::MemoryBlock block;
+            source.getStateInformation(block);
+            auto xml = juce::AudioProcessor::getXmlFromBinary(block.getData(), static_cast<int>(block.getSize()));
+            auto tree = juce::ValueTree::fromXml(*xml);
+            tree.setProperty("randomLockMask", mask, nullptr);
+            if (!versioned) tree.removeProperty("randomLockVersion", nullptr);
+            juce::MemoryBlock result;
+            juce::AudioProcessor::copyXmlToBinary(*tree.createXml(), result);
+            return result;
+        };
+        ShiftyProcessor source, target;
+        const int legacyDefault = (1 << 7) | (1 << 14) | (1 << 15);
+        auto state = stateWithLocks(source, legacyDefault, false);
+        target.setStateInformation(state.getData(), static_cast<int>(state.getSize()));
+        checks.require(!target.isParameterLocked("vowel") && target.isParameterLocked("output")
+                           && target.isParameterLocked("bypass") && !target.isParameterLocked(ShiftyProcessor::engineLockId),
+                       "an untouched pre-0.5.3 lock mask takes today's defaults");
+        state = stateWithLocks(source, legacyDefault, true);
+        target.setStateInformation(state.getData(), static_cast<int>(state.getSize()));
+        checks.require(target.isParameterLocked("vowel"), "a 0.5.3 session keeps a Vowel Color lock the user chose");
+        state = stateWithLocks(source, (1 << 29) - 1, false);
+        target.setStateInformation(state.getData(), static_cast<int>(state.getSize()));
+        checks.require(target.isParameterLocked(ShiftyProcessor::engineLockId),
+                       "a pre-0.5.3 session with every control locked keeps RANDOM inert (engine locked too)");
+        state = stateWithLocks(source, (1 << 0) | (1 << 7), false);
+        target.setStateInformation(state.getData(), static_cast<int>(state.getSize()));
+        checks.require(!target.isParameterLocked(ShiftyProcessor::engineLockId) && target.isParameterLocked("shift"),
+                       "a pre-0.5.3 custom mask is kept and the engine starts unlocked");
+    }
 
     // An older host state contains fifteen parameters and its own lock choices.
     // Test loading it into an already-colored instance, not only a fresh one.

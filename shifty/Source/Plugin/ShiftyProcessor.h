@@ -76,6 +76,9 @@ public:
     bool isParameterLocked(const juce::String&) const;
     void setParameterLocked(const juce::String&, bool);
     static juce::StringArray randomizableParameterIds();
+    /** Lock ID for the engine (TALK / MOUTH / CLASSIC). Not a parameter, but
+        RANDOM picks it like one unless it is locked. Unlocked by default. */
+    static constexpr const char* engineLockId = "engine";
     void undo();
     void redo();
     bool canUndo() const { return undoManager.canUndo(); }
@@ -180,7 +183,9 @@ private:
     int analyzerOutputWrite = 0;
     std::unique_ptr<juce::dsp::FFT> analyzerFft;
     std::array<float, 2048> fftScratch {};
-    static constexpr uint32_t allRandomLocks = (1u << parameterCount) - 1u;
+    // One lock bit per parameter, then the engine's.
+    static constexpr uint32_t engineLockBit = 1u << parameterCount;
+    static constexpr uint32_t allRandomLocks = (engineLockBit << 1) - 1u;
     std::array<std::atomic<float>*, parameterCount> paramValues {};
 
     // Motion: latest engines
@@ -210,7 +215,10 @@ private:
     ParameterSnapshot batchStart;
     juce::File userDataRootOverride;
     mutable bool presetMigrationChecked = false;
-    static constexpr uint32_t defaultRandomLocks = (1u << 7) | (1u << 14) | (1u << 15);
+    // Output and Bypass. Before 0.5.3 Vowel Color was locked too, and the
+    // engine was never randomized.
+    static constexpr uint32_t defaultRandomLocks = (1u << 7) | (1u << 14);
+    static constexpr uint32_t legacyDefaultRandomLocks = defaultRandomLocks | (1u << 15);
     std::atomic<uint32_t> randomLocks { defaultRandomLocks };
     std::atomic<double> editorScaleValue { 1.0 };
     juce::Random variationRandom;

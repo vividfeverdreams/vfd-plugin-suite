@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.22)
-project(Shifty VERSION 0.5.2 LANGUAGES C CXX)
+project(Shifty VERSION 0.5.3 LANGUAGES C CXX)
 
 if (APPLE)
     enable_language(OBJCXX)

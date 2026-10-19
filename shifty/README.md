@@ -1,8 +1,14 @@
-# SHIFTY 0.5.2
+# SHIFTY 0.5.3
 
 SHIFTY is a formant effect for bass. It changes the "mouth" of a sound (its resonances: bigger and darker, or smaller and brighter, or a different vowel) while the notes stay where they are. Put it after a bass synth or on an audio track. It accepts mono or stereo audio and makes no sound on its own.
 
 This build is a **VST3 and Audio Unit (AU) effect for Apple Silicon Macs running macOS 12 or later**.
+
+## What's new in 0.5.3
+
+- **RANDOM picks the engine too.** Each RANDOM can land on TALK, MOUTH or CLASSIC, so it no longer gets stuck on an engine that barely touches your sound (CLASSIC on a plain saw, for example). Your DAW is told the new latency at once, as with a preset, and UNDO brings back the previous engine. To keep the engine, right-click the TALK / MOUTH / CLASSIC selector and choose **Lock for randomization** (or use **LOCKS**); a padlock then shows beside the selector.
+- **VOWEL COLOR is no longer locked out of RANDOM.** Without it, CLASSIC has nothing to move on a plain synth, so RANDOM in CLASSIC turns it on three times in four. Projects whose locks you never changed get the new defaults; locks you chose yourself are kept.
+- **Random preset.** The die beside the **PRESETS** heading loads a random preset from the list as it is shown: tab, folder and search all count, so pick a folder first for a random sound from it. It never reloads the current preset and, from all folders, skips the 24 original 0.4.2 sounds (they barely change a plain synth; choose the **Classic** folder to roll among them). UNDO returns to the previous sound.
 
 ## What's new in 0.5.2
 
@@ -35,7 +41,7 @@ The plug-in is signed locally rather than notarized by Apple. A downloaded copy 
 
 ## The three engines
 
-Choose the engine on the **SOUND** page. Changing engine is one UNDO step. Each engine reports its own latency to your DAW, which compensates automatically. The engine is deliberately not automatable and RANDOM never changes it, so the latency never jumps during playback.
+Choose the engine on the **SOUND** page. Changing engine is one UNDO step. Each engine reports its own latency to your DAW, which compensates automatically. The engine is deliberately not automatable, so the latency never jumps during playback. RANDOM may change it (and the latency with it) unless you lock it: right-click the selector.
 
 | Engine | What it does | Best on | Latency at 48 kHz |
 | --- | --- | --- | --- |
@@ -97,11 +103,11 @@ ENV and YOI need the latest engines. They do nothing on the original 0.4.2 sound
 
 ## Make quick variations
 
-**RANDOM** creates a new variation from every unlocked parameter. Its ranges favour useful sounds: SHIFT stays at least 2 st from zero, MIX stays between 70% and 100%, and so on. **OUTPUT**, **BYPASS** and **VOWEL COLOR** start locked. Click a padlock beside a main knob, right-click any control, or open **LOCKS** to choose what RANDOM may change. RANDOM never changes the engine. UNDO brings back the previous sound.
+**RANDOM** creates a new variation from every unlocked parameter. Its ranges favour useful sounds: SHIFT stays at least 2 st from zero, MIX stays between 70% and 100%, and so on. RANDOM also picks the engine (TALK, MOUTH or CLASSIC). **OUTPUT** and **BYPASS** start locked. Click a padlock beside a main knob, right-click any control (including the engine selector), or open **LOCKS** to choose what RANDOM may change. UNDO brings back the previous sound.
 
 ## Presets
 
-**PRESETS** lists factory and user sounds. Use **FACTORY / USER / FAV** and the folder menu to filter, and the search box to find a name. Double-click a row (or select it and press Return) to load it. Click the star column, or the star on SOUND, to mark a favourite.
+**PRESETS** lists factory and user sounds. Use **FACTORY / USER / FAV** and the folder menu to filter, and the search box to find a name. Double-click a row (or select it and press Return) to load it. Click the star column, or the star on SOUND, to mark a favourite. Click the **die** beside the PRESETS heading to load a random preset from the list as filtered (it skips the original 0.4.2 sounds unless you are in the Classic folder).
 
 | Folder | Sounds | What's in it |
 | --- | --- | --- |

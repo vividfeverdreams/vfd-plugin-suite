@@ -65,6 +65,7 @@ private:
     void updatePage();
     void refreshPresetList();
     void loadSelectedPreset();
+    void loadRandomPreset();
     void beginPresetSave();
     void finishPresetSave();
     juce::PopupMenu::Options menuOptions(const juce::String& anchor);
@@ -77,6 +78,7 @@ private:
     void showSizeMenu();
     void applyScale(double scale);
     void showLocksMenu();
+    void showEngineLockMenu();
     void showParameterLockMenu(const juce::String& id, juce::Component* target);
     void drawHeader(juce::Graphics&);
     void drawSoundScreen(juce::Graphics&);
@@ -120,7 +122,8 @@ private:
     juce::String presetFolderFilter; // empty = all folders
     std::vector<Control> controls;
     std::vector<Switch> switches;
-    std::unique_ptr<juce::Button> randomButton, locksButton, undoButton, redoButton, latestButton;
+    std::unique_ptr<juce::Button> randomButton, locksButton, undoButton, redoButton, latestButton, randomPresetButton;
+    juce::Random presetDice;
     std::vector<PresetItem> presetItems;
     juce::TextEditor presetSearch;
     juce::TextEditor presetNameEditor;
