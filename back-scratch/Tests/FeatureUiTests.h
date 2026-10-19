@@ -4,6 +4,7 @@
 #include "GridEditorInteractionTests.h"
 #include "ProcessorTests.h"
 #include <juce_audio_processors/juce_audio_processors.h>
+#include <algorithm>
 #include <iostream>
 #include <vector>
 
@@ -33,8 +34,9 @@ inline void checkLayout()
             check(screen.contains(box), "PERFORM controls sit inside the screen's graph area");
         for (std::size_t b = a + 1; b < performControls.size(); ++b)
             check(!box.intersects(BackScratchEditor::controlBounds(performControls[b])), "PERFORM controls never overlap");
-        for (const auto other : {Control::shiftLeft, Control::shiftRight, Control::presets, Control::previous, Control::next,
-                                 Control::randomize, Control::dotted, Control::triplet, Control::phraseLock})
+        for (const auto other : {Control::shiftLeft, Control::shiftRight, Control::presets, Control::randomPreset,
+                                 Control::previous, Control::next, Control::randomize, Control::dotted, Control::triplet,
+                                 Control::phraseLock})
             check(!box.intersects(BackScratchEditor::controlBounds(other)), "0.11 controls keep clear of the existing controls");
     }
 }
@@ -265,6 +267,127 @@ inline void checkPresets()
     BackScratchProcessor::setUserPresetRootForTesting({});
 }
 
+// The random preset key (0.11.2): a third key in the preset arrows' row. It
+// loads one of the browser's presets (factory or user; the browser has no
+// filter) through the same path as a menu pick, never the one on screen.
+inline void checkRandomPreset()
+{
+    const auto random = BackScratchEditor::controlBounds(Control::randomPreset);
+    const auto previous = BackScratchEditor::controlBounds(Control::previous);
+    const auto next = BackScratchEditor::controlBounds(Control::next);
+    check(random.withX(previous.getX()) == previous
+              && juce::approximatelyEqual(previous.getX() - random.getRight(), next.getX() - previous.getRight()),
+          "the random key has the preset arrows' size, baseline and spacing");
+    check(BackScratchEditor::controlBounds(Control::presets).getRight() < random.getX(),
+          "the preset name field ends before the keys");
+
+    // Three user presets: two in a folder (one renamed after saving, so it
+    // still carries its old name), one loose in the root ("Unfiled").
+    const auto root = juce::File::getSpecialLocation(juce::File::tempDirectory).getNonexistentChildFile("BACK-SCRATCH-RandomPresets", "");
+    BackScratchProcessor::setUserPresetRootForTesting(root);
+    const std::array<juce::File, 3> userFiles {root.getChildFile("Riddim Ideas").getChildFile("Wobble Gate.backscratch"),
+                                               root.getChildFile("Riddim Ideas").getChildFile("Renamed Later.backscratch"),
+                                               root.getChildFile("Loose Take.backscratch")};
+    const std::array<juce::String, 3> userNames {"Wobble Gate", "Old Name", "Loose Take"};
+    {
+        BackScratchProcessor writer;
+        writer.prepareToPlay(48000.0, 512);
+        for (std::size_t i = 0; i < userFiles.size(); ++i) {
+            writer.randomizePattern();
+            const auto saved = userFiles[i].getSiblingFile(userNames[i] + ".backscratch");
+            check(writer.savePreset(saved).wasOk() && (saved == userFiles[i] || saved.moveFileTo(userFiles[i])),
+                  "the user presets for the random key are saved");
+        }
+    }
+
+    const auto& bank = bankPresets();
+    int fills = -1;
+    for (std::size_t i = 0; i < bank.size(); ++i) if (bank[i].name == "Bar 4 Rewind") fills = static_cast<int>(i);
+    BackScratchProcessor processor, twin;
+    for (auto* p : {&processor, &twin}) { p->prepareToPlay(48000.0, 512); p->selectBankPreset(fills); }
+    auto editor = std::make_unique<BackScratchEditor>(processor);
+    editor->setVisible(true);
+    const auto centre = random.getCentre();
+    editor->mouseMove(event(*editor, centre, centre));
+    check(editor->getTooltip().containsIgnoreCase("random preset"), "the random key explains itself");
+
+    // Candidates: the whole browser minus the preset on screen, and minus other
+    // entries of the same name (a tuned Bass recipe and its Classic original).
+    const auto countChoices = [&editor](int& factory, int& user, int excluded) {
+        factory = user = 0;
+        for (const auto& choice : editor->randomPresetChoices()) {
+            if (choice.bank >= 0) { ++factory; check(choice.bank != excluded, "the preset on screen is never a candidate"); }
+            else ++user;
+        }
+    };
+    int factory = 0, user = 0;
+    countChoices(factory, user, fills);
+    check(factory == static_cast<int>(bank.size()) - 1 && user == 3,
+          "every other factory preset and every user preset, in folders or loose, is a candidate");
+    const int subTug = classicBankIndex(0);
+    processor.selectBankPreset(subTug);
+    twin.selectBankPreset(subTug);
+    const auto named = std::count_if(bank.begin(), bank.end(), [&bank, subTug](const BankPreset& preset) {
+        return preset.name == bank[static_cast<std::size_t>(subTug)].name; });
+    countChoices(factory, user, subTug);
+    check(named == 2 && factory == static_cast<int>(bank.size()) - 2, "Sub Tug's tuned Bass entry is skipped too");
+
+    // Press until factory and all three user presets have come up. Each press
+    // must change the preset and leave the processor exactly as the same
+    // choice made from the browser leaves its twin.
+    interactionTests::GestureCounter gestures;
+    for (auto* parameter : processor.getParameters()) parameter->addListener(&gestures);
+    std::array<bool, 3> seenUser {};
+    bool seenFactory = false;
+    for (int press = 0; press < 20000 && !(seenFactory && seenUser[0] && seenUser[1] && seenUser[2]); ++press) {
+        const auto before = processor.currentPresetName();
+        const int beforeBank = processor.selectedBankPreset();
+        click(*editor, Control::randomPreset);
+        const auto shown = processor.currentPresetName();
+        check(shown != before, "every press shows a different preset");
+        check(gestures.begins == gestures.ends, "a random pick reaches the host as complete gestures");
+        check(!processor.canUndoPatternEdit(), "a random pick starts a fresh drawing history, like a browser pick");
+        if (const int index = processor.selectedBankPreset(); index >= 0) {
+            check(index != beforeBank && shown == juce::String(bank[static_cast<std::size_t>(index)].name),
+                  "a factory pick loads a different bank entry and shows its name");
+            twin.selectBankPreset(index);
+            seenFactory = true;
+        } else {
+            const auto found = std::find(userNames.begin(), userNames.end(), shown);
+            check(found != userNames.end(), "a user pick loads one of the user presets");
+            const auto& file = userFiles[static_cast<std::size_t>(found - userNames.begin())];
+            check(twin.loadPreset(file).wasOk(), "the twin loads the same user preset");
+            for (const auto& choice : editor->randomPresetChoices())
+                check(choice.file != file, "the user preset just loaded is not offered again, even renamed");
+            seenUser[static_cast<std::size_t>(found - userNames.begin())] = true;
+        }
+        juce::MemoryBlock a, b;
+        processor.getStateInformation(a);
+        twin.getStateInformation(b);
+        check(a == b && shown == twin.currentPresetName(), "a random pick leaves exactly the state of the same browser pick");
+    }
+    check(seenFactory && seenUser[0] && seenUser[1] && seenUser[2], "factory presets and every user preset come up");
+    for (auto* parameter : processor.getParameters()) parameter->removeListener(&gestures);
+
+    // With a slot selected, the pick loads into that slot as one undoable step.
+    // (A chain preset may have filled slot C; empty it first.)
+    processor.clearSlot(2);
+    processor.selectSlot(2);
+    const auto mainPattern = processor.presetXml("main");
+    click(*editor, Control::randomPreset);
+    check(processor.slotFilled(2) && processor.canUndoPatternEdit(), "a random pick fills the selected slot, undoably");
+    processor.undoPatternEdit();
+    check(!processor.slotFilled(2), "one Undo empties the slot again");
+    processor.selectSlot(0);
+    const auto after = processor.presetXml("main");
+    check(mainPattern != nullptr && after != nullptr && after->getChildByName("EDITED_PATTERN")->isEquivalentTo(
+              mainPattern->getChildByName("EDITED_PATTERN"), false), "slot A keeps its pattern");
+
+    editor.reset();
+    root.deleteRecursively();
+    BackScratchProcessor::setUserPresetRootForTesting({});
+}
+
 // Saved projects: 0.11 settings round-trip; 0.10 projects open neutral.
 inline void checkStateRoundTrip()
 {
@@ -400,7 +523,8 @@ inline void runFeatureUiTests()
     checkSizeMenu();
     checkPerformanceAudio();
     checkPresets();
+    checkRandomPreset();
     checkStateRoundTrip();
     std::cout << "BACK-SCRATCH 0.11 PERFORM page, Engage snap, Retrigger, Play Every, slots and chains, Mix/Depth/Output, roll tool, "
-                 "Size menu, factory bank, user preset folders and project round trips passed\n";
+                 "Size menu, factory bank, user preset folders, random preset key and project round trips passed\n";
 }

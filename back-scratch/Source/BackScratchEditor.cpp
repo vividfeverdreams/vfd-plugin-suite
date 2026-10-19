@@ -25,6 +25,26 @@ juce::String playEveryText(int every, int durationChoice)
     return "LAST " + juce::String(length) + " OF EVERY " + juce::String(length * every) + (choice == 2 ? " BEATS" : " BARS");
 }
 
+// The user browser: folders below the user preset root that hold .backscratch
+// files, in name order, then loose files as "Unfiled". Only reads the disk; the
+// root is created when something is saved.
+std::vector<std::pair<juce::String, std::vector<juce::File>>> userPresetFolders()
+{
+    const auto byName = [](const juce::File& a, const juce::File& b) { return a.getFileName().compareNatural(b.getFileName()) < 0; };
+    const auto root = BackScratchProcessor::userPresetRoot();
+    std::vector<std::pair<juce::String, std::vector<juce::File>>> result;
+    const auto addFolder = [&](const juce::File& folder, const juce::String& name) {
+        auto presets = folder.findChildFiles(juce::File::findFiles, false, "*.backscratch");
+        std::sort(presets.begin(), presets.end(), byName);
+        if (!presets.isEmpty()) result.emplace_back(name, std::vector<juce::File>(presets.begin(), presets.end()));
+    };
+    auto folders = root.findChildFiles(juce::File::findDirectories, false);
+    std::sort(folders.begin(), folders.end(), byName);
+    for (const auto& folder : folders) addFolder(folder, folder.getFileName());
+    if (root.isDirectory()) addFolder(root, "Unfiled");
+    return result;
+}
+
 constexpr float canvasWidth = 1122.0f, canvasHeight = 1402.0f;
 // Default editor size: the enclosure fills the window edge to edge (design viewport 972 x 1308 at 1/1.3886).
 constexpr int editorWidth = 700, editorHeight = 942, minimumEditorWidth = 420, maximumEditorWidth = 1050;
@@ -287,9 +307,12 @@ juce::Rectangle<float> BackScratchEditor::controlBounds(Control control) noexcep
         case Control::triplet:  return rectangle(765, 651, 119, 44);
         case Control::shiftLeft: return rectangle(520, 520, 34, 28);
         case Control::shiftRight: return rectangle(570, 520, 34, 28);
+        // Random preset, previous and next: one row of keys, 9 apart. The random
+        // key lines up under the eraser; the name field ends at its chevron.
+        case Control::randomPreset: return rectangle(736, 251, 47, 47);
         case Control::previous: return rectangle(792, 251, 47, 47);
         case Control::next:     return rectangle(848, 251, 47, 47);
-        case Control::presets:  return rectangle(229, 236, 546, 68);
+        case Control::presets:  return rectangle(229, 236, 490, 68);
         case Control::save:     return rectangle(596, 99, 140, 37);
         case Control::load:     return rectangle(749, 99, 140, 37);
         case Control::pencil:   return rectangle(476, 195, 112, 38);
@@ -436,7 +459,7 @@ BackScratchEditor::Control BackScratchEditor::controlAt(juce::Point<float> p) co
 {
     for (const auto control : { Control::randomize, Control::keepSub, Control::phraseLock,
                                Control::dotted, Control::triplet, Control::shiftLeft, Control::shiftRight,
-                               Control::previous, Control::next, Control::presets, Control::save, Control::load,
+                               Control::randomPreset, Control::previous, Control::next, Control::presets, Control::save, Control::load,
                                Control::pencil, Control::eraser, Control::undo, Control::redo, Control::drawOptions, Control::shapes,
                                Control::pagePattern, Control::pagePerform, Control::engage, Control::quantize,
                                Control::retrigger, Control::every, Control::lookback, Control::mix, Control::depth,
@@ -572,29 +595,53 @@ void BackScratchEditor::drawPresetBrowser(juce::Graphics& g, const BackScratchPr
                             : display.edited ? juce::String("Edited Scratch")
                             : generated ? juce::String("New Scratch") : juce::String(preset.name);
     if (generated && name.startsWith("New Scratch /")) name = "New Scratch";
-    drawText(g, name, rectangle(229, 241, 523, 58), 38, cream,
+    drawText(g, name, rectangle(229, 241, 467, 58), 38, cream,
              juce::Justification::centredLeft, true);
     if (hovered == Control::presets) {
         g.setColour(cyan.withAlpha(0.5f));
-        g.drawHorizontalLine(303, 230, 747);
+        g.drawHorizontalLine(303, 230, 691);
     }
     juce::Path chevron;
-    chevron.startNewSubPath(755, 268); chevron.lineTo(763, 276); chevron.lineTo(771, 268);
+    chevron.startNewSubPath(699, 268); chevron.lineTo(707, 276); chevron.lineTo(715, 268);
     g.setColour(cyan);
     g.strokePath(chevron, juce::PathStrokeType(2.0f));
-    for (const auto control : {Control::previous, Control::next}) {
+    for (const auto control : {Control::randomPreset, Control::previous, Control::next}) {
         const auto box = controlBounds(control);
         g.setColour(cyan.withAlpha(hovered == control ? 0.18f : 0.05f));
         g.fillRoundedRectangle(box, 9.0f);
         g.setColour(cream.withAlpha(0.22f));
         g.drawRoundedRectangle(box, 9.0f, 1.0f);
         const auto c = box.getCentre();
-        const float direction = control == Control::previous ? -1.0f : 1.0f;
         juce::Path arrow;
+        g.setColour(cream);
+        if (control == Control::randomPreset) {
+            // Shuffle: two scratch curves crossing, each ending in an arrowhead;
+            // the rising one passes under. Randomize's die makes a new pattern,
+            // this key picks one of the stored presets.
+            const juce::PathStrokeType stroke(2.3f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded);
+            juce::Path under;
+            for (const float d : {1.0f, -1.0f}) {
+                auto& strand = d > 0.0f ? arrow : under;
+                strand.startNewSubPath(c.x - 11, c.y - d * 6);
+                strand.cubicTo(c.x - 3, c.y - d * 6, c.x + 1, c.y + d * 6, c.x + 10, c.y + d * 6);
+                arrow.startNewSubPath(c.x + 6.5f, c.y + d * 2.5f);
+                arrow.lineTo(c.x + 10, c.y + d * 6);
+                arrow.lineTo(c.x + 6.5f, c.y + d * 9.5f);
+            }
+            g.strokePath(arrow, stroke);
+            juce::Path gap;
+            gap.addRectangle(box);
+            gap.addEllipse(c.x - 4.5f, c.y - 3.6f, 7.2f, 7.2f);
+            gap.setUsingNonZeroWinding(false);
+            juce::Graphics::ScopedSaveState state(g);
+            g.reduceClipRegion(gap);
+            g.strokePath(under, stroke);
+            continue;
+        }
+        const float direction = control == Control::previous ? -1.0f : 1.0f;
         arrow.startNewSubPath(c.x - direction * 4, c.y - 8);
         arrow.lineTo(c.x + direction * 4, c.y);
         arrow.lineTo(c.x - direction * 4, c.y + 8);
-        g.setColour(cream);
         g.strokePath(arrow, juce::PathStrokeType(2.6f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
     }
 }
@@ -1370,6 +1417,8 @@ void BackScratchEditor::activate(Control control)
         statusLine.clear();
     } else if (control == Control::previous || control == Control::next) {
         stepPreset(control == Control::next ? 1 : -1);
+    } else if (control == Control::randomPreset) {
+        loadRandomPreset();
     } else if (control == Control::presets) chooseFactoryPreset();
     else if (control == Control::save || control == Control::load) choosePresetFile(control == Control::save);
     else if (control == Control::pagePattern || control == Control::pagePerform) {
@@ -1430,8 +1479,60 @@ void BackScratchEditor::stepPreset(int direction)
     int current = scratchProcessor.selectedBankPreset();
     if (current < 0 || current >= count) current = classicBankIndex(scratchProcessor.selectedFactoryPreset());
     const int next = current < 0 ? (direction > 0 ? 0 : count - 1) : (current + direction + count) % count;
-    scratchProcessor.selectBankPreset(next);
+    loadBankPreset(next);
+}
+
+void BackScratchEditor::loadBankPreset(int index)
+{
+    scratchProcessor.selectBankPreset(index);
+    userPresetFile = juce::File();
     statusLine.clear();
+}
+
+void BackScratchEditor::loadUserPreset(const juce::File& file)
+{
+    const auto loaded = scratchProcessor.loadPreset(file);
+    statusIsError = loaded.failed();
+    statusLine = loaded.failed() ? loaded.getErrorMessage() : "LOADED: " + file.getFileNameWithoutExtension();
+    if (loaded.wasOk()) {
+        userPresetFile = file;
+        userPresetShownAs = scratchProcessor.currentPresetName();
+    }
+}
+
+std::vector<BackScratchEditor::PresetChoice> BackScratchEditor::randomPresetChoices() const
+{
+    // Everything the browser offers (it has no filter): every factory folder,
+    // Classic included, and every user folder. The preset on screen is left
+    // out, and so is any preset of the same name elsewhere (a tuned Bass entry
+    // and its Classic original), so each press visibly changes the preset.
+    const auto shown = scratchProcessor.currentPresetName();
+    const int current = scratchProcessor.selectedBankPreset();
+    std::vector<PresetChoice> choices;
+    const auto& bank = bankPresets();
+    for (std::size_t index = 0; index < bank.size(); ++index)
+        if (static_cast<int>(index) != current && juce::String(bank[index].name) != shown)
+            choices.push_back({static_cast<int>(index), {}});
+    for (const auto& folder : userPresetFolders())
+        for (const auto& file : folder.second)
+            if (file.getFileNameWithoutExtension() != shown && !(file == userPresetFile && shown == userPresetShownAs))
+                choices.push_back({-1, file});
+    return choices;
+}
+
+void BackScratchEditor::loadRandomPreset()
+{
+    const auto choices = randomPresetChoices();
+    if (choices.empty()) return;
+    const auto& choice = choices[static_cast<std::size_t>(presetRandom.nextInt(static_cast<int>(choices.size())))];
+    if (choice.bank < 0) {
+        loadUserPreset(choice.file);
+    } else {
+        loadBankPreset(choice.bank);
+        // Into a slot the name field keeps saying "Slot B", so say what landed there.
+        if (scratchProcessor.selectedSlot() > 0)
+            statusLine = "LOADED: " + juce::String(bankPresets()[static_cast<std::size_t>(choice.bank)].name);
+    }
 }
 
 void BackScratchEditor::closeEditMenu()
@@ -1554,30 +1655,16 @@ void BackScratchEditor::chooseScratchShape()
 
 void BackScratchEditor::addUserPresets(juce::PopupMenu& menu, std::vector<juce::File>& files)
 {
-    // Folders below the user preset root, each listing its .backscratch files.
-    // Only reads the disk; the root is created when something is saved.
-    const auto root = BackScratchProcessor::userPresetRoot();
-    auto folders = root.findChildFiles(juce::File::findDirectories, false);
-    std::sort(folders.begin(), folders.end(), [](const juce::File& a, const juce::File& b) {
-        return a.getFileName().compareNatural(b.getFileName()) < 0; });
-    bool any = false;
-    const auto addFolder = [&](const juce::File& folder, juce::PopupMenu& into) {
-        auto presets = folder.findChildFiles(juce::File::findFiles, false, "*.backscratch");
-        std::sort(presets.begin(), presets.end(), [](const juce::File& a, const juce::File& b) {
-            return a.getFileName().compareNatural(b.getFileName()) < 0; });
+    const auto folders = userPresetFolders();
+    for (const auto& [name, presets] : folders) {
+        juce::PopupMenu group;
         for (const auto& file : presets) {
             files.push_back(file);
-            into.addItem(10000 + static_cast<int>(files.size()) - 1, file.getFileNameWithoutExtension());
+            group.addItem(10000 + static_cast<int>(files.size()) - 1, file.getFileNameWithoutExtension());
         }
-        return !presets.isEmpty();
-    };
-    for (const auto& folder : folders) {
-        juce::PopupMenu group;
-        if (addFolder(folder, group)) { menu.addSubMenu(folder.getFileName(), std::move(group)); any = true; }
+        menu.addSubMenu(name, std::move(group));
     }
-    juce::PopupMenu loose;
-    if (root.isDirectory() && addFolder(root, loose)) { menu.addSubMenu("Unfiled", std::move(loose)); any = true; }
-    if (!any) menu.addItem(-1, "No saved presets yet", false);
+    if (folders.empty()) menu.addItem(-1, "No saved presets yet", false);
 }
 
 void BackScratchEditor::chooseFactoryPreset()
@@ -1625,15 +1712,9 @@ void BackScratchEditor::chooseFactoryPreset()
             if (safe == nullptr || result <= 0) return;
             if (result >= 10000) {
                 const auto index = static_cast<std::size_t>(result - 10000);
-                if (index < safe->menuFiles.size()) {
-                    const auto file = safe->menuFiles[index];
-                    const auto loaded = safe->scratchProcessor.loadPreset(file);
-                    safe->statusIsError = loaded.failed();
-                    safe->statusLine = loaded.failed() ? loaded.getErrorMessage() : "LOADED: " + file.getFileNameWithoutExtension();
-                }
+                if (index < safe->menuFiles.size()) safe->loadUserPreset(safe->menuFiles[index]);
             } else {
-                safe->scratchProcessor.selectBankPreset(result - 1);
-                safe->statusLine.clear();
+                safe->loadBankPreset(result - 1);
             }
             safe->repaint();
         });
@@ -1701,10 +1782,7 @@ void BackScratchEditor::choosePresetFile(bool save)
         if (result >= 10000) {
             const auto index = static_cast<std::size_t>(result - 10000);
             if (index >= safe->menuFiles.size()) return;
-            const auto file = safe->menuFiles[index];
-            const auto loaded = safe->scratchProcessor.loadPreset(file);
-            safe->statusIsError = loaded.failed();
-            safe->statusLine = loaded.failed() ? loaded.getErrorMessage() : "LOADED: " + file.getFileNameWithoutExtension();
+            safe->loadUserPreset(safe->menuFiles[index]);
         } else if (result == 900 || (result >= 1 && result <= static_cast<int>(folders.size()))) {
             const auto folder = result == 900 ? root : folders[static_cast<std::size_t>(result - 1)];
             // Creating the folder is the first write to the preset root, and
@@ -1719,9 +1797,7 @@ void BackScratchEditor::choosePresetFile(bool save)
                     if (safe == nullptr) return;
                     const auto file = chooser.getResult();
                     if (file != juce::File()) {
-                        const auto loaded = safe->scratchProcessor.loadPreset(file);
-                        safe->statusIsError = loaded.failed();
-                        safe->statusLine = loaded.failed() ? loaded.getErrorMessage() : "LOADED: " + file.getFileNameWithoutExtension();
+                        safe->loadUserPreset(file);
                         safe->repaint();
                     }
                     juce::MessageManager::callAsync([safe] { if (safe != nullptr) safe->fileChooser.reset(); });
@@ -1797,6 +1873,10 @@ juce::String BackScratchEditor::getTooltip()
         case Control::keepSub: return "Preserve the original sub when on. Scratch the full signal when off.";
         case Control::previous: return "Previous preset in the browser.";
         case Control::next: return "Next preset in the browser.";
+        case Control::randomPreset:
+            return scratchProcessor.selectedSlot() > 0
+                ? "Load a random preset into slot " + juce::String::charToString(static_cast<juce::juce_wchar>('A' + scratchProcessor.selectedSlot())) + "."
+                : juce::String("Jump to a random preset in the browser, factory or your own. Randomize makes a new pattern instead.");
         case Control::presets: return "Browse factory folders, the Classic originals and your own presets.";
         case Control::save: return "Save this pattern and its settings into a preset folder.";
         case Control::load: return "Load one of your presets, or browse for a file.";

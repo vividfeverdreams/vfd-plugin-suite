@@ -15,6 +15,7 @@ The **700 × 940** interface keeps its translucent red shell, recessed smoked-gl
 - **History size.** Automatic (sized to what the pattern needs) or fixed 16, 32, 64 or 128 seconds.
 - **230 built-in presets in 17 folders**, including 80 new ones and the 75 originals exactly as 0.10 had them in **Classic**. See **PRESETS.md**.
 - **Preset folders.** Your presets save into folders you choose and browse as folders.
+- **Random preset.** The shuffle key left of the preset arrows loads a random preset from the browser, factory or your own, never the one already loaded (since 0.11.2). Randomize still composes a brand-new pattern.
 - **Size menu.** Right-click an empty part of the shell for 90%, 100%, 125% or 150%.
 - **Audio Unit.** BACK-SCRATCH now also builds as an AU, alongside the VST3.
 - **Fixes** (also in 0.11, from the same work): no more dropouts when the tempo slows inside a block (half-time drops), host bypass stays in time with the reported latency, no 15 ms hole after seeks and loop wraps, a click-free Bypass, no automation gestures for unchanged values, and safer memory handling. See **Fixed in 0.11** below.
@@ -28,7 +29,7 @@ Projects and presets from 0.10 open with every setting intact and sound the same
 3. Drag the **Phrase Length** knob up or down to select **½ beat, 1 beat, 2 beats, 1 bar, 2 bars, 4 bars, 8 bars or 16 bars**. The wheel also changes its value; Shift-drag makes finer movements, and double-click restores one bar.
 4. Click **Dotted** to multiply the base length by **1.5**, or **Triplet** to multiply it by **⅔**. Only one can be active; click the lit button again for straight timing.
 5. Click **Randomize** to compose a new pattern. The length lock holds the base knob setting; unlock it to let Randomize choose that base length too. Timing mode and grid shift stay as you set them.
-6. Browse the presets with the **⌄** menu beside the name or the **upper arrows**. The centered **bottom arrows** move the current pattern one grid cell left or right, wrapping across the edges.
+6. Browse the presets with the **⌄** menu beside the name or the **upper arrows**, or press the **shuffle** key beside them for a random one. The centered **bottom arrows** move the current pattern one grid cell left or right, wrapping across the edges.
 7. Click the screen's **Pencil** button to draw. Its small arrow opens **Free Draw, Line, Curve** and the **rolls**. Choose **Eraser** to restore clean input in selected cells. Click the selected tool again to stop editing.
 8. Open **Shapes** for 15 starting contours. Selecting one replaces the phrase with an editable starting shape; Undo brings back the previous phrase.
 9. Click **PERFORM** for Engage, Play Every, slots, Mix, Depth and the other 0.11 controls.
@@ -109,6 +110,8 @@ When the history grows or changes size, the older audio is not copied across (th
 **230 built-in presets in 17 folders**: the 75 original recipes (tuned in Bass, Drums and Vocals; exactly as 0.10 in Classic) and 80 new presets in Fills, Rolls, Stutters, Scratches, Tape Stops, Builds, Halftime, Vocal Chops, Riddim, Space Bass and Chains. **PRESETS.md** lists every one.
 
 **Save** offers your preset folders in **~/Library/Application Support/BACK-SCRATCH/Presets/**, or **New folder or another place...**. **Load** lists the same folders plus **Browse files...**. The preset menu has a **User Presets** submenu. Existing preset files are never moved or changed.
+
+The **shuffle** key left of the upper arrows (since 0.11.2) loads a random preset from everything the browser lists: the factory folders, Classic and your user folders. It never picks the preset on screen, or another entry of the same name (a tuned Bass recipe and its Classic original), so every press changes the preset. It loads exactly as choosing that preset from the menu does: with a slot selected it loads into that slot as one undoable step and the display says which preset landed there. The **Randomize** button is different: it composes a new pattern instead of loading a stored one.
 
 ## Window size
 

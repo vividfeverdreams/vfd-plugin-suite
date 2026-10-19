@@ -78,8 +78,8 @@ inline void checkControlLayout(const BackScratchEditor& editor)
     using Control = BackScratchEditor::Control;
     constexpr std::array controls {Control::randomize, Control::keepSub, Control::phraseDuration,
                                    Control::phraseLock, Control::dotted, Control::triplet,
-                                   Control::shiftLeft, Control::shiftRight, Control::previous, Control::next,
-                                   Control::presets, Control::save, Control::load};
+                                   Control::shiftLeft, Control::shiftRight, Control::randomPreset, Control::previous,
+                                   Control::next, Control::presets, Control::save, Control::load};
     const auto viewport = BackScratchEditor::designViewport();
     // Reserve the physical enclosure's top-right indicator, including its glow.
     // This checks hit geometry; the release screenshots separately check artwork.

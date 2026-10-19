@@ -31,7 +31,9 @@ public:
                          // 0.11: screen pages and the PERFORM page.
                          pagePattern, pagePerform, engage, quantize, retrigger, every, lookback,
                          mix, depth, output, slotA, slotB, slotC, slotD, slotE, slotF, slotG, slotH,
-                         chain, split, history };
+                         chain, split, history,
+                         // 0.11.2: random preset key beside the browser arrows.
+                         randomPreset };
     enum class DrawMode { free, line, curve, roll };
     DrawMode currentDrawMode() const noexcept { return drawMode; }
     bool showsPerformPage() const noexcept { return performPage; }
@@ -46,6 +48,10 @@ public:
     // Test hooks: open the menus that a right-click on the shell or slot shows.
     void showSizeMenu();
     void showSlotMenu(int slot);
+    // What the random preset key can load next: a factory bank index, or a user
+    // preset file (bank -1). Public for tests.
+    struct PresetChoice { int bank = -1; juce::File file; };
+    std::vector<PresetChoice> randomPresetChoices() const;
 
 private:
     void timerCallback() override;
@@ -60,6 +66,10 @@ private:
     void choosePresetFile(bool save);
     void saveToFolder(const juce::File& folder);
     void addUserPresets(juce::PopupMenu&, std::vector<juce::File>&);
+    // Every way of choosing a preset (menus, arrows, Load, the random key) ends here.
+    void loadBankPreset(int index);
+    void loadUserPreset(const juce::File&);
+    void loadRandomPreset();
     void stepPreset(int direction);
     void updateHover(juce::Point<float>);
     Control controlAt(juce::Point<float>) const noexcept;
@@ -138,6 +148,11 @@ private:
     float barStartValue = 0.0f;
     juce::Point<float> barStartPoint;
     std::vector<juce::File> menuFiles;
+    // The user preset this editor loaded last and the name it showed then, so
+    // the random key skips it even when the file was renamed after saving.
+    juce::File userPresetFile;
+    juce::String userPresetShownAs;
+    juce::Random presetRandom;
     juce::Component::SafePointer<juce::Component> editMenu;
     unsigned menuGeneration = 0;
     juce::Point<float> graphHover;

@@ -86,7 +86,7 @@ inline void checkToolbarLayout(const BackScratchEditor& editor)
     using Control = BackScratchEditor::Control;
     using interactionTests::check;
     constexpr std::array tools {Control::pencil, Control::drawOptions, Control::shapes, Control::eraser, Control::undo, Control::redo};
-    constexpr std::array others {Control::presets, Control::previous, Control::next,
+    constexpr std::array others {Control::presets, Control::randomPreset, Control::previous, Control::next,
         Control::shiftLeft, Control::shiftRight, Control::save, Control::load,
         Control::phraseDuration, Control::phraseLock, Control::dotted, Control::triplet,
         Control::randomize, Control::keepSub};
