@@ -260,6 +260,58 @@ int main(int argc,char** argv){try{
         renderPresets({},v);
         if(v.failed)throw std::runtime_error(std::to_string(v.failed)+" 0.4.0 check(s) failed");
     }
+    // 0.4.3: the die on the preset strip loads a random stored preset (factory or user, never the loaded one)
+    // through the same load as the arrows and the browser.
+    {Verdicts v;using energy::presets::Preset;using energy::presets::randomPick;
+        const auto rawOf=[](EnergyHarvesterProcessor& q,const char* id){return q.apvts.getRawParameterValue(id)->load();};
+        {auto list=energy::presets::factory();size_t loaded=0;for(size_t i=0;i<list.size();++i)if(list[i].name=="Harvest Riser")loaded=i;
+            Preset mine=list.front();mine.folder="Mine";mine.name="Only Mine";mine.factory=false;list.push_back(mine);
+            // A user preset saved under the loaded preset's folder and name shows the same label: not a new pick either.
+            Preset twin=list[loaded];twin.factory=false;list.push_back(twin);
+            juce::Random seeded(4321);std::vector<int> hits(list.size(),0);int missing=0;
+            for(int i=0;i<4000;++i){if(const auto pick=randomPick(list,list[loaded].folder,list[loaded].name,seeded))++hits[*pick];else ++missing;}
+            int reached=0,fewest=4000,most=0;for(size_t i=0;i+1<list.size();++i)if(i!=loaded){reached+=hits[i]>0;fewest=std::min(fewest,hits[i]);most=std::max(most,hits[i]);}
+            v.check(missing==0&&hits[loaded]==0&&hits.back()==0&&reached==int(list.size())-2&&fewest>35&&most<115,"random pick reaches all "+std::to_string(reached)+" other presets, the user one included, in 4000 draws ("
+                +std::to_string(fewest)+" to "+std::to_string(most)+" each) and never the loaded preset or a preset with its label");
+            const std::vector<Preset> only{list[loaded]},none;juce::Random any;
+            v.check(!randomPick(only,list[loaded].folder,list[loaded].name,any)&&!randomPick(none,"","Default",any)&&randomPick(only,"","Default",any)==size_t(0),
+                "random pick does nothing when the loaded preset is the only one or there are none, and takes the only other one");}
+        {const auto root=energy::presets::userRoot();juce::File written;EnergyHarvesterProcessor u;set(u,"mode",3);set(u,"fxAmount",12);
+            v.check(energy::presets::save(root,"Mine","Only Mine",u.currentValues(),written).wasOk(),"scratch user preset for the die: "+written.getFullPathName().toStdString());
+            auto everything=energy::presets::factory();for(const auto& user:energy::presets::userPresets(root))everything.push_back(user);
+            // "Keep" saved twice above lists as "Keep(2)" and "Keep(3)", the labels the strip showed after each save.
+            juce::StringArray labels;for(const auto& preset:everything)labels.addIfNotAlreadyThere(preset.folder+" / "+preset.name);
+            v.check(labels.size()==int(everything.size())&&labels.contains("My Folder / Keep(2)")&&labels.contains("My Folder / Keep(3)"),
+                "every listed preset has its own label; a save under a taken name keeps its numbered name in the browser");
+            EnergyHarvesterProcessor q;set(q,"harvest",1);EnergyHarvesterEditor editor(q);
+            auto* dice=dynamic_cast<juce::Button*>(named(editor,"RANDOM PRESET"));auto* nextKey=named(editor,"NEXT PRESET");auto* saveKey=named(editor,"SAVE PRESET");auto* field=named(editor,"PRESET");
+            v.check(dice&&nextKey&&saveKey&&field&&dice->getTitle()=="RANDOM PRESET"&&dice->getTooltip().isNotEmpty()&&dice->getWantsKeyboardFocus()
+                &&dice->getY()==nextKey->getY()&&dice->getHeight()==nextKey->getHeight()&&dice->getWidth()==nextKey->getWidth()&&field->getRight()<nextKey->getX()&&nextKey->getRight()<dice->getX()&&dice->getRight()<saveKey->getX(),
+                "the die is a focusable, titled key with a tooltip, sized like the arrows, between > and SAVE on the title plate");
+            // Host-side view of each click: gestures (the host's undo) and a session change, as for any preset load.
+            struct Counts{int begins=0,ends=0,values=0,sessions=0;};
+            struct Events final:juce::AudioProcessorListener{Counts n;
+                void audioProcessorParameterChanged(juce::AudioProcessor*,int,float) override {++n.values;}
+                void audioProcessorChanged(juce::AudioProcessor*,const ChangeDetails& d) override {if(d.nonParameterStateChanged)++n.sessions;}
+                void audioProcessorParameterChangeGestureBegin(juce::AudioProcessor*,int) override {++n.begins;}
+                void audioProcessorParameterChangeGestureEnd(juce::AudioProcessor*,int) override {++n.ends;}};
+            const auto click=[&](juce::Button& key){Events e;q.addListener(&e);key.onClick();q.removeListener(&e);return e.n;};
+            const auto position=[&](const std::pair<juce::String,juce::String>& label){for(size_t i=0;i<everything.size();++i)if(everything[i].folder==label.first&&everything[i].name==label.second)return int(i);return -1;};
+            bool fresh=true,listed=true,exact=true,harvestKept=true,hostSaw=true;std::vector<bool> seen(everything.size(),false);
+            for(int i=0;i<1000;++i){const auto before=q.presetLabel();const auto e=click(*dice);const auto after=q.presetLabel();const int at=position(after);
+                fresh=fresh&&after!=before;listed=listed&&at>=0;harvestKept=harvestKept&&rawOf(q,"harvest")==1;
+                hostSaw=hostSaw&&e.begins==e.ends&&e.values==e.begins&&e.sessions==1;
+                if(at<0)continue;seen[size_t(at)]=true;
+                for(const auto& [id,value]:everything[size_t(at)].values){auto* parameter=q.apvts.getParameter(id);
+                    exact=exact&&parameter!=nullptr&&std::abs(rawOf(q,id.toRawUTF8())-parameter->getNormalisableRange().snapToLegalValue(value))<.02f;}}
+            const auto reached=std::count(seen.begin(),seen.end(),true);
+            v.check(fresh&&listed&&seen.back(),"1000 die clicks never repeat the loaded preset and reach "+std::to_string(reached)+" of "+std::to_string(everything.size())+" factory and user presets, user ones included");
+            v.check(exact&&harvestKept&&hostSaw,"each die click applies its preset exactly as host gestures plus one session change, and leaves HARVEST alone");
+            // The arrows carry on from the die's pick, as from any other load.
+            const int from=position(q.presetLabel());const auto stepped=click(*dynamic_cast<juce::Button*>(nextKey));
+            v.check(from>=0&&position(q.presetLabel())==(from+1)%int(everything.size())&&stepped.sessions==1,"> steps on from the preset the die loaded");}
+        if(v.failed)throw std::runtime_error(std::to_string(v.failed)+" random preset check(s) failed");
+    }
     set(p,"harvest",0);set(p,"spinUpMs",800);set(p,"fxAmount",45);set(p,"outputDb",0);p.uiScale=100;p.reducedMotion=false;p.prepareToPlay(48000,128);process(p,128);
     if(argc>1){juce::File folder(juce::String::fromUTF8(argv[1]));folder.createDirectory();
         EnergyHarvesterEditor editor(p);check(editor.getWidth()==518&&editor.getHeight()==691,"native portrait editor follows selected layout");
@@ -321,6 +373,14 @@ int main(int argc,char** argv){try{
         for(const auto& preset:energy::presets::factory())if(preset.name=="Harvest Riser"){p.applyPreset(preset.values,preset.folder,preset.name);}
         editor.showPageForTesting(0);editor.previewTime(0);snapshot(editor,folder.getChildFile("ENERGY-HARVESTER-preset.png"));
         check(dynamic_cast<juce::Button*>(named(editor,"PRESET"))!=nullptr,"preset strip on the title plate");
+        // The die (0.4.3): a pick on the full device, then the title plate at 2x at rest, under the pointer and pressed.
+        if(auto* dice=dynamic_cast<juce::Button*>(named(editor,"RANDOM PRESET"))){dice->onClick();editor.previewTime(0);snapshot(editor,folder.getChildFile("ENERGY-HARVESTER-random-preset.png"));
+            for(const auto& preset:energy::presets::factory())if(preset.name=="Harvest Riser")p.applyPreset(preset.values,preset.folder,preset.name);
+            editor.previewTime(0);
+            for(auto [state,file]:std::vector<std::pair<juce::Button::ButtonState,const char*>>{{juce::Button::buttonNormal,"plate-2x.png"},{juce::Button::buttonOver,"plate-2x-die-hover.png"},{juce::Button::buttonDown,"plate-2x-die-pressed.png"}}){
+                dice->setState(state);auto image=editor.createComponentSnapshot({87,18,359,51},true,2.f);juce::FileOutputStream s(folder.getChildFile(juce::String("ENERGY-HARVESTER-")+file));s.setPosition(0);s.truncate();
+                check(s.openedOk()&&juce::PNGImageFormat().writeImageToStream(image,s),"title plate close-up saved");}
+            dice->setState(juce::Button::buttonNormal);}
         editor.setSize(777,1036);snapshot(editor,folder.getChildFile("ENERGY-HARVESTER-150.png"));
         editor.setSize(466,621);snapshot(editor,folder.getChildFile("ENERGY-HARVESTER-compact.png"));editor.setSize(647,863);snapshot(editor,folder.getChildFile("ENERGY-HARVESTER-large.png"));
         auto demos=folder.getParentDirectory().getChildFile("Demos");demos.createDirectory();demo(demos.getChildFile("01-bass-dry-basic-magnetic.wav"),0);demo(demos.getChildFile("02-chord-dry-basic-magnetic.wav"),1);demo(demos.getChildFile("03-pluck-dry-basic-magnetic.wav"),2);

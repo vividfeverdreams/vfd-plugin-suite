@@ -107,6 +107,12 @@ juce::String cleanName(const juce::String& text) {
     while(name.startsWithChar('.')) name=name.substring(1);
     return name.substring(0,64).trim();
 }
+std::optional<size_t> randomPick(const std::vector<Preset>& list,const juce::String& folder,const juce::String& name,juce::Random& random) {
+    std::vector<size_t> candidates;
+    for(size_t i=0;i<list.size();++i) if(list[i].folder!=folder || list[i].name!=name) candidates.push_back(i);
+    if(candidates.empty()) return std::nullopt;
+    return candidates[size_t(random.nextInt(int(candidates.size())))];
+}
 juce::StringArray userFolders(const juce::File& root) {
     juce::StringArray folders;
     for(const auto& entry:juce::RangedDirectoryIterator(root,false,"*",juce::File::findDirectories))
@@ -143,10 +149,11 @@ juce::Result save(const juce::File& root,const juce::String& folder,const juce::
     const auto directory=root.getChildFile(folderName);
     if(!directory.isDirectory()) if(auto created=directory.createDirectory(); created.failed()) return created;
     juce::XmlElement xml("ENERGY_HARVESTER_PRESET");
-    xml.setAttribute("version",1); xml.setAttribute("name",presetName); xml.setAttribute("plugin","ENERGY HARVESTER");
-    for(const auto& [id,value]:values) { auto* child=xml.createNewChildElement("PARAM"); child->setAttribute("id",id); child->setAttribute("value",double(value)); }
-    // getNonexistentChildFile never returns an existing file, so user files are never replaced.
+    // getNonexistentChildFile never returns an existing file, so user files are never replaced. The stored name is
+    // the file's, numbered when the name was taken, so the browser lists it under the name the strip shows.
     written=directory.getNonexistentChildFile(presetName,extension,true);
+    xml.setAttribute("version",1); xml.setAttribute("name",written.getFileNameWithoutExtension()); xml.setAttribute("plugin","ENERGY HARVESTER");
+    for(const auto& [id,value]:values) { auto* child=xml.createNewChildElement("PARAM"); child->setAttribute("id",id); child->setAttribute("value",double(value)); }
     if(!xml.writeTo(written)) return juce::Result::fail("Could not write "+written.getFullPathName());
     return juce::Result::ok();
 }

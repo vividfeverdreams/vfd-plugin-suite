@@ -1,3 +1,17 @@
+# 0.4.3 — random preset
+
+- A die on the title plate's preset strip, between ▶ and SAVE, loads a random preset: any factory or user preset the browser lists, never the one already loaded. It loads exactly like a pick from the browser (one undoable change for the host, HARVEST untouched), and ◀ ▶ carry on from it.
+- The die is drawn in the strip's own key style (pearl on the dark plate, same hover, press and focus ring). The name field is 24 px narrower to make room.
+- Fix: a user preset saved under a name that was already taken (stored as, say, "Keep(2)") is now listed under that numbered name, the one the strip shows after saving, instead of a second "Keep". The arrows and the die now recognise it as the loaded preset.
+
+# 0.4.2 — tooltips stay inside the device
+
+- Tooltips are kept inside the visible device (the window shows only part of the design canvas) and wrap between words, in Chakra Petch. INFO shows the suite version and offers updates.
+
+# 0.4.1 — menus open at the pointer
+
+- The right-click menu (Reduced Motion, size) opens at the pointer instead of under the whole device.
+
 # 0.4.0 — tape stops, rewinds, presets and the latest sound
 
 New gestures and controls (all saved with the project and host-automatable, except Latest Sound):

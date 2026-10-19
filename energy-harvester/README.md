@@ -1,10 +1,10 @@
-# ENERGY HARVESTER 0.4.2
+# ENERGY HARVESTER 0.4.3
 
 A tape-gesture effect for bass music: tape starts, tape stops, turntable brakes, stop-and-restart stutters and rewinds. Each gesture can land exactly on the beat, and five screen effects can join it. Plasma-pink hardware interface, with a light show that follows the tape.
 
 Apple Silicon, macOS 12+, VST3 and Audio Unit (and VST3 on Windows, from the suite). Works on matching mono or stereo tracks. No MIDI is used. The only network access is the INFO page's suite update check (GitHub, at most once a day while the window is open; see the suite README).
 
-**New in 0.4.2:** tooltips stay fully inside the device and wrap between words (long ones used to run off the window's edge), and INFO shows the suite version and offers updates.
+**New in 0.4.3:** a die on the preset strip loads a random preset. (0.4.2: tooltips stay fully inside the device and wrap between words, and INFO shows the suite version and offers updates.)
 
 ## Use
 
@@ -47,6 +47,7 @@ A launch keeps the length, mode, engine, curve, depth and landing it started wit
 
 **Presets.** The strip on the title plate shows the current preset:
 - ◀ and ▶ step through all presets; clicking the name opens the browser.
+- The die beside ▶ loads a random preset, factory or user, never the one already loaded. It loads like any other pick, so the host can undo it.
 - There are 56 factory presets in 10 folders: Tape Starts, Tape Stops, Brakes, Rewinds, Power-Ups, Risers, Drops, Washouts, Lo-Fi and Grid-Locked. See PRESETS.md.
 - SAVE stores the current settings as a user preset in `~/Library/Application Support/ENERGY HARVESTER/Presets/<Folder>/`. Pick an existing folder or type a new one.
 - Saving never overwrites an existing file; a taken name gets a number.

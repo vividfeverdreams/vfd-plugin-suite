@@ -205,17 +205,27 @@ public:
         layout(text,pearl).draw(g,r.reduced(10,7));
     }
 };
+// A five-pip die in the strip's pearl, for the random-preset key: drawn like the key text (no accent colour), on
+// whole pixels so it stays crisp at 100 %.
+void drawDie(juce::Graphics& g,juce::Rectangle<float> face,juce::Colour colour) {
+    g.setColour(colour.withMultipliedAlpha(.16f));g.fillRoundedRectangle(face,2.f);
+    g.setColour(colour);g.drawRoundedRectangle(face.reduced(.5f),2.f,1.f);
+    const auto c=face.getCentre();const float step=(face.getWidth()-1)*.25f,r=face.getWidth()*.115f;
+    const float pips[5][2]{{-1,-1},{1,-1},{0,0},{-1,1},{1,1}};
+    for(const auto& p:pips)g.fillEllipse(c.x+p[0]*step-r,c.y+p[1]*step-r,r*2,r*2);
+}
 // Small flat text key used on the title plate's preset strip.
 class PlateKey final:public juce::Button {
 public:
     PlateKey(const juce::String& name,juce::Typeface::Ptr f,juce::String text):Button(name),label(std::move(text)),face(f){setWantsKeyboardFocus(true);setTitle(name);setMouseCursor(juce::MouseCursor::PointingHandCursor);}
-    juce::String label;bool field=false;
+    juce::String label;bool field=false,die=false;
     void paintButton(juce::Graphics& g,bool hover,bool down) override {
         auto b=getLocalBounds().toFloat().reduced(.5f);
         g.setColour(juce::Colour(0xff2a0b22).withAlpha(field?.78f:(down?.7f:hover?.55f:.38f)));g.fillRoundedRectangle(b,3);
         g.setColour(pearl.withAlpha(hover||field?.35f:.18f));g.drawRoundedRectangle(b,3,.8f);
-        g.setColour(pearl.withAlpha(down?.75f:1.f));g.setFont(vfd::font(face,10.f));
-        g.drawFittedText(label,getLocalBounds().reduced(field?7:2,0),field?juce::Justification::centredLeft:juce::Justification::centred,1,.75f);
+        const auto text=pearl.withAlpha(down?.75f:1.f);g.setColour(text);g.setFont(vfd::font(face,10.f));
+        if(die)drawDie(g,juce::Rectangle<float>(float((getWidth()-9)/2),float((getHeight()-9)/2),9,9),text);
+        else g.drawFittedText(label,getLocalBounds().reduced(field?7:2,0),field?juce::Justification::centredLeft:juce::Justification::centred,1,.75f);
         if(hasKeyboardFocus(true)){g.setColour(pink);g.drawRoundedRectangle(b,3,1.2f);}
     }
 private:juce::Typeface::Ptr face;
@@ -355,11 +365,14 @@ public:
         output.valueFromTextFunction=[](const juce::String& text){return text.getDoubleValue();};output.updateText();output.setDoubleClickReturnValue(true,0);
         output.setTooltip("Level of the effected voice. Clean audio keeps its original level. Shift-drag for fine adjustment; click the value to type dB. Double-click restores 0 dB.");
         // Preset strip on the title plate.
-        for(auto* k:{&previous,&presetField,&next,&save})addAndMakeVisible(*k);
+        for(auto* k:{&previous,&presetField,&next,&dice,&save})addAndMakeVisible(*k);
         presetField.field=true;presetField.setTooltip("Choose a factory or user preset.");previous.setTooltip("Previous preset");next.setTooltip("Next preset");
+        dice.die=true;dice.setTooltip("Load a random factory or user preset.");
         save.setTooltip("Save the current settings as a user preset (choose or create a folder). Existing presets are never overwritten.");
-        previous.setBounds(124,58,20,16);presetField.setBounds(148,58,234,16);next.setBounds(386,58,20,16);save.setBounds(412,58,46,16);
+        // The die joins the arrows (it browses too); SAVE keeps its wider gap at the plate's end.
+        previous.setBounds(124,58,20,16);presetField.setBounds(148,58,210,16);next.setBounds(362,58,20,16);dice.setBounds(386,58,20,16);save.setBounds(412,58,46,16);
         previous.onClick=[this]{stepPreset(-1);};next.onClick=[this]{stepPreset(1);};presetField.onClick=[this]{showPresetMenu();};save.onClick=[this]{savePreset();};
+        dice.onClick=[this]{randomPreset();};
         updatePresetLabel();
         addAndMakeVisible(info);info.setBounds(228,615,104,40);info.setExplicitFocusOrder(11);
         addChildComponent(setup);setup.setBounds(94,88,372,364);setup.doneKey().onClick=[this]{showSetup(false);};
@@ -463,6 +476,11 @@ private:
         index=index<0?(direction>0?0:int(list.size())-1):(index+direction+int(list.size()))%int(list.size());
         load(list[size_t(index)]);
     }
+    // A stored preset, not new settings: any factory or user preset the browser lists except the loaded one.
+    void randomPreset(){
+        const auto list=allPresets();const auto [folder,name]=processor.presetLabel();
+        if(const auto index=energy::presets::randomPick(list,folder,name,juce::Random::getSystemRandom()))load(list[*index]);
+    }
     void showPresetMenu(){
         menuPresets=allPresets();juce::PopupMenu menu,user;std::map<juce::String,juce::PopupMenu> folders,userFolders;juce::StringArray order,userOrder;
         const auto [currentFolder,currentName]=processor.presetLabel();
@@ -559,7 +577,7 @@ private:
     std::array<std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment>,5> effectAttachments;vfd::InfoButton info;vfd::InfoOverlay overlay;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> buttonAttachment,modeAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> timeAttachment,divisionAttachment,fxAttachment,outputAttachment;
-    PlateKey previous{"PREVIOUS PRESET",normal,"<"},presetField{"PRESET",normal,"Default"},next{"NEXT PRESET",normal,">"},save{"SAVE PRESET",normal,"SAVE"};
+    PlateKey previous{"PREVIOUS PRESET",normal,"<"},presetField{"PRESET",normal,"Default"},next{"NEXT PRESET",normal,">"},dice{"RANDOM PRESET",normal,{}},save{"SAVE PRESET",normal,"SAVE"};
     SetupScreen setup;std::unique_ptr<juce::AlertWindow> dialog;std::vector<energy::presets::Preset> menuPresets;
     energy::ui::HarvestLights lights;TipLook tipLook;juce::TooltipWindow tooltips{this,600};
     double lastTime=0,lastPublishTime=0;std::uint64_t lastPublished=0;

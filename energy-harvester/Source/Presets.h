@@ -26,5 +26,9 @@ std::optional<Preset> read(const juce::File& file);
 juce::Result save(const juce::File& root, const juce::String& folder, const juce::String& name,
                   const std::map<juce::String,float>& values, juce::File& written);
 juce::String cleanName(const juce::String& text);
+// The preset strip's die: an index into `list`, uniform over every preset except the loaded one (any preset labelled
+// folder / name), or nothing when there is no other preset to load.
+std::optional<size_t> randomPick(const std::vector<Preset>& list, const juce::String& folder, const juce::String& name,
+                                 juce::Random& random);
 inline constexpr const char* extension = ".ehpreset";
 }
