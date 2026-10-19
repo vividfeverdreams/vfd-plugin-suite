@@ -1,6 +1,10 @@
-# YOI-BOI 0.2.2
+# YOI-BOI 0.2.3
 
 YOI-BOI is a monophonic talking-bass synthesizer for Apple Silicon macOS, built as a **VST3 instrument**, an **Audio Unit instrument** and a **standalone app**. Play a MIDI phrase, press **NEW YOI**, and shape the result with Mouth, Size, Bite, Dirt, Length and Sub.
+
+## What's new in 0.2.3
+
+- **Random preset.** The die beside the sound's name, next to the Favorite star, loads a random preset. In the LIBRARY it sits next to YOUR SOUNDS. It picks from what the Library is showing (ALL SOUNDS, FAVORITES, SAVED or a folder, narrowed by your search) and never the sound that is already loaded. It loads the preset exactly as choosing it yourself does, so Undo goes back. **NEW YOI** still makes a brand-new sound.
 
 ## What's new in 0.2.2
 

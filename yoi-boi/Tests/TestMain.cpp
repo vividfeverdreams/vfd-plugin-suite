@@ -234,6 +234,22 @@ bool renderEditor (const juce::String& path)
         editor->setSize(juce::roundToInt(1055 * scale), juce::roundToInt(717 * scale));
         if (! shot (juce::String (juce::roundToInt (scale * 100)))) return false;
     }
+    // Random preset: a random pick, then the die under the pointer and pressed beside the name, under the
+    // pointer in the Library, and disabled there when the view (no Favorites yet) is empty.
+    editor->setSize (1055, 717);
+    const auto dieIn = [&] (juce::Button::ButtonState state)
+    {
+        auto* die = findTab (findTab, editor.get(), "RANDOM");
+        if (die == nullptr || ! die->isVisible()) return false;
+        die->setState (state);
+        return true;
+    };
+    if (auto* die = findTab (findTab, editor.get(), "RANDOM"); die == nullptr || ! die->onClick) return false;
+    else die->onClick();
+    if (! dieIn (juce::Button::buttonOver) || ! shot ("random")) return false;
+    if (! dieIn (juce::Button::buttonDown) || ! shot ("random-down")) return false;
+    if (! clickTab ("LIBRARY") || ! clickTab ("SOUNDS") || ! dieIn (juce::Button::buttonOver) || ! shot ("library-random")) return false;
+    if (! clickTab ("FAVORITES") || ! dieIn (juce::Button::buttonNormal) || ! shot ("library-random-empty")) return false;
     editor.reset();
     presetRoot.deleteRecursively();
     bounceFolder.deleteRecursively();

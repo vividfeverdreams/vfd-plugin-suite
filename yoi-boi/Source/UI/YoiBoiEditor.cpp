@@ -47,6 +47,22 @@ void drawDice(juce::Graphics& g, juce::Point<float> centre, float size, juce::Co
         g.fillEllipse(centre.x + dot.x - radius, centre.y + dot.y - radius, radius * 2.0f, radius * 2.0f);
 }
 
+// Random preset: a die in the screen's line style (the Favorite star's cyan stroke) so it reads as
+// a Library action, not as the NEW YOI cap's solid lime die that makes a brand-new sound.
+void drawPresetDie(juce::Graphics& g, juce::Point<float> centre, float size, juce::Colour colour)
+{
+    const auto face = juce::Rectangle<float>(size, size).withCentre(centre);
+    const float corner = size * 0.24f;
+    g.setColour(colour.withMultipliedAlpha(0.16f));
+    g.fillRoundedRectangle(face, corner);
+    g.setColour(colour);
+    g.drawRoundedRectangle(face, corner, size >= 18.0f ? 1.6f : 1.4f);
+    const float offset = size * 0.25f, radius = size * 0.09f;
+    for (const auto dot : std::array<juce::Point<float>, 5> {{{-offset, -offset}, {offset, -offset},
+                                                            {0, 0}, {-offset, offset}, {offset, offset}}})
+        g.fillEllipse(centre.x + dot.x - radius, centre.y + dot.y - radius, radius * 2.0f, radius * 2.0f);
+}
+
 juce::Font font(float size, bool bold = false, bool italic = false)
 {
     juce::ignoreUnused(bold);
@@ -134,7 +150,7 @@ public:
         const auto dark = static_cast<bool>(b.getProperties().getWithDefault("dark", false));
         const auto role = b.getProperties().getWithDefault("role", juce::String()).toString();
         const auto active = b.getToggleState();
-        if (role == "favorite" || role == "sync")
+        if (role == "favorite" || role == "sync" || role == "randomPreset")
         {
             if (highlighted || b.hasKeyboardFocus(true))
             {
@@ -232,6 +248,15 @@ public:
             g.setColour(b.getToggleState() ? lime : cyan);
             if (b.getToggleState()) g.fillPath(star);
             g.strokePath(star, juce::PathStrokeType(1.6f));
+            return;
+        }
+        if (role == "randomPreset")
+        {
+            // Sized to the button: beside the sound's name its foot lines up with the star's lower points;
+            // in the Library it matches the heading.
+            const auto area = b.getLocalBounds().toFloat();
+            drawPresetDie(g, area.getCentre().translated(0, down ? 1.0f : 0.0f), area.getHeight() * 0.62f,
+                          (down ? lime : cyan).withMultipliedAlpha(b.isEnabled() ? 1.0f : 0.4f));
             return;
         }
         if (role == "sync")
@@ -908,6 +933,11 @@ public:
         favorite.getProperties().set("role", "favorite");
         favorite.setTooltip("Favorite a factory or saved preset. Save a new sound first to keep it.");
         favorite.onClick = [this] { if (callbacks.toggleFavorite) callbacks.toggleFavorite(); refreshLibrary(); };
+        setupButton(randomPreset, "RANDOM", true);
+        randomPreset.setTitle("Random preset");
+        randomPreset.getProperties().set("role", "randomPreset");
+        randomPreset.setTooltip("Load a random preset from the sounds the Library is showing. New Yoi makes a brand-new sound instead.");
+        randomPreset.onClick = [this] { loadRandomPreset(); };
 
         family.addItemList({ "ALL FAMILIES", "RUBBER", "METAL", "THROAT", "SQUEAK" }, 1);
         family.setSelectedId(1, juce::dontSendNotification);
@@ -1541,7 +1571,8 @@ public:
             text(g, familyText.toUpperCase() + (page == 1 ? "  /  SHAPE" : "  /  MOUTH MOTION"),
                  { 104, 116, 390, 20 }, 17, cyan, true);
             g.setFont(displayFont(42)); g.setColour(cyan.brighter(0.15f));
-            g.drawFittedText(patchName, { 103, 132, 467, 38 }, juce::Justification::centredLeft, 1);
+            // Ends short of the Random preset die and Favorite star that follow the name.
+            g.drawFittedText(patchName, { 103, 132, 441, 38 }, juce::Justification::centredLeft, 1);
             if (page == 0)
             {
                 if (callbacks.waveform)
@@ -1628,6 +1659,9 @@ public:
         undo.setBounds(820, 331, 96, 60); redo.setBounds(925, 331, 97, 60);
         family.setBounds(page == libraryPage ? 585 : 631, 120, page == libraryPage ? 143 : 135, 28);
         favorite.setBounds(page == libraryPage ? 730 : 582, page == libraryPage ? 118 : 136, 34, 34);
+        // Random preset: just before the star at the end of the sound's name; on the Library, after the
+        // YOUR SOUNDS heading of the list it draws from.
+        randomPreset.setBounds(page == libraryPage ? juce::Rectangle<int>(188, 115, 26, 26) : juce::Rectangle<int>(548, 136, 34, 34));
         abA.setBounds(631, 152, 40, 22); abB.setBounds(673, 152, 40, 22); abCopy.setBounds(715, 152, 52, 22);
         const std::array<int, 6> centres { 132, 287, 442, 599, 757, 928 };
         for (int i = 0; i < 6; ++i) macros[static_cast<size_t>(i)]->setBounds(centres[static_cast<size_t>(i)] - 74, 426, 148, 160);
@@ -1667,6 +1701,7 @@ public:
         for (int i = 0; i < 4; ++i) tabs[static_cast<size_t>(i)].setToggleState(i == page, juce::dontSendNotification);
         gesture.setVisible(page == playPage || page == shapePage); gesture.editing = page == shapePage;
         favorite.setVisible(page != modPage);
+        randomPreset.setVisible(page != modPage);
         family.setVisible(page == playPage || page == libraryPage);
         for (auto* c : std::array<juce::Component*, 7> { &selectedPoint, &pose, &bodyTime, &curve, &snap, &resetShape, &motionLock }) c->setVisible(page == shapePage);
         for (auto* c : modControls) c->setVisible(page == modPage);
@@ -1788,6 +1823,7 @@ public:
         preview.setToggleState(playing, juce::dontSendNotification);
         save.setEnabled(static_cast<bool>(callbacks.savePreset));
         load.setEnabled(callbacks.loadPreset && library.getSelectedRow() >= 0 && library.getSelectedRow() < static_cast<int>(filtered.size()));
+        randomPreset.setEnabled(callbacks.loadPreset && ! filtered.empty());
         family.setEnabled(static_cast<bool>(callbacks.setGenerationFamily));
         if (callbacks.generationFamily && ! family.isPopupActive())
         {
@@ -1965,6 +2001,23 @@ public:
             callbacks.loadPreset(item.id); toast("Loaded " + item.name); refreshLibrary();
         }
     }
+    // Picks from what the Library lists now (filter, folder and search apply), never the sound already
+    // loaded, then loads it exactly as selecting that row and pressing LOAD does.
+    void loadRandomPreset()
+    {
+        if (! callbacks.loadPreset) return;
+        refreshLibrary();
+        std::vector<int> candidates;
+        for (int row = 0; row < static_cast<int>(filtered.size()); ++row)
+            if (! filtered[static_cast<size_t>(row)].current) candidates.push_back(row);
+        if (candidates.empty())
+        {
+            toast(filtered.empty() ? "No sounds match this view" : "No other sounds in this view");
+            return;
+        }
+        library.selectRow(candidates[static_cast<size_t>(randomPicker.nextInt(static_cast<int>(candidates.size())))]);
+        loadSelected();
+    }
     void showSaveDialog()
     {
         if (! callbacks.savePreset) return;
@@ -2012,7 +2065,7 @@ public:
     std::unique_ptr<vfd::InfoOverlay> infoOverlay;
     Theme theme;
     std::array<juce::TextButton, 4> tabs;
-    juce::TextButton newYoi, mutate, undo, redo, favorite, preview, zoom, close;
+    juce::TextButton newYoi, mutate, undo, redo, favorite, randomPreset, preview, zoom, close;
     ParameterButton oneShot, loop, sync, lowCut;
     ParameterCombo subMode, lengthFeel;
     juce::ComboBox family;
@@ -2052,6 +2105,7 @@ public:
     juce::TextButton load, save;
     juce::TooltipWindow tooltip;
     std::vector<PresetItem> filtered;
+    juce::Random randomPicker;
     std::array<bool, 6> fallbackLocks { false, false, false, false, true, true };
     juce::String patchName, familyText, status;
     double statusUntil = 0;

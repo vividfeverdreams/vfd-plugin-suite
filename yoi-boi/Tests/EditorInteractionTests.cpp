@@ -64,6 +64,28 @@ bool clickControl (juce::Component& editor, const juce::String& title)
     return false;
 }
 
+struct TemporaryPresetFolder
+{
+    juce::File path = juce::File::getSpecialLocation (juce::File::tempDirectory)
+                          .getChildFile ("YOI-BOI-random-preset-" + juce::Uuid().toString());
+    ~TemporaryPresetFolder() { path.deleteRecursively(); }
+};
+
+// The Library id of the preset the current sound was loaded from, or "" for a generated sound.
+juce::String currentPresetId (EditorCallbacks& callbacks)
+{
+    for (const auto& item : callbacks.listPresets())
+        if (item.current) return item.id;
+    return {};
+}
+
+const PresetItem* findPreset (const std::vector<PresetItem>& items, const juce::String& id)
+{
+    for (const auto& item : items)
+        if (item.id == id) return &item;
+    return nullptr;
+}
+
 struct GestureCounter final : juce::AudioProcessorParameter::Listener
 {
     void parameterValueChanged (int, float) override {}
@@ -296,6 +318,157 @@ public:
             }
         }
 
+        beginTest ("Random preset loads another preset through the same path as LOAD, with Undo");
+        {
+            TemporaryPresetFolder folder;
+            YoiBoiProcessor synth (folder.path);
+            auto callbacks = synth.makeEditorCallbacks();
+            juce::StringArray loaded;
+            auto realLoad = callbacks.loadPreset;
+            callbacks.loadPreset = [&] (const juce::String& id) { loaded.add (id); realLoad (id); };
+            YoiBoiEditor editor (synth, synth.parameters(), callbacks);
+            auto* dice = findControl<juce::Button> (editor, "Random preset");
+            auto* favorite = findControl<juce::Button> (editor, "FAVORITE");
+            auto* newYoi = findControl<juce::Button> (editor, "NEW YOI");
+            expect (dice != nullptr && favorite != nullptr && newYoi != nullptr);
+            if (dice != nullptr && favorite != nullptr && newYoi != nullptr)
+            {
+                expect (dice->isVisible() && dice->isEnabled());
+                expect (dice->getTooltip().containsIgnoreCase ("preset") && dice->getTooltip() != newYoi->getTooltip());
+                expect (dice->getWantsKeyboardFocus() && ! dice->getMouseClickGrabsKeyboardFocus());
+                expect (! dice->getBounds().intersects (favorite->getBounds()), "The die sits beside the star");
+                const auto firstName = callbacks.currentPatchName();
+                std::set<juce::String> seen;
+                for (int pick = 0; pick < 40; ++pick)
+                {
+                    const auto before = currentPresetId (callbacks);
+                    expect (clickControl (editor, "Random preset"));
+                    expectEquals (loaded.size(), pick + 1, "Each click loads one preset through loadPreset");
+                    if (loaded.size() != pick + 1) break;
+                    expect (loaded[pick] != before, "Random preset never picks the preset already loaded");
+                    expectEquals (currentPresetId (callbacks), loaded[pick]);
+                    const auto items = callbacks.listPresets();
+                    if (const auto* item = findPreset (items, loaded[pick])) expectEquals (callbacks.currentPatchName(), item->name);
+                    else expect (false, "Loaded an id the Library does not list");
+                    seen.insert (loaded[pick]);
+                }
+                expect (seen.size() > 15, "Picks spread across the whole Library");
+                expect (callbacks.canUndo());
+                if (loaded.size() >= 2)
+                {
+                    callbacks.undo();
+                    expectEquals (currentPresetId (callbacks), loaded[loaded.size() - 2], "Undo returns to the previous preset");
+                }
+                for (int i = 0; i < 40; ++i) callbacks.undo();
+                expectEquals (callbacks.currentPatchName(), firstName);
+
+                // Beside the sound's name on PLAY and SHAPE, at the Library's list, and away on MOD with the star.
+                for (const auto* tab : { "SHAPE", "MOD", "LIBRARY", "PLAY" })
+                {
+                    expect (clickControl (editor, tab));
+                    expect (dice->isVisible() == (juce::String (tab) != "MOD"), juce::String ("Random preset on ") + tab);
+                    expect (dice->isVisible() == favorite->isVisible(), juce::String ("Die and star together on ") + tab);
+                }
+                // A pick made in the Library selects its row, as choosing it by hand does.
+                expect (clickControl (editor, "LIBRARY"));
+                expect (clickControl (editor, "Random preset"));
+                auto* load = findControl<juce::Button> (editor, "LOAD");
+                expect (load != nullptr && waitForEditor ([&] { return load->isEnabled(); }));
+            }
+        }
+
+        beginTest ("Random preset draws only from the Library's filter, folder and search");
+        {
+            TemporaryPresetFolder folder;
+            YoiBoiProcessor synth (folder.path);
+            auto callbacks = synth.makeEditorCallbacks();
+            juce::StringArray loaded;
+            auto realLoad = callbacks.loadPreset;
+            callbacks.loadPreset = [&] (const juce::String& id) { loaded.add (id); realLoad (id); };
+            expect (callbacks.savePreset ("Alpha Yoi"));
+            synth.parameters().getParameter ("mouth")->setValueNotifyingHost (0.2f);
+            expect (callbacks.savePreset ("Beta Yoi")); // now the loaded sound
+            YoiBoiEditor editor (synth, synth.parameters(), callbacks);
+            auto* dice = findControl<juce::Button> (editor, "Random preset");
+            auto* search = findControl<juce::TextEditor> (editor, "Search sounds");
+            auto* folders = findControl<juce::ListBox> (editor, "Preset folders");
+            expect (dice != nullptr && search != nullptr && folders != nullptr);
+            const auto nameOf = [&] (const juce::String& id)
+            {
+                const auto items = callbacks.listPresets();
+                const auto* item = findPreset (items, id);
+                return item != nullptr ? item->name : juce::String();
+            };
+            if (dice != nullptr && search != nullptr && folders != nullptr)
+            {
+                // SAVED holds two sounds, one of them loaded: picks alternate and never leave SAVED.
+                expect (clickControl (editor, "LIBRARY"));
+                expect (clickControl (editor, "SAVED"));
+                for (int pick = 0; pick < 6; ++pick)
+                {
+                    expect (clickControl (editor, "Random preset"));
+                    expectEquals (nameOf (loaded[pick]), juce::String (pick % 2 == 0 ? "Alpha Yoi" : "Beta Yoi"));
+                }
+
+                // Search narrows the view further. With only the loaded sound left, nothing loads.
+                const auto setSearch = [&] (const juce::String& text)
+                {
+                    search->setText (text, false);
+                    search->onTextChange();
+                    pumpEditor();
+                };
+                setSearch ("Alpha");
+                expect (clickControl (editor, "Random preset"));
+                expectEquals (nameOf (loaded[loaded.size() - 1]), juce::String ("Alpha Yoi"));
+                const auto count = loaded.size();
+                expect (clickControl (editor, "Random preset"));
+                expectEquals (loaded.size(), count, "The only listed sound is already loaded");
+                expectEquals (callbacks.currentPatchName(), juce::String ("Alpha Yoi"));
+                setSearch ("no-matching-yoi-948127");
+                expect (waitForEditor ([&] { return ! dice->isEnabled(); }), "An empty view disables the die");
+                setSearch ({});
+                expect (waitForEditor ([&] { return dice->isEnabled(); }));
+
+                // A factory folder: every pick comes from it.
+                juce::StringArray folderKeys;
+                for (const auto& item : callbacks.listPresets())
+                    if (item.folder.isNotEmpty() && item.folder != "Saved") folderKeys.addIfNotAlreadyThere (item.folder);
+                expect (folderKeys.size() > 2 && folders->getListBoxModel() != nullptr);
+                if (folderKeys.size() > 2 && folders->getListBoxModel() != nullptr)
+                {
+                    folders->getListBoxModel()->returnKeyPressed (2);
+                    pumpEditor();
+                    for (int pick = 0; pick < 12; ++pick)
+                    {
+                        const auto before = currentPresetId (callbacks);
+                        expect (clickControl (editor, "Random preset"));
+                        const auto items = callbacks.listPresets();
+                        const auto* item = findPreset (items, loaded[loaded.size() - 1]);
+                        expect (item != nullptr && item->folder == folderKeys[2] && item->id != before,
+                                "Picks stay in the " + folderKeys[2] + " folder and never repeat");
+                    }
+                }
+
+                // FAVORITES: empty at first, then only the three marked sounds.
+                expect (clickControl (editor, "FAVORITES"));
+                expect (waitForEditor ([&] { return ! dice->isEnabled(); }), "No favorites, no pick");
+                for (const auto* id : { "factory:14", "factory:30", "factory:41" })
+                {
+                    realLoad (id);
+                    expect (clickControl (editor, "FAVORITE"));
+                }
+                expect (waitForEditor ([&] { return dice->isEnabled(); }));
+                for (int pick = 0; pick < 9; ++pick)
+                {
+                    const auto before = currentPresetId (callbacks);
+                    expect (clickControl (editor, "Random preset"));
+                    const auto id = loaded[loaded.size() - 1];
+                    expect ((id == "factory:14" || id == "factory:30" || id == "factory:41") && id != before,
+                            "Picks are favorites other than the loaded one");
+                }
+            }
+        }
+
         beginTest ("Sub routing, body low-cut and musical feel are real undoable controls");
         {
             YoiBoiProcessor synth;
@@ -456,7 +629,8 @@ public:
                     expect (slider->getWantsKeyboardFocus());
                     expect (slider->getTitle().isNotEmpty());
                 }
-                for (const auto* title : { "Sub routing", "BODY LOW-CUT", "Length rhythm", "Interface zoom and settings", "Close plug-in window" })
+                for (const auto* title : { "Sub routing", "BODY LOW-CUT", "Length rhythm", "Interface zoom and settings", "Close plug-in window",
+                                           "Random preset" })
                 {
                     auto* control = findControl<juce::Component> (*editor, title);
                     expect (control != nullptr);

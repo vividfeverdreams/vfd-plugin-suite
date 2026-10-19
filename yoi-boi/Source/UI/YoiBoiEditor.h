@@ -18,6 +18,7 @@ struct PresetItem
     juce::String folder;      // Library folder: a factory category, or "Saved" / "Saved/<subfolder>"
     juce::StringArray tags;
     int engine = 4;
+    bool current = false;     // the sound playing now was loaded from this preset (edited or not)
 };
 
 struct BounceInfo

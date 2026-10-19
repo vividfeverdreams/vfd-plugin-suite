@@ -1025,12 +1025,15 @@ std::vector<PresetItem> YoiBoiProcessor::listPresets() const
     const juce::ScopedLock lock (stateMutex);
     const auto isFavorite = [this] (const Patch& patch)
     { return favorites.end() != std::find (favorites.begin(), favorites.end(), favoriteKey (patch)); };
+    // New Yoi and Mutate clear the preset id, so a generated sound marks nothing.
+    const auto isCurrent = [this] (const Patch& patch)
+    { return currentPatch.presetId.isNotEmpty() && patch.presetId == currentPatch.presetId; };
     const auto& factory = allFactoryPresets();
     const auto addFactory = [&] (int i)
     {
         const auto& patch = factory[static_cast<size_t> (i)];
         result.push_back ({ "factory:" + juce::String (i), patch.name, familyLabel (patch), isFavorite (patch), false, false,
-                            patch.folder, patch.tags, patch.soundEngine });
+                            patch.folder, patch.tags, patch.soundEngine, isCurrent (patch) });
     };
     // The 0.2.0 bank is listed first and the original twelve (Classic) after
     // it. Ids stay the bank positions, so saved references are unaffected.
@@ -1043,7 +1046,8 @@ std::vector<PresetItem> YoiBoiProcessor::listPresets() const
         if (! entry.available) continue;
         result.push_back ({ "user:" + juce::String (i), entry.patch.name, familyLabel (entry.patch), isFavorite (entry.patch), false, true,
                             entry.folder.isEmpty() ? juce::String ("Saved") : "Saved/" + entry.folder,
-                            juce::StringArray { "Saved", familyLabel (entry.patch) }, entry.patch.soundEngine });
+                            juce::StringArray { "Saved", familyLabel (entry.patch) }, entry.patch.soundEngine,
+                            isCurrent (entry.patch) });
     }
     return result;
 }

@@ -383,6 +383,34 @@ public:
             expect (restoredCallbacks.isFavorite());
         }
 
+        beginTest ("The Library marks the preset the sound came from, through edits and recall, and nothing after New Yoi");
+        {
+            TemporaryPresetDirectory directory;
+            YoiBoiProcessor synth (directory.path);
+            auto callbacks = synth.makeEditorCallbacks();
+            const auto currentIds = [] (EditorCallbacks& c)
+            {
+                juce::StringArray ids;
+                for (const auto& item : c.listPresets())
+                    if (item.current) ids.add (item.id);
+                return ids;
+            };
+            callbacks.loadPreset ("factory:20");
+            expect (currentIds (callbacks) == juce::StringArray { "factory:20" });
+            callbacks.beginEdit ("Mouth"); setValue (synth, "mouth", .3f); callbacks.endEdit();
+            expect (currentIds (callbacks) == juce::StringArray { "factory:20" }, "An edited preset is still the one loaded");
+            callbacks.newYoi();
+            expect (currentIds (callbacks).isEmpty(), "A generated sound is no preset");
+            expect (callbacks.savePreset ("Marked Yoi"));
+            const auto saved = currentIds (callbacks);
+            expect (saved.size() == 1 && saved[0].startsWith ("user:"), "Saving makes the new preset the loaded one");
+            callbacks.loadPreset ("factory:3");
+            YoiBoiProcessor restored (directory.path);
+            restore (restored, stateOf (synth));
+            auto restoredCallbacks = restored.makeEditorCallbacks();
+            expect (currentIds (restoredCallbacks) == juce::StringArray { "factory:3" });
+        }
+
         beginTest ("Legacy state retains Favorites/current sound and ignores old automatic Recent history");
         {
             YoiBoiProcessor synth;
