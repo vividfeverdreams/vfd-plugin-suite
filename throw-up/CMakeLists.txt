@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.22)
-project(ThrowUp VERSION 0.2.1 LANGUAGES C CXX)
+project(ThrowUp VERSION 0.2.2 LANGUAGES C CXX)
 if(APPLE)
   enable_language(OBJCXX)
   set(CMAKE_OSX_DEPLOYMENT_TARGET "12.0" CACHE STRING "Minimum macOS version")

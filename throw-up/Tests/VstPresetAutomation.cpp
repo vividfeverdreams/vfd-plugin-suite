@@ -184,9 +184,10 @@ void test(Bundle& bundle, Host& host)
     auto* menu = dynamic_cast<juce::ComboBox*>(named(*editor, "Factory presets"));
     auto* previous = dynamic_cast<juce::Button*>(named(*editor, "Previous preset"));
     auto* next = dynamic_cast<juce::Button*>(named(*editor, "Next preset"));
+    auto* dice = dynamic_cast<juce::Button*>(named(*editor, "Random preset"));
     auto* throwKnob = dynamic_cast<juce::Slider*>(named(*editor, "THROW"));
-    require(menu != nullptr && previous != nullptr && next != nullptr && throwKnob != nullptr,
-            "actual packaged VST3 menu, arrows and THROW callbacks accessible");
+    require(menu != nullptr && previous != nullptr && next != nullptr && dice != nullptr && throwKnob != nullptr,
+            "actual packaged VST3 menu, arrows, random key and THROW callbacks accessible");
     constexpr int block = 128;
     ProcessSetup setup {}; setup.maxSamplesPerBlock = block; setup.sampleRate = 48000;
     setup.symbolicSampleSize = kSample32; setup.processMode = kRealtime;
@@ -266,12 +267,22 @@ void test(Bundle& bundle, Host& host)
         checkNotifications(host, soundIds); render();
         host.clear(); next->onClick(); reference.setCurrentProgram(i);
         checkNotifications(host, soundIds); render();
+        // The random key: another room from the same bank, with the same scoped edits.
+        host.clear(); dice->onClick();
+        const int picked = actual->getCurrentProgram();
+        require(picked != i && (picked >= legacyStart) == (i >= legacyStart), "random preset picks another room from the arrows' bank");
+        reference.setCurrentProgram(picked);
+        checkNotifications(host, soundIds); render();
         const auto hostProgram = (i + 17) % programs;
         host.clear();
         controller->setParamNormalized(programId, static_cast<double>(hostProgram) / static_cast<double>(programs - 1));
         require(actual->getCurrentProgram() == hostProgram, "native VST3 Program selection remains available");
         reference.setCurrentProgram(hostProgram);
         checkNotifications(host, soundIds); render();
+        // The editor's 24 Hz timer shows a host Program change on the preset display, but this
+        // host runs no message loop. Without it, a random pick of room i + 1 would leave the
+        // display on the next iteration's item and make that menu choice a no-op.
+        menu->setSelectedId(hostProgram + 1, juce::dontSendNotification);
     }
     std::cout << "Packaged/reference maximum audio error " << worst << '\n';
     require(worst < .00003, "actual VST3 queued automation matches reference audio through all preset selections");
@@ -286,7 +297,7 @@ void test(Bundle& bundle, Host& host)
             "manual THROW drag reaches actual VST3 controller");
     require(host.restartFlags == 0, "manual THROW drag does not restart plugin");
     std::cout << "PASS actual VST3: " << programs << " menu, " << programs << " previous, " << programs << " next, "
-              << programs << " host Program selections; " << totalBlocks
+              << programs << " random, " << programs << " host Program selections; " << totalBlocks
               << " automated blocks; stable THROW ID " << ids[0] << "; maximum audio error " << worst << '\n';
     std::cout << "PASS no THROW/Program edits or global parameter-cache invalidation during preset selection\n";
     std::cout << "PASS manual THROW drag still records normal VST3 automation gestures\n";
@@ -298,6 +309,10 @@ int main(int argc, char** argv)
     try {
         require(argc == 2, "usage: ThrowUpVstPresetAutomation /absolute/path/THROW-UP.vst3");
         juce::ScopedJuceInitialiser_GUI gui;
+        // The random key also draws from user presets: keep the real folder out of the test.
+        const auto presets = juce::File::getSpecialLocation(juce::File::tempDirectory)
+            .getChildFile("throw-up-vst-presets-" + juce::Uuid().toString());
+        setenv("THROW_UP_PRESET_DIR", presets.getFullPathName().toRawUTF8(), 1);
         Host host;
         Bundle bundle(juce::File(juce::String::fromUTF8(argv[1])));
         test(bundle, host);

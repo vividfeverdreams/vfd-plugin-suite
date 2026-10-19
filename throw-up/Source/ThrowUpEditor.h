@@ -33,6 +33,10 @@ public:
     // The preset menu is rebuilt each time it opens, so new user presets appear.
     void rebuildPresetMenu();
     void openSaveDialog();
+    // The dice key: loads a random preset the way the menu does. It draws from the
+    // bank the arrows browse (the factory folders plus the user presets, or the 0.1.5
+    // rooms while one of those is loaded) and never picks the preset already loaded.
+    void loadRandomPreset();
 
 private:
     struct Control;
@@ -48,6 +52,9 @@ private:
     void updatePresetDisplay();
     void updateKeys();
     void stepPreset (int direction);
+    // Every preset selection (menu, arrows, dice) loads through these.
+    void selectFactoryPreset (int index);
+    bool selectUserPreset (const juce::File&);
     void drawScreen (juce::Graphics&);
     void drawKnob (juce::Graphics&, Control&);
     void drawOutputKnob (juce::Graphics&, Control&);
@@ -64,7 +71,8 @@ private:
     std::unique_ptr<Skin> skin;
     std::vector<std::unique_ptr<Control>> controls;
     std::unique_ptr<PresetBox> presets;
-    juce::TextButton previous { "<" }, next { ">" }, bypass { "BYPASS" };
+    juce::TextButton previous { "<" }, next { ">" }, randomKey, bypass { "BYPASS" };
+    juce::Random random;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> bypassAttachment;
     std::unique_ptr<vfd::InfoButton> infoButton;
     std::unique_ptr<vfd::InfoOverlay> infoOverlay;

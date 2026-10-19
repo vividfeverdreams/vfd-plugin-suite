@@ -2,6 +2,14 @@
 
 Native Apple Silicon VST3 and Audio Unit for macOS 12 or later, built with JUCE 9.0.2. Locally ad hoc signed, not Apple-notarized. Nothing was installed into `~/Library` or `/Library` while testing, and the tests never touch the real user-presets folder.
 
+## 0.2.2: the dice key (random preset)
+
+The dice key, left of the preset arrows, loads a random preset through the same function as the preset menu (`selectFactoryPreset` / `selectUserPreset`), so a random room is scoped exactly like a chosen one. It draws from the bank the arrows browse: the 90 factory rooms plus every user preset the menu lists, or the 50 0.1.5 rooms while one of those is loaded. It never picks the preset already loaded (a user preset is matched by the name it loads under) and skips a user file that can't be read.
+
+- **In-process (`ThrowUpHostTests`):** 400 random picks from the current bank and 400 from the 0.1.5 bank, each checked like a menu choice: THROW, Output and Bypass untouched, room edits only with balanced gestures, no program or parameter-info refresh, one metadata save, the room's values loaded, the display showing it, never the room already loaded, never the other bank. With user presets (two files that both load as "Wide Thing", a loose "Loose Room" and an unreadable file), 1,500 picks reach every listed user preset and factory rooms, never repeat the loaded preset, never pick a 0.1.5 room, and the display names each pick (including one user preset after another). From a 0.1.5 room, 200 picks stay in the 0.1.5 bank.
+- **Packaged VST3 (`ThrowUpVstPresetAutomation`):** one random pick after each of the 140 menu selections, with the same host-gesture checks and audio compared against the reference processor.
+- The display now refreshes when one user preset replaces another (dice, or A/B between two user presets); it used to keep the previous user preset's name.
+
 ## Old projects play identically
 
 `ThrowUpHostTests --compat <0.1.5 payload VST3> <new VST3>` loads the released THROW-UP 0.1.5 (from the Vivid Fever Dreams Suite 1.2.2 payload, read-only copy) and this build side by side as VST3 plug-ins. For each case it sets a room and settings in 0.1.5, saves 0.1.5's own project state, renders audio, loads that state into this build, and renders the same audio.
@@ -80,7 +88,7 @@ The 0.1.5 bank numbers are identical to 0.1.5's own audit, and its 150 CSV rows 
 
 `ThrowUpHostTests <screenshots folder> <THROW-UP.vst3>`: every check passes, ending `THROW-UP host checks passed`. It covers:
 
-- all 140 menu/arrow/host-program selections keep THROW, Output and Bypass, with scoped, balanced gestures;
+- all 140 menu/arrow/host-program selections, and 800 random-preset picks, keep THROW, Output and Bypass, with scoped, balanced gestures;
 - the 0.1.5-state cases above;
 - user presets in a scratch folder: saved in the chosen folder; saving a taken name makes "Name 2" and the original file is byte- and date-unchanged; loading restores the room and keeps THROW; the project remembers the name; the menu lists them;
 - A/B (B starts as A, both recall, both are saved with the project);
@@ -95,7 +103,7 @@ The 0.1.5 bank numbers are identical to 0.1.5's own audit, and its 150 CSV rows 
 
 ```
 Packaged/reference maximum audio error 0
-PASS actual VST3: 140 menu, 140 previous, 140 next, 140 host Program selections; 2660 automated blocks; stable THROW ID 108124; maximum audio error 0
+PASS actual VST3: 140 menu, 140 previous, 140 next, 140 random, 140 host Program selections; 2800 automated blocks; stable THROW ID 108124; maximum audio error 0
 PASS no THROW/Program edits or global parameter-cache invalidation during preset selection
 PASS manual THROW drag still records normal VST3 automation gestures
 ```
@@ -107,7 +115,7 @@ It also checks that the controller exposes exactly 34 controls plus Program, and
 ```
 AU identity: type aumf, subtype Thr1, manufacturer Yoib
 AU buses as hosted: inputs 2 (4 channels), outputs 1 (2 channels)
-PASS AU bundle identifier com.yoiboi.throwup / AU version 0.2.0 / AU registered for this process only / AU scans as one plugin
+PASS AU bundle identifier com.yoiboi.throwup / AU version matches this build (0.2.2) / AU registered for this process only / AU scans as one plugin
 PASS (x9) AU instantiates, exposes every program and parameter, reports zero latency
 PASS (x9) AU audio is finite, matches the tested processor and leaves a tail
 PASS (x9) AU state recalls every parameter into a new instance

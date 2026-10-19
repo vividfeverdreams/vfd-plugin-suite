@@ -4,6 +4,7 @@
 #include "VfdInfo.h"
 #include <algorithm>
 #include <cmath>
+#include <utility>
 
 namespace {
 // Artwork coordinates are kept separate from the editor size so controls remain
@@ -42,6 +43,34 @@ juce::Image loadShell()
 juce::String milliseconds (double value)
 {
     return value >= 1000.0 ? juce::String (value / 1000.0, 2) + " s" : juce::String (juce::roundToInt (value)) + " ms";
+}
+
+// The user presets the menu lists, in menu order: <root>/<Folder>/<Name>.throwup by
+// folder (empty folders left out), then loose files in the root (folder name empty).
+struct UserFolder { juce::String name; juce::Array<juce::File> files; };
+std::vector<UserFolder> findUserPresets()
+{
+    std::vector<UserFolder> found;
+    const auto presetRoot = ThrowUpProcessor::userPresetRoot();
+    auto folders = presetRoot.findChildFiles (juce::File::findDirectories, false);
+    folders.sort();
+    for (const auto& folder : folders) {
+        auto files = folder.findChildFiles (juce::File::findFiles, false, "*.throwup");
+        files.sort();
+        if (! files.isEmpty()) found.push_back ({ folder.getFileName(), files });
+    }
+    auto loose = presetRoot.findChildFiles (juce::File::findFiles, false, "*.throwup");
+    loose.sort();
+    if (! loose.isEmpty()) found.push_back ({ {}, loose });
+    return found;
+}
+
+// The name a user preset file loads under (as loadUserPreset reads it).
+juce::String userPresetNameOf (const juce::File& file)
+{
+    if (auto xml = juce::XmlDocument::parse (file))
+        return xml->getStringAttribute ("name", file.getFileNameWithoutExtension());
+    return file.getFileNameWithoutExtension();
 }
 }
 
@@ -144,6 +173,24 @@ public:
     void drawButtonText (juce::Graphics& g, juce::TextButton& button, bool, bool) override
     {
         auto r = button.getLocalBounds().toFloat();
+        if (button.getProperties()["dice"]) {
+            // The random-preset key: a die showing five, in the arrows' cream and at their glyph
+            // height. It is laid out on a 12-unit grid (1 outline, 1 gap, 2 pip, ...) from a
+            // whole-pixel corner, so at 100% and below it lands exactly on the pixel grid. Pips are
+            // drawn a little over 2 units so a 2-pixel pip is as bright as the outline.
+            const float side = std::round (juce::jmax (12.0f, r.getHeight() * .44f)), unit = side / 12.0f;
+            const auto die = juce::Rectangle<float> (std::round (r.getCentreX() - side * .5f),
+                                                     std::round (r.getCentreY() - side * .5f), side, side);
+            const float stroke = unit, corner = 3.0f * unit;
+            g.setColour (cream.withAlpha (.14f));
+            g.fillRoundedRectangle (die, corner);
+            g.setColour (cream);
+            g.drawRoundedRectangle (die.reduced (stroke * .5f), corner - stroke * .5f, stroke);
+            const float pip = 2.4f * unit, offset = 3.0f * unit;
+            for (const auto& [dx, dy] : { std::pair (-1, -1), std::pair (1, -1), std::pair (0, 0), std::pair (-1, 1), std::pair (1, 1) })
+                g.fillEllipse (juce::Rectangle<float> (pip, pip).withCentre (die.getCentre() + juce::Point<float> ((float) dx, (float) dy) * offset));
+            return;
+        }
         const bool isBypass = button.getName() == "Bypass";
         if (isBypass) {
             const float thumbWidth = r.getHeight();
@@ -364,6 +411,14 @@ ThrowUpEditor::ThrowUpEditor (ThrowUpProcessor& p)
     next.setTooltip ("Next factory preset. THROW and Output stay where you set them.");
     previous.onClick = [this] { stepPreset (-1); };
     next.onClick = [this] { stepPreset (1); };
+    // The dice key, first in the arrows' cluster. Its face is drawn as a die, so the
+    // accessible name comes from the title.
+    randomKey.setName ("Random preset");
+    randomKey.setTitle ("Random preset");
+    randomKey.getProperties().set ("dice", true);
+    randomKey.setTooltip ("Random preset: loads a different room from the factory folders or your user presets "
+                          "(on a 0.1.5 room, another 0.1.5 room). THROW and Output stay where you set them.");
+    randomKey.onClick = [this] { loadRandomPreset(); };
     bypass.setClickingTogglesState (true);
     bypass.setTooltip ("Bypass the effect. The dry input passes through unchanged.");
     bypassAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (pluginProcessor.apvts, "bypass", bypass);
@@ -397,7 +452,7 @@ ThrowUpEditor::ThrowUpEditor (ThrowUpProcessor& p)
             updateKeys(); repaint();
         });
     };
-    for (auto* button : { &previous, &next, &bypass, &saveKey, &slotA, &slotB, &noteRoomsKey, &soundKey }) {
+    for (auto* button : { &previous, &next, &randomKey, &bypass, &saveKey, &slotA, &slotB, &noteRoomsKey, &soundKey }) {
         button->setMouseCursor (juce::MouseCursor::PointingHandCursor);
         addAndMakeVisible (*button);
     }
@@ -603,10 +658,7 @@ void ThrowUpEditor::rebuildPresetMenu()
         // ComboBox only reports a changed ID. The item action also runs
         // when the current room is chosen again, which reverts its edits.
         entry.setAction ([safe = juce::Component::SafePointer<ThrowUpEditor> (this), index] {
-            if (safe == nullptr) return;
-            safe->pluginProcessor.loadFactoryPreset (index);
-            safe->updatePresetDisplay();
-            safe->repaint();
+            if (safe != nullptr) safe->selectFactoryPreset (index);
         });
         menu.addItem (std::move (entry));
     };
@@ -628,32 +680,25 @@ void ThrowUpEditor::rebuildPresetMenu()
     // User presets: <root>/<Folder>/<Name>.throwup, read fresh each time.
     userPresetFiles.clear();
     juce::PopupMenu user;
-    const auto presetRoot = ThrowUpProcessor::userPresetRoot();
     const auto addUser = [this] (juce::PopupMenu& menu, const juce::File& file) {
         const int id = userItemBase + (int) userPresetFiles.size();
         userPresetFiles.push_back (file);
         juce::PopupMenu::Item entry (file.getFileNameWithoutExtension());
         entry.setID (id);
         entry.setAction ([safe = juce::Component::SafePointer<ThrowUpEditor> (this), file] {
-            if (safe == nullptr) return;
-            safe->pluginProcessor.loadUserPreset (file);
-            safe->updatePresetDisplay();
-            safe->repaint();
+            if (safe != nullptr) safe->selectUserPreset (file);
         });
         menu.addItem (std::move (entry));
     };
-    auto folders = presetRoot.findChildFiles (juce::File::findDirectories, false);
-    folders.sort();
-    for (const auto& folder : folders) {
+    for (const auto& folder : findUserPresets()) {
+        if (folder.name.isEmpty()) {
+            for (const auto& file : folder.files) addUser (user, file);
+            continue;
+        }
         juce::PopupMenu submenu;
-        auto files = folder.findChildFiles (juce::File::findFiles, false, "*.throwup");
-        files.sort();
-        for (const auto& file : files) addUser (submenu, file);
-        if (submenu.getNumItems() > 0) user.addSubMenu (folder.getFileName(), submenu);
+        for (const auto& file : folder.files) addUser (submenu, file);
+        user.addSubMenu (folder.name, submenu);
     }
-    auto loose = presetRoot.findChildFiles (juce::File::findFiles, false, "*.throwup");
-    loose.sort();
-    for (const auto& file : loose) addUser (user, file);
     if (user.getNumItems() == 0) user.addSectionHeader ("No user presets yet - use SAVE");
     root->addSubMenu ("User", user);
     visiblePreset = -1;
@@ -1029,10 +1074,13 @@ void ThrowUpEditor::resized()
         const float fontSize = c->large ? 43.0f : c->id == "output" ? 25.0f : c->physical ? 29.0f : 25.0f;
         c->value.setFont (skin->font (fontSize * uiScale));
     }
-    presets->setBounds (scaled ({ 186, 204, 404, 44 }));
-    saveKey.setBounds (scaled ({ 600, 206, 74, 40 }));
-    slotA.setBounds (scaled ({ 684, 206, 40, 40 }));
-    slotB.setBounds (scaled ({ 730, 206, 40, 40 }));
+    // Preset row: the name, SAVE and A/B, then the browse keys (dice, previous, next)
+    // as one cluster of equal keys, right-aligned with the header above.
+    presets->setBounds (scaled ({ 186, 204, 370, 44 }));
+    saveKey.setBounds (scaled ({ 566, 206, 74, 40 }));
+    slotA.setBounds (scaled ({ 650, 206, 40, 40 }));
+    slotB.setBounds (scaled ({ 696, 206, 40, 40 }));
+    randomKey.setBounds (scaled ({ 762, 204, 47, 44 }));
     previous.setBounds (scaled ({ 822, 204, 47, 44 }));
     next.setBounds (scaled ({ 882, 204, 47, 44 }));
     for (size_t i = 0; i < pageTabs.size(); ++i)
@@ -1056,8 +1104,48 @@ void ThrowUpEditor::stepPreset (int direction)
     const int current = pluginProcessor.getCurrentProgram();
     const int start = current >= throwup::legacyPresetStart() ? throwup::legacyPresetStart() : 0;
     const int count = current >= throwup::legacyPresetStart() ? throwup::legacyPresetCount : throwup::legacyPresetStart();
-    pluginProcessor.loadFactoryPreset (start + (current - start + direction + count) % count);
+    selectFactoryPreset (start + (current - start + direction + count) % count);
+}
+
+void ThrowUpEditor::selectFactoryPreset (int index)
+{
+    pluginProcessor.loadFactoryPreset (index);
     updatePresetDisplay(); repaint();
+}
+
+bool ThrowUpEditor::selectUserPreset (const juce::File& file)
+{
+    const bool loaded = pluginProcessor.loadUserPreset (file);
+    updatePresetDisplay(); repaint();
+    return loaded;
+}
+
+void ThrowUpEditor::loadRandomPreset()
+{
+    // Draw from the bank the arrows browse: the 0.1.5 rooms among themselves while
+    // one is loaded, otherwise the factory folders plus the user presets the menu
+    // lists. The preset already loaded is left out (a user preset by its name).
+    const auto userName = pluginProcessor.getUserPresetName();
+    const int current = pluginProcessor.getCurrentProgram();
+    const bool legacy = userName.isEmpty() && current >= throwup::legacyPresetStart();
+    const int start = legacy ? throwup::legacyPresetStart() : 0;
+    const int end = legacy ? pluginProcessor.getNumPrograms() : throwup::legacyPresetStart();
+    std::vector<int> rooms;
+    for (int i = start; i < end; ++i)
+        if (userName.isNotEmpty() || i != current) rooms.push_back (i);
+    std::vector<juce::File> files;
+    if (! legacy)
+        for (const auto& folder : findUserPresets())
+            for (const auto& file : folder.files)
+                if (userName.isEmpty() || userPresetNameOf (file) != userName) files.push_back (file);
+    // Nothing else to choose: do nothing. An unreadable user file is skipped.
+    while (! rooms.empty() || ! files.empty()) {
+        const int pick = random.nextInt ((int) (rooms.size() + files.size()));
+        if (pick < (int) rooms.size()) { selectFactoryPreset (rooms[(size_t) pick]); return; }
+        const auto file = files.begin() + (pick - (int) rooms.size());
+        if (selectUserPreset (*file)) return;
+        files.erase (file);
+    }
 }
 
 void ThrowUpEditor::updatePresetDisplay()
@@ -1065,7 +1153,8 @@ void ThrowUpEditor::updatePresetDisplay()
     const int current = juce::jlimit (0, pluginProcessor.getNumPrograms() - 1, pluginProcessor.getCurrentProgram());
     const auto userName = pluginProcessor.getUserPresetName();
     const int shown = userName.isNotEmpty() ? -2 : current;
-    if (visiblePreset != shown) {
+    // User presets share one key, so compare their names too (dice or A/B from one user preset to another).
+    if (visiblePreset != shown || (userName.isNotEmpty() && presets->getText() != userName)) {
         visiblePreset = shown;
         if (userName.isNotEmpty()) presets->setText (userName, juce::dontSendNotification);
         else presets->setSelectedId (current + 1, juce::dontSendNotification);

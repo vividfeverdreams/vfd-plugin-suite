@@ -5,6 +5,7 @@
 #include <array>
 #include <cmath>
 #include <iostream>
+#include <set>
 #include <stdexcept>
 
 namespace throwup::tests {
@@ -149,6 +150,36 @@ inline void runPresetAutomationRegressionTests()
         }
     }
     std::cout << "PASS all " << programs << " preset menu/previous/next choices preserve THROW values and host automation notifications\n";
+
+    // The dice key loads through the same path, never re-picks the loaded room and
+    // stays in the bank the arrows browse. (The user-presets root is an empty scratch folder here.)
+    juce::Button* dice = nullptr;
+    for (auto* component : editor.getChildren())
+        if (component->getName() == "Random preset") dice = dynamic_cast<juce::Button*>(component);
+    requireAutomation(dice != nullptr && dice->getTitle() == "Random preset" && dice->getTooltip().startsWith("Random preset")
+                      && dice->getWantsKeyboardFocus(), "random preset key missing, unnamed or not focusable");
+    for (const int bankStart : { 0, legacyPresetStart() }) {
+        const bool legacyBank = bankStart > 0;
+        const int bankSize = legacyBank ? legacyPresetCount : legacyPresetStart();
+        processor.loadFactoryPreset(bankStart);
+        std::set<int> picked;
+        for (int i = 0; i < 400; ++i) {
+            const float automatedThrow = static_cast<float>(i % 53) * 1.87f;
+            setParameter("mix", automatedThrow);
+            const int before = processor.getCurrentProgram();
+            host.clear();
+            dice->onClick();
+            const int after = processor.getCurrentProgram();
+            requireAutomation(after != before, "random preset re-picked the room already loaded");
+            requireAutomation((after >= legacyPresetStart()) == legacyBank, "random preset left the bank the arrows browse");
+            verifyPresetNotification(after, automatedThrow, true);
+            requireAutomation(presetMenu->getSelectedId() == after + 1 && processor.getUserPresetName().isEmpty(),
+                              "random preset is not shown on the preset display");
+            picked.insert(after);
+        }
+        requireAutomation(static_cast<int>(picked.size()) > bankSize * 3 / 4, "random preset does not draw across the bank");
+    }
+    std::cout << "PASS 800 random-preset picks load like the menu, keep THROW, never repeat the loaded room and stay in their bank\n";
 
     host.clear();
     processor.loadFactoryPreset(processor.getCurrentProgram());

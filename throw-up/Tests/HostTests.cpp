@@ -331,6 +331,47 @@ void runFeatureHostTests(const juce::File* folder)
         auto* menu = dynamic_cast<juce::ComboBox*>(findNamed(editor, "Factory presets"));
         editor.rebuildPresetMenu();
         check(menu != nullptr && menu->getNumItems() == programs + 2, "preset menu lists factory rooms and both user presets");
+
+        // Random preset: draws from the factory folders and every user preset the menu lists,
+        // never the preset already loaded (a user preset by its name: both files above load as
+        // "Wide Thing"), skips an unreadable file, and keeps the 0.1.5 rooms to themselves.
+        auto* dice = dynamic_cast<juce::Button*>(findNamed(editor, "Random preset"));
+        const auto loose = p.saveUserPreset("", "Loose Room");
+        root.getChildFile("Broken.throwup").replaceWithText("not a preset");
+        check(dice != nullptr && loose.getParentDirectory() == root, "random preset key and a loose user preset exist");
+        p.loadUserPreset(first);
+        std::set<std::string> userPicks;
+        int factoryPicks = 0;
+        bool repeated = false, legacyPicked = false, misnamed = false;
+        for (int i = 0; i < 1500; ++i) {
+            const auto beforeName = p.getUserPresetName();
+            const int beforeProgram = p.getCurrentProgram();
+            dice->onClick();
+            const auto name = p.getUserPresetName();
+            if (name.isNotEmpty()) {
+                userPicks.insert(name.toStdString());
+                repeated = repeated || name == beforeName;
+                misnamed = misnamed || menu->getText() != name;
+            } else {
+                ++factoryPicks;
+                repeated = repeated || (beforeName.isEmpty() && p.getCurrentProgram() == beforeProgram);
+                legacyPicked = legacyPicked || p.getCurrentProgram() >= throwup::legacyPresetStart();
+                misnamed = misnamed || menu->getSelectedId() != p.getCurrentProgram() + 1;
+            }
+        }
+        check(!repeated, "random preset never re-picks the loaded preset, factory or user, and skips unreadable files");
+        check(userPicks == std::set<std::string> { "Wide Thing", "Loose Room" } && factoryPicks > 1000 && !legacyPicked,
+              "random preset draws from the factory folders and every user preset the menu lists, never a 0.1.5 room");
+        check(!misnamed, "the preset display names every random pick, including one user preset after another");
+        p.loadFactoryPreset(throwup::legacyPresetStart() + 3);
+        bool stayed = true;
+        for (int i = 0; i < 200; ++i) {
+            const int before = p.getCurrentProgram();
+            dice->onClick();
+            stayed = stayed && p.getUserPresetName().isEmpty() && p.getCurrentProgram() >= throwup::legacyPresetStart()
+                  && p.getCurrentProgram() != before;
+        }
+        check(stayed, "from a 0.1.5 room, random preset picks another 0.1.5 room");
         ThrowUpProcessor::setUserPresetRootForTesting({});
         root.deleteRecursively();
     }
@@ -663,7 +704,7 @@ int runAudioUnitValidation(const juce::File& component)
     AudioComponentDescription description { fourCC(type), fourCC(subtype), fourCC(manufacturer), 0, 0 };
     SInt32 version = 0;
     if (auto number = static_cast<CFNumberRef>(CFDictionaryGetValue(entry, CFSTR("version")))) CFNumberGetValue(number, kCFNumberSInt32Type, &version);
-    check(version == 0x00000200, "AU version 0.2.0");
+    check(version == JucePlugin_VersionCode, "AU version matches this build (" JucePlugin_VersionString ")");
     check(AudioComponentRegister(&description, CFSTR("Vivid Fever Dreams: THROW-UP (test)"), static_cast<UInt32>(version), factory) != nullptr,
           "AU registered for this process only");
     juce::AudioUnitPluginFormat format;

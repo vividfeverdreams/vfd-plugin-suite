@@ -2,7 +2,7 @@
 
 A reverb thrower for mid-basses and left-field bass music by **YOI-BOI**. The giant **THROW** knob adds a separate, fully wet reverb layer over the original dry bass. You can also throw with the **THROW!** key, with MIDI notes, or let **Auto-catch** throw the end of every phrase for you.
 
-Version **0.2.1** · **VST3** and **Audio Unit** · **Apple Silicon** · **macOS 12 or later**
+Version **0.2.2** · **VST3** and **Audio Unit** · **Apple Silicon** · **macOS 12 or later**
 
 ## Your existing projects are safe
 
@@ -67,7 +67,7 @@ The effective THROW is the larger of the THROW knob and the trigger. The knob's 
 
 ## The display pages
 
-The top display has four pages: **ROOM**, **THROW**, **SPACE** and **MIX**. The preset menu, **SAVE**, **A**/**B** and the arrows stay on top.
+The top display has four pages: **ROOM**, **THROW**, **SPACE** and **MIX**. The preset menu, **SAVE**, **A**/**B**, the dice and the arrows stay on top.
 
 | Page | Controls |
 | --- | --- |
@@ -98,6 +98,7 @@ The menu has 11 folders of factory rooms, the **0.1.5 rooms (original sound)** f
 - **Factory folders:** Small, Medium, Large, Huge, Creative, Synced Throws, Freeze Pads, Shimmer, Swells, Sidechain Pumps and Send FX.
 - **Loading a room** changes only the sound: size, decay, pre-delay and sync, filters, diffusion, motion, width, grit, duck, shimmer, swell, and the sound version. It never changes THROW, Output, Bypass, the trigger settings, Freeze, Safe, Send, Return or the duck source, so your THROW automation keeps running while you audition rooms.
 - **Choosing the current room again** reverts your edits to it. The arrows step through the current folder bank (or the 0.1.5 rooms).
+- **The dice** (left of the arrows, 0.2.2) loads a random preset: a different room from the factory folders or your user presets. On a 0.1.5 room it picks another 0.1.5 room, like the arrows. It loads exactly as the menu does, so THROW, Output and the rest stay where you set them.
 - **SAVE** saves the current room as a user preset in a folder you choose or create, in `~/Library/Application Support/THROW-UP/Presets/<Folder>/`. THROW-UP never overwrites or edits an existing preset file; saving a name that already exists makes "Name 2".
 - **A / B** keeps two versions of your settings (all except THROW, Output, Bypass and THROW!) so you can compare them. The first switch to B copies A. Both are saved with the project.
 
@@ -112,6 +113,8 @@ The installer writes only THROW-UP bundles to your user plug-in folders and need
 
 ## Version history
 
+- **0.2.2:** the dice key loads a random preset.
+- **0.2.1:** the Output knob and the INFO page update check.
 - **0.2.0:** everything above.
 - **0.1.5** (Vivid Fever Dreams Suite 1.2.2): plug-in browsers show **VIVID FEVER DREAMS** as the creator. The sound was the same as 0.1.4. Its README and VALIDATION still said 0.1.4; that mix-up is fixed here.
 - **0.1.4:** the reverb return was raised by 18 dB so small and medium rooms throw clearly.
