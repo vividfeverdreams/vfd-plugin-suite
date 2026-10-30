@@ -438,34 +438,39 @@ public:
             expectWithinAbsoluteError (parameterValue (synth, "mouth"), initial, .0001f);
         }
 
-        beginTest ("Mouse clicks do not give controls keyboard focus; Tab still reaches them");
+        beginTest ("No control takes keyboard focus, by a click or by Tab; only text fields type");
         {
+            // Host keys (../shared/VfdHostKeys.h): space, Return, Tab and letters belong to the host, the arrows
+            // to the editor for presets. A focused control would answer Return or swallow the arrows.
             RegressionPresetDirectory directory;
             YoiBoiProcessor synth (directory.path);
             std::unique_ptr<juce::AudioProcessorEditor> editor (synth.createEditor());
             juce::KeyboardFocusTraverser traverser;
             const auto focusable = traverser.getAllComponents (editor.get());
-            const auto check = [&] (juce::Component* control, const juce::String& title, bool mustBeTabbable)
+            const auto check = [&] (juce::Component* control, const juce::String& title)
             {
                 expect (control != nullptr, title + " missing");
                 if (control == nullptr) return;
-                expect (control->getWantsKeyboardFocus(), title + " must stay keyboard accessible");
+                expect (! control->getWantsKeyboardFocus(), title + " must leave the keyboard to the host");
                 expect (! control->getMouseClickGrabsKeyboardFocus(), title + " must not take focus on click");
-                if (mustBeTabbable)
-                    expect (std::find (focusable.begin(), focusable.end(), control) != focusable.end(),
-                            title + " must be reachable with Tab");
+                expect (std::find (focusable.begin(), focusable.end(), control) == focusable.end(), title + " must not be a Tab stop");
             };
-            for (const auto* title : { "Sub routing", "Length rhythm", "Generation family" })
-                check (findNamed<juce::ComboBox> (*editor, title), title, true);
-            for (const auto* title : { "Vowel pose", "Selected gesture point" })
-                check (findNamed<juce::ComboBox> (*editor, title), title, false); // Shape page
+            for (const auto* title : { "Sub routing", "Length rhythm", "Generation family", "Vowel pose", "Selected gesture point" })
+                check (findNamed<juce::ComboBox> (*editor, title), title);
             for (const auto* title : { "MOUTH", "SIZE", "BITE", "DIRT", "LENGTH", "SUB", "Glide", "Output" })
-                check (findNamed<juce::Slider> (*editor, title), title, true);
-            for (const auto* title : { "NEW YOI", "MUTATE", "Interface zoom and settings", "PLAY", "LIBRARY", "Lock MOUTH" })
-                check (findNamed<juce::Button> (*editor, title), title, true);
-            check (findNamed<juce::Component> (*editor, "Mouth motion: Start, Body, End"), "Gesture", true);
+                check (findNamed<juce::Slider> (*editor, title), title);
+            for (const auto* title : { "NEW YOI", "MUTATE", "Interface zoom and settings", "PLAY", "LIBRARY", "Lock MOUTH",
+                                       "Random preset", "FAVORITE", "PREVIEW", "LOAD" })
+                check (findNamed<juce::Button> (*editor, title), title);
+            for (const auto* title : { "Presets. Select a row, then double-click it or press LOAD.", "Preset folders" })
+                check (findNamed<juce::ListBox> (*editor, title), title);
+            check (findNamed<juce::Component> (*editor, "Mouth motion: Start, Body, End"), "Gesture");
+            for (auto* component : focusable)
+                expect (dynamic_cast<juce::TextEditor*> (component) != nullptr
+                            || static_cast<bool> (component->getProperties().getWithDefault ("vfdHostKeysAllowFocus", false)),
+                        "Only text fields and the INFO page can take the keyboard: " + component->getTitle());
             if (auto* search = findNamed<juce::TextEditor> (*editor, "Search sounds"))
-                expect (search->getMouseClickGrabsKeyboardFocus(), "Typing in search still needs a click to focus");
+                expect (search->getWantsKeyboardFocus() && search->getMouseClickGrabsKeyboardFocus(), "A click on search lets you type");
 
             // The scroll wheel still needs a click first, without taking focus.
             if (auto* mouth = findNamed<juce::Slider> (*editor, "MOUTH"))

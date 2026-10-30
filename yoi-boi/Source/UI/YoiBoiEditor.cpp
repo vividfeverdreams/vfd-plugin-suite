@@ -2,6 +2,7 @@
 #include "WindowActions.h"
 #include "BinaryData.h"
 #include "VfdInfo.h"
+#include "VfdHostKeys.h"
 #include <array>
 #include <cmath>
 
@@ -25,10 +26,15 @@ constexpr const char* versionString = JucePlugin_VersionString;
 constexpr const char* versionString = YOIBOI_VERSION_STRING; // non-plugin builds (tests)
 #endif
 
-// Controls stay reachable with Tab, but a mouse click must not give them
-// keyboard focus: a combo or knob that silently keeps focus would change the
-// sound when the producer later presses arrow keys or Return for the host.
-void keepFocusOnClick (juce::Component& component) { component.setMouseClickGrabsKeyboardFocus (false); }
+// Host keys (../shared/VfdHostKeys.h): no control takes keyboard focus, by a click or by Tab, so a click
+// never leaves a focus ring and space, Return, Tab and letters always reach the host. The arrows belong
+// to the editor itself, for presets. vfd::HostKeys::apply() repeats this for every control once the
+// editor is built.
+void leaveKeysToHost (juce::Component& component)
+{
+    component.setWantsKeyboardFocus (false);
+    component.setMouseClickGrabsKeyboardFocus (false);
+}
 
 void drawDice(juce::Graphics& g, juce::Point<float> centre, float size, juce::Colour colour)
 {
@@ -435,7 +441,7 @@ public:
 class LockButton final : public juce::Button
 {
 public:
-    explicit LockButton(const juce::String& name) : Button(name) { setTitle(name); setClickingTogglesState(true); keepFocusOnClick(*this); }
+    explicit LockButton(const juce::String& name) : Button(name) { setTitle(name); setClickingTogglesState(true); leaveKeysToHost(*this); }
     void paintButton(juce::Graphics& g, bool over, bool) override
     {
         auto r = getLocalBounds().toFloat().reduced(3);
@@ -502,25 +508,18 @@ using ParameterCombo = ParameterControl<juce::ComboBox>;
 class FocusedSlider final : public ParameterControl<juce::Slider>
 {
 public:
-    FocusedSlider() { setPopupMenuEnabled(false); keepFocusOnClick(*this); }
-    // True between the drag start and end sent to attachments (mouse drag or
-    // a keyboard ScopedDragNotification), i.e. while a host gesture is open.
+    FocusedSlider() { setPopupMenuEnabled(false); leaveKeysToHost(*this); }
+    // True between the drag start and end sent to attachments, i.e. while a host gesture is open.
+    // Knobs never take keyboard focus (the arrows step presets), so only the mouse drags them.
     bool isDragGestureActive() const noexcept { return dragDepth > 0; }
     void startedDragging() override { ++dragDepth; }
     void stoppedDragging() override { dragDepth = juce::jmax(0, dragDepth - 1); }
-    bool keyPressed(const juce::KeyPress& key) override
-    {
-        const int code = key.getKeyCode();
-        if (code == juce::KeyPress::upKey || code == juce::KeyPress::downKey
-            || code == juce::KeyPress::leftKey || code == juce::KeyPress::rightKey)
-        {
-            juce::Slider::ScopedDragNotification gesture(*this);
-            return juce::Slider::keyPressed(key);
-        }
-        return juce::Slider::keyPressed(key);
-    }
-    // Clicking a knob arms its scroll wheel, as keyboard focus used to, so a
-    // stray wheel gesture over an untouched knob still cannot change it.
+    // JUCE makes the value box focusable again whenever it becomes editable (enabling the slider, a new
+    // look); keep it a mouse target. Its typing field, made when you click the value, still gets the keys.
+    void enablementChanged() override { ParameterControl<juce::Slider>::enablementChanged(); leaveTextBoxToHost(); }
+    void lookAndFeelChanged() override { ParameterControl<juce::Slider>::lookAndFeelChanged(); leaveTextBoxToHost(); }
+    // Clicking a knob arms its scroll wheel, so a stray wheel gesture over an
+    // untouched knob still cannot change it.
     void mouseDown(const juce::MouseEvent& event) override
     {
         wheelArmed = ! event.mods.isPopupMenu();
@@ -536,6 +535,11 @@ public:
         if (hasKeyboardFocus(true) || wheelArmed) juce::Slider::mouseWheelMove(event, details);
     }
 private:
+    void leaveTextBoxToHost()
+    {
+        for (auto* child : getChildren())
+            if (dynamic_cast<juce::TextEditor*>(child) == nullptr) leaveKeysToHost(*child);
+    }
     int dragDepth = 0;
     bool wheelArmed = false;
 };
@@ -558,11 +562,10 @@ public:
         slider.setColour(juce::Slider::textBoxTextColourId, midnight);
         slider.setColour(juce::Slider::textBoxBackgroundColourId, juce::Colours::transparentBlack);
         slider.setColour(juce::Slider::textBoxOutlineColourId, juce::Colours::transparentBlack);
-        slider.setWantsKeyboardFocus(true);
         slider.getProperties().set("macro", true);
         slider.setScrollWheelEnabled(true);
         slider.setVelocityModeParameters(0.22, 1, 0.0, true, juce::ModifierKeys::shiftModifier);
-        lock.setTooltip("Protect " + name.toLowerCase() + " from New Yoi and Mutate. Manual edits still work.");
+        lock.setTooltip("Keep " + name.toLowerCase() + " through New Yoi, Mutate and preset changes. Manual edits still work.");
         addAndMakeVisible(slider);
         addAndMakeVisible(title);
         addAndMakeVisible(lock);
@@ -590,16 +593,34 @@ float readActual(juce::AudioProcessorValueTreeState& state, const juce::String& 
     return fallback;
 }
 
-class GestureCanvas final : public juce::Component
+class GestureCanvas final : public juce::Component, public juce::TooltipClient
 {
 public:
     explicit GestureCanvas(juce::AudioProcessorValueTreeState& s) : state(s)
     {
         setTitle("Mouth motion: Start, Body, End");
         setDescription("Three vowel poses across the length of a note. Use the Shape controls to edit numerically.");
-        setWantsKeyboardFocus(true);
-        keepFocusOnClick(*this);
+        // A mouse target only: space and Return belong to the host (VfdHostKeys.h).
+        leaveKeysToHost(*this);
+        setMouseCursor(juce::MouseCursor::PointingHandCursor);
     }
+    // On PLAY one click opens SHAPE; on SHAPE a click moves the nearest point there and a drag shapes it.
+    juce::String getTooltip() override
+    {
+        return editing ? juce::String("Drag a point up or down to change its vowel. Drag BODY sideways to move it in time. "
+                                      "Right-click a point to keep it through New Yoi, Mutate and preset changes.")
+                       : juce::String("Click the mouth motion to shape it on the SHAPE page. "
+                                      "Right-click a point to keep it through New Yoi, Mutate and preset changes.");
+    }
+    // A pointing hand where a click opens SHAPE or grabs a point; on SHAPE a crosshair elsewhere, since a
+    // click there moves the nearest point to the pointer.
+    void setEditing(bool shouldEdit)
+    {
+        editing = shouldEdit;
+        updateCursor(getMouseXYRelative().toFloat());
+    }
+    void mouseEnter(const juce::MouseEvent& event) override { updateCursor(event.position); }
+    void mouseMove(const juce::MouseEvent& event) override { updateCursor(event.position); }
     std::function<void(int)> selectPoint;
     std::function<void()> openShape, beginEdit, endEdit;
     std::function<void(const juce::String&)> contextMenu;
@@ -739,6 +760,17 @@ public:
             g.drawRoundedRectangle(getLocalBounds().toFloat().reduced(1), 5, 1);
         }
     }
+    void updateCursor(juce::Point<float> position)
+    {
+        auto cursor = juce::MouseCursor::PointingHandCursor;
+        if (editing)
+        {
+            float nearest = 100000;
+            for (const auto& point : points()) nearest = juce::jmin(nearest, point.getDistanceFrom(position));
+            if (nearest > handleRadius) cursor = juce::MouseCursor::CrosshairCursor;
+        }
+        if (cursor != shownCursor) { shownCursor = cursor; setMouseCursor(cursor); }
+    }
     void mouseDown(const juce::MouseEvent& event) override
     {
         const auto pts = points();
@@ -779,19 +811,14 @@ public:
             }
         repaint();
     }
-    void mouseUp(const juce::MouseEvent&) override
+    void mouseUp(const juce::MouseEvent& event) override
     {
         if (! dragging) return;
         if (auto* p = state.getParameter(poseId())) p->endChangeGesture();
         if (selected == 1) if (auto* p = state.getParameter("body_time")) p->endChangeGesture();
         dragging = false;
         if (endEdit) endEdit();
-    }
-    bool keyPressed(const juce::KeyPress& key) override
-    {
-        if (! editing && (key == juce::KeyPress::returnKey || key == juce::KeyPress::spaceKey))
-        { if (openShape) openShape(); return true; }
-        return false;
+        updateCursor(event.position);
     }
     juce::String pointId(int point) const
     {
@@ -800,7 +827,9 @@ public:
     }
     juce::String poseId() const { return pointId(selected); }
 private:
+    static constexpr float handleRadius = 23.0f; // the drawn point's outer glow
     juce::AudioProcessorValueTreeState& state;
+    juce::MouseCursor::StandardCursorType shownCursor = juce::MouseCursor::PointingHandCursor;
     bool dragging = false;
 };
 }
@@ -827,7 +856,6 @@ public:
         text(g, labels[static_cast<size_t>(row)], { 20, 0, width - 22, height }, 13, on ? cyan : cream.withAlpha(0.88f), true);
     }
     void listBoxItemClicked(int row, const juce::MouseEvent&) override { if (onSelect) onSelect(row); }
-    void returnKeyPressed(int row) override { if (onSelect) onSelect(row); }
 };
 
 // A rendered bounce: click loads that variation, drag drops its WAV into the host.
@@ -943,7 +971,7 @@ public:
         family.setSelectedId(1, juce::dontSendNotification);
         family.setTitle("Generation family");
         family.setTooltip("New Yoi stays in the selected family. All Families permits a new family.");
-        keepFocusOnClick(family);
+        leaveKeysToHost(family);
         family.onChange = [this] { if (callbacks.setGenerationFamily) callbacks.setGenerationFamily(family.getText()); };
         addAndMakeVisible(family);
 
@@ -986,7 +1014,7 @@ public:
         bindContext(sync, "sync");
         subMode.addItemList({ "OFF", "DIRECT", "DRIVEN" }, 1);
         subMode.setTitle("Sub routing");
-        keepFocusOnClick(subMode);
+        leaveKeysToHost(subMode);
         subMode.setTooltip("Off mutes the sine sub. Direct adds it after the body distortion. Driven saturates the sub.");
         subMode.onChange = [this] { if (! updatingInspector) setParam("sub_mode", (subMode.getSelectedId() - 1) / 2.0f); };
         addAndMakeVisible(subMode); bindContext(subMode, "sub_mode");
@@ -998,7 +1026,7 @@ public:
         bindContext(lowCut, "low_cut");
         lengthFeel.addItemList(juce::StringArray { "STRAIGHT", juce::String::fromUTF8("TRIPLET · 2/3"), juce::String::fromUTF8("DOTTED · 3/2") }, 1);
         lengthFeel.setTitle("Length rhythm");
-        keepFocusOnClick(lengthFeel);
+        leaveKeysToHost(lengthFeel);
         lengthFeel.setTooltip("Apply straight, triplet or dotted timing to the Length division. Available when Sync is on.");
         lengthFeel.onChange = [this] { if (! updatingInspector) setParam("length_feel", (lengthFeel.getSelectedId() - 1) / 2.0f); };
         addAndMakeVisible(lengthFeel); bindContext(lengthFeel, "length_feel");
@@ -1028,10 +1056,10 @@ public:
         selectedPoint.addItemList({ "START", "BODY", "END" }, 1);
         selectedPoint.setSelectedId(2, juce::dontSendNotification);
         selectedPoint.setTitle("Selected gesture point");
-        keepFocusOnClick(selectedPoint);
+        leaveKeysToHost(selectedPoint);
         selectedPoint.onChange = [this] { gesture.selected = selectedPoint.getSelectedId() - 1; syncShapeInspector(); gesture.repaint(); };
         pose.addItemList(vowels, 1); pose.setSelectedId(4, juce::dontSendNotification); pose.setTitle("Vowel pose");
-        keepFocusOnClick(pose);
+        leaveKeysToHost(pose);
         pose.onChange = [this] { if (! updatingInspector) setParam(poseId(), static_cast<float>(pose.getSelectedId() - 1) / (latestEngine ? 8.0f : 4.0f)); };
         pose.onContextMenu = [this] { showParameterMenu(poseId(), pose); };
         setupButton(snap, "TIME SNAP", true);
@@ -1048,7 +1076,7 @@ public:
         motionLock.getProperties().set("fontSize", 14.0f);
         motionLock.getProperties().set("role", "filter");
         motionLock.setClickingTogglesState(true);
-        motionLock.setTooltip("Lock or unlock Mouth and Length together for New Yoi and Mutate.");
+        motionLock.setTooltip("Lock or unlock Mouth and Length together: they keep their values through New Yoi, Mutate and preset changes.");
         motionLock.onClick = [this] {
             const bool next = motionLock.getToggleState();
             if (callbacks.setLock) { callbacks.setLock(0, next); callbacks.setLock(4, next); }
@@ -1171,11 +1199,14 @@ public:
         search.setTitle("Search sounds");
         search.setFont(font(14));
         search.onTextChange = [this] { refreshLibrary(); };
+        // Return (or Escape) ends typing: the space bar goes back to the host and the arrows to presets.
+        search.onReturnKey = [this] { releaseSearch(); };
+        search.onEscapeKey = [this] { releaseSearch(); };
         addAndMakeVisible(search);
         library.setModel(this);
         library.setRowHeight(27);
         library.setOutlineThickness(0);
-        library.setTitle("Presets. Select a row, then double-click or press Enter to load.");
+        library.setTitle("Presets. Select a row, then double-click it or press LOAD.");
         library.setMultipleSelectionEnabled(false);
         addAndMakeVisible(library);
         setupButton(load, "LOAD", true);
@@ -1211,8 +1242,8 @@ public:
 
     void setupButton(juce::TextButton& button, const juce::String& name, bool dark = false)
     {
-        button.setButtonText(name); button.setTitle(name); button.setWantsKeyboardFocus(true);
-        keepFocusOnClick(button);
+        button.setButtonText(name); button.setTitle(name);
+        leaveKeysToHost(button);
         button.getProperties().set("dark", dark); addAndMakeVisible(button);
     }
     void setupModCombo(ParameterCombo& box, const juce::String& title, const juce::String& id,
@@ -1221,7 +1252,7 @@ public:
         box.addItemList(items, 1);
         box.setTitle(title);
         box.setTooltip(tip);
-        keepFocusOnClick(box);
+        leaveKeysToHost(box);
         const int count = items.size();
         box.onChange = [this, &box, id, count] {
             if (! updatingInspector) setParam(id, count > 1 ? static_cast<float>(box.getSelectedId() - 1) / static_cast<float>(count - 1) : 0.0f);
@@ -1244,7 +1275,6 @@ public:
         slider.setColour(juce::Slider::textBoxBackgroundColourId, juce::Colours::transparentBlack);
         slider.setColour(juce::Slider::textBoxOutlineColourId, juce::Colours::transparentBlack);
         slider.setScrollWheelEnabled(false);
-        slider.setWantsKeyboardFocus(true);
         slider.setTooltip(tip);
         slider.onDragStart = [this, title] { beginEdit("Adjust " + title); };
         slider.onDragEnd = [this] { endEdit(); };
@@ -1312,7 +1342,7 @@ public:
         juce::PopupMenu menu;
         menu.addSectionHeader(parameter != nullptr ? parameter->getName(50) : id);
         const bool excluded = callbacks.isParameterLocked(id);
-        menu.addItem(1, "Exclude from randomization", true, excluded);
+        menu.addItem(1, "Lock (randomizing and presets leave it alone)", true, excluded);
         if (id == "length_division")
         {
             if (const auto* division = dynamic_cast<const juce::AudioParameterChoice*>(parameter))
@@ -1337,7 +1367,7 @@ public:
                 if (result == 1)
                 {
                     safe->callbacks.setParameterLock(id, ! excluded);
-                    safe->toast(excluded ? "Included in randomization" : "Excluded from randomization");
+                    safe->toast(excluded ? "Unlocked" : "Locked: randomizing and presets leave it alone");
                     safe->updateValues();
                 }
                 else if (result >= 100 && id == "length_division")
@@ -1419,7 +1449,6 @@ public:
         slider.setColour(juce::Slider::textBoxTextColourId, cream);
         slider.setTextValueSuffix(suffix);
         slider.setScrollWheelEnabled(false);
-        slider.setWantsKeyboardFocus(true);
         slider.onDragStart = [this, name] { beginEdit("Adjust " + name); };
         slider.onDragEnd = [this] { endEdit(); };
         bindContext(slider, id);
@@ -1591,11 +1620,11 @@ public:
                         g.drawLine(x, 352.0f - half, x, 352.0f + half, 1.5f);
                     }
                 }
+                // The lock warning first, then a fresh message; otherwise the hint that the motion is editable.
                 const auto prompt = allLocked ? juce::String("UNLOCK A CONTROL TO GENERATE")
                                   : statusUntil > juce::Time::getMillisecondCounterHiRes() ? status
                                   : juce::String("CLICK THE MOTION TO SHAPE IT");
-                if (allLocked || statusUntil > juce::Time::getMillisecondCounterHiRes())
-                    text(g, prompt.toUpperCase(), { 338, 116, 284, 20 }, 11, lime, true, juce::Justification::centredRight);
+                text(g, prompt.toUpperCase(), { 338, 116, 284, 20 }, 11, lime, true, juce::Justification::centredRight);
             }
             else
             {
@@ -1699,7 +1728,7 @@ public:
     {
         page = newPage;
         for (int i = 0; i < 4; ++i) tabs[static_cast<size_t>(i)].setToggleState(i == page, juce::dontSendNotification);
-        gesture.setVisible(page == playPage || page == shapePage); gesture.editing = page == shapePage;
+        gesture.setVisible(page == playPage || page == shapePage); gesture.setEditing(page == shapePage);
         favorite.setVisible(page != modPage);
         randomPreset.setVisible(page != modPage);
         family.setVisible(page == playPage || page == libraryPage);
@@ -1780,7 +1809,8 @@ public:
                                          : "Off mutes the sub. Direct bypasses distortion. Driven adds saturation.");
         lowCut.setTooltip(originalSound ? "Original sound preserved. Zoom > Use latest sound enables the new body filter."
                                         : "Remove low frequencies from the vowel body to leave room for the clean sub.");
-        close.setEnabled(callbacks.requestClose && (! callbacks.canClose || callbacks.canClose()));
+        // Hidden, not greyed out, where this window can't be closed from inside (most hosts' docked views).
+        close.setVisible(callbacks.requestClose && (! callbacks.canClose || callbacks.canClose()));
         if (auto* editor = findParentComponentOfClass<YoiBoiEditor>())
             zoom.setButtonText("ZOOM " + juce::String(juce::roundToInt(editor->getWidth() * 100.0 / shellWidth)) + "%");
         updateExclusionIndicators(*this);
@@ -1991,7 +2021,6 @@ public:
         text(g, p.family.toUpperCase(), { width - 53, 0, 52, height }, 9, cream.withAlpha(0.6f));
     }
     void listBoxItemDoubleClicked(int, const juce::MouseEvent&) override { loadSelected(); }
-    void returnKeyPressed(int) override { loadSelected(); }
     void loadSelected()
     {
         const auto selected = library.getSelectedRow();
@@ -2017,6 +2046,32 @@ public:
         }
         library.selectRow(candidates[static_cast<size_t>(randomPicker.nextInt(static_cast<int>(candidates.size())))]);
         loadSelected();
+    }
+    // The arrow keys (VfdHostKeys.h): the previous (-1) or next (+1) sound in what the Library shows (filter,
+    // folder and search: the set the random-preset die picks from), in list order and wrapping at the
+    // ends, on every page. A sound that isn't in that view (a New Yoi roll) steps to the first or the
+    // last. Loads exactly as selecting the row and pressing LOAD does: one Undo step, the same message.
+    void stepPreset(int step)
+    {
+        if (! callbacks.loadPreset || step == 0) return;
+        refreshLibrary();
+        const int count = static_cast<int>(filtered.size());
+        if (count == 0) { toast("No sounds match this view"); return; }
+        int current = -1;
+        for (int row = 0; row < count && current < 0; ++row)
+            if (filtered[static_cast<size_t>(row)].current) current = row;
+        const int next = current < 0 ? (step > 0 ? 0 : count - 1) : ((current + step) % count + count) % count;
+        if (next == current) { toast("No other sounds in this view"); return; }
+        library.selectRow(next);
+        loadSelected();
+        updateValues(); // show the new name now, not on the next timer tick
+    }
+    void releaseSearch()
+    {
+        if (! search.hasKeyboardFocus(false)) return;
+        auto* editor = findParentComponentOfClass<YoiBoiEditor>();
+        if (editor != nullptr && editor->isShowing() && editor->getWantsKeyboardFocus()) editor->grabKeyboardFocus();
+        else search.giveAwayKeyboardFocus();
     }
     void showSaveDialog()
     {
@@ -2139,9 +2194,17 @@ YoiBoiEditor::YoiBoiEditor(juce::AudioProcessor& ownerProcessor, juce::AudioProc
     setResizeLimits(shellWidth * 9 / 10, shellHeight * 9 / 10, shellWidth * 3 / 2, shellHeight * 3 / 2);
     if (auto* c = getConstrainer()) c->setFixedAspectRatio(static_cast<double>(shellWidth) / shellHeight);
     setSize(shellWidth * zoom / 100, shellHeight * zoom / 100);
+    // Host keys: plain arrows step presets while the window is focused; everything else reaches the host.
+    hostKeys = std::make_unique<vfd::HostKeys>(*this, [this](int step) { if (impl != nullptr) impl->stepPreset(step); });
+    hostKeys->apply();
 }
 
-YoiBoiEditor::~YoiBoiEditor() = default;
+YoiBoiEditor::~YoiBoiEditor() { hostKeys.reset(); }
+
+std::unique_ptr<juce::ComponentTraverser> YoiBoiEditor::createKeyboardFocusTraverser()
+{
+    return vfd::HostKeys::createTraverser();
+}
 void YoiBoiEditor::paint(juce::Graphics&) {}
 void YoiBoiEditor::resized()
 {

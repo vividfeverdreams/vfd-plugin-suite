@@ -7,6 +7,8 @@
 #include <memory>
 #include <vector>
 
+namespace vfd { class HostKeys; }
+
 namespace yoiboi
 {
 struct PresetItem
@@ -82,10 +84,16 @@ public:
     ~YoiBoiEditor() override;
     void paint(juce::Graphics&) override;
     void resized() override;
+    // Host keys (../shared/VfdHostKeys.h): no default focus target, so closing a field or page never
+    // hands the keyboard to a control.
+    std::unique_ptr<juce::ComponentTraverser> createKeyboardFocusTraverser() override;
 
 private:
     class Impl;
     std::unique_ptr<Impl> impl;
+    // Last: made after the controls and destroyed first. The arrows step presets; every other key
+    // reaches the host.
+    std::unique_ptr<vfd::HostKeys> hostKeys;
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(YoiBoiEditor)
 };
 }

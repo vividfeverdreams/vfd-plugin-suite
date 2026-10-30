@@ -157,6 +157,7 @@ public:
             }
             YoiBoiProcessor reopened (directory.path);
             auto reopenedCallbacks = reopened.makeEditorCallbacks();
+            for (int i = 0; i < 6; ++i) reopenedCallbacks.setLock (i, false); // LENGTH starts locked and would keep its value
             expectEquals (reopenedCallbacks.soundEngine(), Patch::currentSoundEngine);
             const auto presets = reopenedCallbacks.listPresets();
             const auto found = std::find_if (presets.begin(), presets.end(), [&] (const auto& item)

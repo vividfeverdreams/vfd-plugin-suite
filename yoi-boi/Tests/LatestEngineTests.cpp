@@ -547,6 +547,37 @@ public:
             expect (BounceRenderer::renderVariant (factoryPresets()[0], 140.0, 44100.0, left, right), "Original engines bounce too");
         }
 
+        beginTest ("Bounces render at the host's sample rate, with the same names and length in beats");
+        for (const double rate : { 44100.0, 96000.0 })
+        {
+            TempRoot root;
+            YoiBoiProcessor synth (root.path);
+            synth.prepareToPlay (rate, 512);
+            auto callbacks = synth.makeEditorCallbacks();
+            const auto folder = root.path.getChildFile ("bounces");
+            expect (callbacks.startBounce (8, true, folder));
+            for (int wait = 0; wait < 4800 && callbacks.bounceInfo().running; ++wait) juce::Thread::sleep (25);
+            const auto info = callbacks.bounceInfo();
+            expect (! info.running);
+            juce::WavAudioFormat wav;
+            int valid = 0;
+            for (std::size_t i = 0; i < info.files.size(); ++i)
+            {
+                const auto& file = info.files[i];
+                const auto stem = juce::String (static_cast<int> (i + 1)).paddedLeft ('0', 2) + " "
+                                + juce::File::createLegalFileName (i < info.names.size() ? info.names[i] : juce::String());
+                auto stream = file.createInputStream();
+                if (stream == nullptr) continue;
+                std::unique_ptr<juce::AudioFormatReader> reader (wav.createReaderFor (stream.release(), true));
+                if (reader == nullptr) continue;
+                const auto bar = static_cast<juce::int64> (std::lround (2.0 * rate)); // one bar at 120 BPM
+                valid += std::abs (reader->sampleRate - rate) < 1.0 && reader->numChannels == 2 && reader->bitsPerSample == 24
+                         && reader->lengthInSamples >= bar && reader->lengthInSamples < bar + static_cast<juce::int64> (4 * rate)
+                         && file.getFileNameWithoutExtension() == stem;
+            }
+            expectEquals (valid, 8, "Eight WAVs at " + juce::String (rate) + " Hz: one bar plus the tail, the usual names");
+        }
+
         beginTest ("User presets save into folders without touching existing files");
         {
             TempRoot root;

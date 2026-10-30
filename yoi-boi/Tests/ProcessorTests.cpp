@@ -337,6 +337,7 @@ public:
             expectEquals (directory.path.findChildFiles (juce::File::findFiles, false, "*.xml").size(), 2);
             YoiBoiProcessor reloaded (directory.path);
             auto loadedCallbacks = reloaded.makeEditorCallbacks();
+            for (int i = 0; i < 6; ++i) loadedCallbacks.setLock (i, false); // locked groups would keep their values
             const auto items = loadedCallbacks.listPresets();
             const auto found = std::find_if (items.begin(), items.end(), [] (const PresetItem& item) { return item.user && item.name == "A/Yoi"; });
             expect (found != items.end());
@@ -347,6 +348,55 @@ public:
             const auto beforeInvalidId = loadedCallbacks.currentPatchName();
             loadedCallbacks.loadPreset ("factory:not-an-index");
             expectEquals (loadedCallbacks.currentPatchName(), beforeInvalidId);
+        }
+
+        beginTest ("Locked groups and single locks keep their values through every preset load");
+        {
+            // User, 2026-10-28: "when a parameter is locked, the should literally stay locked no matter what".
+            TemporaryPresetDirectory directory;
+            YoiBoiProcessor synth (directory.path);
+            auto callbacks = synth.makeEditorCallbacks();
+            for (int i = 0; i < 6; ++i) callbacks.setLock (i, false);
+            callbacks.setLock (4, true);                 // LENGTH (also keeps SYNC)
+            callbacks.setLock (5, true);                 // SUB
+            callbacks.setParameterLock ("dirt", true);   // one control on its own
+            setValue (synth, "sync", 0.0f);
+            setValue (synth, "length_ms", 611.0f);
+            setValue (synth, "sub", 0.37f);
+            setValue (synth, "dirt", 0.81f);
+            const auto value = [&synth] (const char* id) { return synth.parameters().getRawParameterValue (id)->load(); };
+            const auto held = [&] {
+                return std::abs (value ("length_ms") - 611.0f) < 0.01f && value ("sync") < 0.5f
+                    && std::abs (value ("sub") - 0.37f) < 0.001f && std::abs (value ("dirt") - 0.81f) < 0.001f;
+            };
+            const auto presets = callbacks.listPresets();
+            int factoryHeld = 0, factories = 0, mouthMoved = 0;
+            float lastMouth = value ("mouth");
+            for (const auto& item : presets)
+            {
+                if (item.user) continue;
+                callbacks.loadPreset (item.id);
+                ++factories;
+                factoryHeld += held() ? 1 : 0;
+                mouthMoved += std::abs (value ("mouth") - lastMouth) > 1.0e-4f ? 1 : 0;
+                lastMouth = value ("mouth");
+            }
+            expectEquals (factoryHeld, factories, "locked LENGTH, SYNC, SUB and DIRT hold through every factory preset");
+            expect (mouthMoved > factories / 2, "unlocked controls still change with the preset");
+            callbacks.setLock (5, false);
+            setValue (synth, "sub", 0.9f);
+            expect (callbacks.savePreset ("Lock probe"));
+            callbacks.setLock (5, true);
+            setValue (synth, "sub", 0.37f);
+            const auto refreshed = callbacks.listPresets();
+            const auto probe = std::find_if (refreshed.begin(), refreshed.end(), [] (const PresetItem& item) { return item.user && item.name == "Lock probe"; });
+            expect (probe != refreshed.end());
+            if (probe != refreshed.end()) callbacks.loadPreset (probe->id);
+            expect (held(), "locked SUB holds through a user preset saved with another SUB");
+            const auto before = stateOf (synth).getChildWithName ("PARAMETERS").createCopy();
+            callbacks.loadPreset (presets.front().id);
+            callbacks.undo();
+            expect (stateOf (synth).getChildWithName ("PARAMETERS").isEquivalentTo (before), "Undo after a locked load restores the sound before it");
         }
 
         beginTest ("Failed preset writes report failure without changing the current sound name");

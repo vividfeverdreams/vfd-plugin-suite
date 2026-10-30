@@ -280,9 +280,11 @@ int main (int argc, char* argv[])
         return yoiboi::renderFactoryDemos (juce::File (juce::String::fromUTF8 (argv[2]))) ? 0 : 1;
     if (argc >= 3 && juce::String::fromUTF8(argv[1]) == "--render-ui")
         return renderEditor(juce::String::fromUTF8(argv[2])) ? 0 : 1;
+    // --host-keys: the editor in an off-screen window, keys and clicks sent the way a host sends them.
+    const bool hostKeysOnly = argc >= 2 && juce::String::fromUTF8 (argv[1]) == "--host-keys";
     juce::UnitTestRunner runner;
     runner.setAssertOnFailure (false);
-    runner.runTestsInCategory ("YOI-BOI", 12345);
+    runner.runTestsInCategory (hostKeysOnly ? "YOI-BOI host keys" : "YOI-BOI", 12345);
 
     int failures = 0;
     for (int i = 0; i < runner.getNumResults(); ++i)
@@ -297,6 +299,8 @@ int main (int argc, char* argv[])
         }
     }
     std::cout << "YOI-BOI tests: " << failures << " failures\n";
+    if (hostKeysOnly)
+        return failures == 0 && runner.getNumResults() > 0 ? 0 : 1;
     const bool hostPassed = argc < 2 || smokeTestVst3 (juce::String::fromUTF8 (argv[1]));
     const bool editorPassed = argc < 3 || renderEditor (juce::String::fromUTF8 (argv[2]));
     if (argc >= 3) std::cout << "Editor offscreen render: " << (editorPassed ? "passed" : "failed") << '\n';

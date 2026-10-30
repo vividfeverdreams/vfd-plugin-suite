@@ -1,6 +1,14 @@
-# YOI-BOI 0.2.3
+# YOI-BOI 0.2.4
 
 YOI-BOI is a monophonic talking-bass synthesizer for Apple Silicon macOS, built as a **VST3 instrument**, an **Audio Unit instrument** and a **standalone app**. Play a MIDI phrase, press **NEW YOI**, and shape the result with Mouth, Size, Bite, Dirt, Length and Sub.
+
+## What's new in 0.2.4
+
+- **Your keyboard belongs to your DAW.** Space (play/stop), Return, Tab, letters (Live's computer MIDI keyboard) and every shortcut, Cmd-Z included, always reach the host, even after you click a knob, a button, a preset or the vowel graph. Only a field you are typing in (the Library search, or a value you click to type) keeps the keys; press Return, or click anywhere else, to finish.
+- **Arrow keys browse presets.** With the YOI-BOI window focused (click it once), the left and up arrows load the previous preset and the right and down arrows the next, on every page. They step through what the Library is showing (ALL SOUNDS, FAVORITES, SAVED or a folder, narrowed by your search, the same sounds the random-preset die picks from) in list order and wrap at the ends. After a NEW YOI or MUTATE, the right arrow loads the first of those sounds and the left arrow the last. Each step loads the preset exactly as LOAD does, so Undo goes back. Arrows with Shift, Cmd, Alt or Ctrl go to the host.
+- **The vowel graph says it can be edited.** PLAY shows CLICK THE MOTION TO SHAPE IT, the graph has a tooltip, and the pointer changes over it: a hand where a click opens SHAPE or grabs a point, a crosshair where a click on SHAPE moves the nearest point.
+- **Bounces at your project's sample rate.** Bounced variations are rendered at the sample rate the host runs YOI-BOI at (48 kHz before it has started). File names and lengths in beats are unchanged.
+- **CLOSE only where it works.** The x next to ZOOM appears only where YOI-BOI can close its window; it is no longer shown greyed out.
 
 ## What's new in 0.2.3
 
@@ -34,7 +42,7 @@ YOI-BOI is a monophonic talking-bass synthesizer for Apple Silicon macOS, built 
 
 1. Press **PREVIEW**, or play MIDI notes around **36–48**. External MIDI takes priority over Preview. The synth plays one voice with glide, sustain pedal, velocity and pitch bend.
 2. Choose a family (Rubber, Metal, Throat or Squeak) and press **NEW YOI**. **MUTATE** makes a smaller change within the current family.
-3. Right-click a parameter and choose **Exclude from randomization**. New Yoi and Mutate then leave it alone, while manual changes and automation still work. Repeat to include it again. The six padlocks lock whole groups; Length and Sub start locked.
+3. Right-click a parameter and choose **Lock**. New Yoi, Mutate and preset changes (LOAD, arrows, the random die) then leave it alone, while manual changes and automation still work. Repeat to unlock it. The six padlocks lock whole groups (a locked Length also keeps SYNC); Length and Sub start locked. Undo, A/B and reopening a project still restore everything exactly.
 4. Use **SHAPE** to set the Start, Body and End vowels, the Body point and the Curve. Use **MOD** for talk motion, pitch, tone and attack. **LOCK** protects the Mouth and Length groups together. Undo/Redo covers your sound edits for the current session.
 5. To keep a sound, open **LIBRARY → SAVE PRESET**, enter a name, choose a folder and press **Save**. New Yoi and Mutate never save files by themselves.
 
@@ -56,7 +64,7 @@ With **SYNC** on, Length offers 1/16, 1/8, 1/4, 1/2 and 1 Bar, each straight, tr
 
 ## Window controls
 
-**ZOOM** sets the device size and holds the engine options. **CLOSE** closes a floating plug-in window that YOI-BOI can recognise; it is disabled when that window can't be identified safely. The instrument keeps running.
+**ZOOM** sets the device size and holds the engine options. **CLOSE** (the x beside it) closes a floating plug-in window that YOI-BOI can recognise; it is hidden when that window can't be identified safely. The instrument keeps running.
 
 The standalone app has a borderless window: drag its logo area to move it. **ZOOM → Audio / MIDI settings** opens the device and MIDI-input settings, and the app remembers them. Closing the window quits the app. The standalone never saves sounds automatically.
 
@@ -111,6 +119,7 @@ Checks, all run against private temporary folders (the test binary sets its own 
 B=build/YoiBoiTests_artefacts/Release/YoiBoiTests
 $B "$(pwd)/build/YoiBoi_artefacts/Release/VST3/YOI-BOI.vst3"           # unit, processor, editor tests + VST3 scan/render
 $B --check-au "$(pwd)/build/YoiBoi_artefacts/Release/AU/YOI-BOI.component" # AU hosted in-process, not installed
+$B --host-keys                           # host keys: the editor in an off-screen window (needs a display)
 $B --check-compat "/absolute/old/YOI-BOI.vst3" "$(pwd)/build/YoiBoi_artefacts/Release/VST3/YOI-BOI.vst3"
 $B --preset-stats "$(pwd)/build/demos"   # peak, loudness and DC for every factory sound
 $B --render-demos "$(pwd)/build/demos"   # the same, plus WAV files and a combined tour

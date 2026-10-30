@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.22)
-project(YoiBoi VERSION 0.2.3 LANGUAGES C CXX)
+project(YoiBoi VERSION 0.2.4 LANGUAGES C CXX)
 
 if (APPLE)
     enable_language(OBJCXX)
@@ -126,8 +126,9 @@ if (YOIBOI_BUILD_TESTS)
         target_sources(YoiBoiTests PRIVATE Source/UI/WindowActions.cpp)
     endif()
     target_compile_features(YoiBoiTests PRIVATE cxx_std_20)
+    # Modal loops: the host-keys test (../shared/Tests/HostKeysTest.h) pumps the message loop.
     target_compile_definitions(YoiBoiTests PRIVATE JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0 JUCE_UNIT_TESTS=1 JUCE_PLUGINHOST_VST3=1
-        JUCE_PLUGINHOST_AU=1 YOIBOI_VERSION_STRING="${PROJECT_VERSION}")
+        JUCE_PLUGINHOST_AU=1 JUCE_MODAL_LOOPS_PERMITTED=1 YOIBOI_VERSION_STRING="${PROJECT_VERSION}")
     target_link_libraries(YoiBoiTests PRIVATE
         YoiBoiAssets
         juce::juce_audio_utils

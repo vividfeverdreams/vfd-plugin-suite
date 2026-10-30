@@ -270,6 +270,7 @@ void YoiBoiProcessor::prepareToPlay (double sampleRate, int)
 {
     currentSampleRate = std::isfinite (sampleRate) && sampleRate >= 8000.0
                       ? std::min (sampleRate, 768000.0) : 48000.0;
+    bounceSampleRate.store (currentSampleRate, std::memory_order_release);
     waveformStride = std::max (1, static_cast<int> (currentSampleRate / 375.0));
     waveformCountdown = 0;
     waveformWriteIndex = 0;
@@ -691,6 +692,25 @@ void YoiBoiProcessor::preserveExcludedParameters (Patch& next, const Patch& prev
         static_cast<float> (next.lengthDivision), next.freeLengthMilliseconds, static_cast<float> (next.lengthFeel));
 }
 
+// A locked or excluded control keeps its value through every preset load (user,
+// 2026-10-28). A locked LENGTH also keeps SYNC, so the heard length can't change.
+// Undo, redo, A/B and a restored project still set the sound exactly.
+void YoiBoiProcessor::keepLockedSettings (Patch& next, const Patch& previous) const
+{
+    const juce::ScopedLock lock (stateMutex);
+    auto nextState = toValueTree (next);
+    const auto oldState = toValueTree (previous);
+    const auto keep = [&] (const char* property) { nextState.setProperty (property, oldState.getProperty (property), nullptr); };
+    for (const auto& parameter : parameterProperties)
+        if (parameterExclusions.contains (parameter.id)
+            || (parameter.group >= 0 && locks[static_cast<std::size_t> (parameter.group)]))
+            keep (parameter.property);
+    if (locks[4]) keep ("tempoSync");
+    if (const auto restored = fromValueTree (nextState)) next = *restored;
+    next.lengthSeconds = patchLengthSeconds (next.tempoSync ? 1.f : 0.f,
+        static_cast<float> (next.lengthDivision), next.freeLengthMilliseconds, static_cast<float> (next.lengthFeel));
+}
+
 bool YoiBoiProcessor::isParameterLocked (const juce::String& id) const
 {
     const juce::ScopedLock lock (stateMutex);
@@ -1016,6 +1036,7 @@ void YoiBoiProcessor::loadPreset (const juce::String& id)
           || ! userPresets[static_cast<size_t> (index)].available) return;
       patch = userPresets[static_cast<size_t> (index)].patch; }
     else return;
+    keepLockedSettings (patch, livePatch());
     applyPatch (std::move (patch), true);
 }
 
@@ -1115,6 +1136,8 @@ bool YoiBoiProcessor::startBounce (int count, bool useMutate, juce::File folder)
     BounceRenderer::Request request;
     request.variants = variants;
     request.bpm = std::clamp (lastHostBpm.load(), 40.0, 300.0);
+    // The project's sample rate (48 kHz before the host has prepared the plug-in). Lengths stay in beats.
+    request.sampleRate = bounceSampleRate.load (std::memory_order_acquire);
     request.folder = folder == juce::File {} ? BounceRenderer::defaultFolder() : folder;
     if (! bounceRenderer.start (std::move (request)))
     {

@@ -55,6 +55,7 @@ private:
     void setParameterValue (const char* id, float value);
     void pushHistory (const Patch& patch);
     void preserveExcludedParameters (Patch& next, const Patch& previous) const;
+    void keepLockedSettings (Patch& next, const Patch& previous) const;
     void setParameterLock (const juce::String& id, bool excluded);
     bool isParameterLocked (const juce::String& id) const;
     void newYoi();
@@ -102,6 +103,7 @@ private:
     dsp::CompatibleVoice voice;
     std::atomic<int> soundEngine { Patch::currentSoundEngine };
     double currentSampleRate = 48000.0;
+    std::atomic<double> bounceSampleRate { 48000.0 }; // currentSampleRate, for bounces started on the message thread
     // Preview phrase (audio thread): one bar of phraseSteps at the host tempo.
     juce::int64 previewPosition = 0, previewNoteOffAt = -1, previewEnd = 0;
     double previewSixteenth = 6000.0;

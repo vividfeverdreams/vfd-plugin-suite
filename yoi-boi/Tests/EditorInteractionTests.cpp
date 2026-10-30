@@ -1,8 +1,11 @@
 #include "Plugin/YoiBoiProcessor.h"
+#include "Tests/HostKeysTest.h" // ../shared: the suite's host-keys checks
 
 #include <cmath>
+#include <iostream>
 #include <memory>
 #include <set>
+#include <typeinfo>
 
 namespace yoiboi
 {
@@ -96,6 +99,107 @@ struct GestureCounter final : juce::AudioProcessorParameter::Listener
     }
     int begins = 0, ends = 0;
 };
+
+// A click as a list row receives it, for calling a ListBoxModel directly.
+juce::MouseEvent fakeClick (juce::Component& target)
+{
+    const auto now = juce::Time::getCurrentTime();
+    return { juce::Desktop::getInstance().getMainMouseSource(), {}, {}, juce::MouseInputSource::defaultPressure,
+             juce::MouseInputSource::defaultOrientation, juce::MouseInputSource::defaultRotation,
+             juce::MouseInputSource::defaultTiltX, juce::MouseInputSource::defaultTiltY, &target, &target, now, {}, now, 1, false };
+}
+
+// ---- Host keys through a real window: the path a host's key presses and clicks take (VfdHostKeys.h).
+void pumpMessages (int milliseconds) { juce::MessageManager::getInstance()->runDispatchLoopUntil (milliseconds); }
+
+// A click as the user makes it, at a point in target's own coordinates.
+bool clickInWindow (juce::Component& target, juce::Point<int> local)
+{
+    auto* peer = target.getPeer();
+    if (peer == nullptr || ! target.isShowing()) return false;
+    const auto at = peer->getComponent().getLocalPoint (&target, local).toFloat();
+    const auto t = juce::Time::currentTimeMillis();
+    peer->handleMouseEvent (juce::MouseInputSource::InputSourceType::mouse, at,
+                            juce::ModifierKeys (juce::ModifierKeys::leftButtonModifier), juce::MouseInputSource::defaultPressure,
+                            juce::MouseInputSource::defaultOrientation, t);
+    peer->handleMouseEvent (juce::MouseInputSource::InputSourceType::mouse, at, juce::ModifierKeys(),
+                            juce::MouseInputSource::defaultPressure, juce::MouseInputSource::defaultOrientation, t + 30);
+    pumpMessages (30);
+    return true;
+}
+
+bool clickInWindow (juce::Component& target) { return clickInWindow (target, target.getLocalBounds().getCentre()); }
+
+void hoverInWindow (juce::Component& target, juce::Point<int> local)
+{
+    if (auto* peer = target.getPeer())
+        peer->handleMouseEvent (juce::MouseInputSource::InputSourceType::mouse,
+                                peer->getComponent().getLocalPoint (&target, local).toFloat(), juce::ModifierKeys(),
+                                juce::MouseInputSource::defaultPressure, juce::MouseInputSource::defaultOrientation,
+                                juce::Time::currentTimeMillis());
+    pumpMessages (20);
+}
+
+// True when the plug-in kept the key, false when it went on to the host. A real key carries its character.
+bool keptByPlugin (juce::Component& inWindow, int key, juce::ModifierKeys mods = {})
+{
+    auto* peer = inWindow.getPeer();
+    if (peer == nullptr) return false;
+    const auto text = key == juce::KeyPress::spaceKey ? juce::juce_wchar (' ')
+                      : (key >= 'a' && key <= 'z' && ! mods.isCommandDown()) ? juce::juce_wchar (key) : juce::juce_wchar (0);
+    return peer->handleKeyPress (juce::KeyPress (key, mods, text));
+}
+
+// The editor in an off-screen window, held the way a host's wrapper component holds it.
+struct OffscreenWindow
+{
+    explicit OffscreenWindow (juce::Component& editorToShow) : editor (editorToShow)
+    {
+        holder.setSize (editor.getWidth(), editor.getHeight());
+        holder.addAndMakeVisible (editor);
+        holder.setTopLeftPosition (-6000, -6000);
+        holder.addToDesktop (juce::ComponentPeer::windowIsTemporary);
+        holder.setVisible (true);
+        pumpMessages (600);
+    }
+    ~OffscreenWindow()
+    {
+        holder.removeFromDesktop();
+        holder.removeChildComponent (&editor);
+    }
+    bool isOpen() const { return holder.getPeer() != nullptr && editor.isShowing(); }
+    juce::Component& editor;
+    juce::Component holder;
+};
+
+// The Library's view in list order, filtered as the editor filters it: a folder ("" = ALL SOUNDS) and a search.
+juce::StringArray libraryView (EditorCallbacks& callbacks, const juce::String& folder, const juce::String& query)
+{
+    juce::StringArray ids;
+    for (const auto& p : callbacks.listPresets())
+    {
+        if (folder.isNotEmpty() && p.folder != folder) continue;
+        if (query.isNotEmpty() && ! (p.name + " " + p.family + " " + p.folder + " " + p.tags.joinIntoString (" ")).containsIgnoreCase (query))
+            continue;
+        ids.add (p.id);
+    }
+    return ids;
+}
+
+// Controls other than text fields and allowed pages that could take keyboard focus.
+juce::StringArray keyboardGrabbers (juce::Component& root)
+{
+    juce::StringArray grabbers;
+    for (auto* child : root.getChildren())
+    {
+        const bool allowed = vfd::HostKeys::isTextField (child)
+                             || static_cast<bool> (child->getProperties().getWithDefault ("vfdHostKeysAllowFocus", false));
+        if (! allowed && child->getWantsKeyboardFocus())
+            grabbers.add ("'" + child->getTitle() + child->getName() + "' (" + juce::String (typeid (*child).name()) + ")");
+        grabbers.addArray (keyboardGrabbers (*child));
+    }
+    return grabbers;
+}
 }
 
 class EditorInteractionTests final : public juce::UnitTest
@@ -142,8 +246,9 @@ public:
                     auto* hit = editor->getComponentAt(editor->getLocalPoint(random, random->getLocalBounds().getCentre()));
                     expect(hit == page || page->isParentOf(hit), "Info page intercepts clicks over the instrument controls");
                 }
-                expect(page->keyPressed(juce::KeyPress(juce::KeyPress::downKey)));
-                expect(page->keyPressed(juce::KeyPress('z', juce::ModifierKeys::commandModifier, 0)));
+                expect(page->keyPressed(juce::KeyPress(juce::KeyPress::downKey)), "INFO holds the arrows so presets can't change under it");
+                expect(!page->keyPressed(juce::KeyPress('z', juce::ModifierKeys::commandModifier, 0)), "Cmd-Z reaches the host while INFO is open");
+                expect(!page->keyPressed(juce::KeyPress(juce::KeyPress::spaceKey, {}, ' ')), "Space reaches the host while INFO is open");
                 expect(page->keyPressed(juce::KeyPress(juce::KeyPress::escapeKey)));
                 expect(!page->isVisible());
                 expect(clickControl(*editor, "INFO"));
@@ -174,7 +279,7 @@ public:
             }
         }
 
-        beginTest ("Keyboard macro edits reach the engine and can be undone");
+        beginTest ("Macro edits reach the engine as one host gesture and can be undone");
         {
             YoiBoiProcessor synth;
             auto callbacks = synth.makeEditorCallbacks();
@@ -183,17 +288,25 @@ public:
             expect (mouth != nullptr);
             if (mouth != nullptr)
             {
+                // Knobs leave every key to the host; the arrows browse presets instead (host keys).
+                expect (! mouth->getWantsKeyboardFocus() && ! mouth->getMouseClickGrabsKeyboardFocus());
                 const auto original = synth.parameters().getRawParameterValue ("mouth")->load();
                 auto* parameter = synth.parameters().getParameter ("mouth");
                 GestureCounter gestures;
                 parameter->addListener (&gestures);
                 expectWithinAbsoluteError (mouth->getValueFromText ("62%"), 0.62, 0.00001);
-                expect (mouth->keyPressed (juce::KeyPress (juce::KeyPress::upKey)));
-                expect (synth.parameters().getRawParameterValue ("mouth")->load() > original);
+                {
+                    // The path a mouse drag takes: drag start, a new value, drag end.
+                    const juce::Slider::ScopedDragNotification drag (*mouth);
+                    const auto range = mouth->getMaximum() - mouth->getMinimum();
+                    const auto middle = mouth->getMinimum() + range * 0.5;
+                    mouth->setValue (mouth->getValue() + (mouth->getValue() > middle ? -0.2 : 0.2) * range, juce::sendNotificationSync);
+                }
+                expect (std::abs (synth.parameters().getRawParameterValue ("mouth")->load() - original) > 0.05f);
                 expectEquals (gestures.begins, 1, "Host automation must receive a gesture start.");
                 expectEquals (gestures.ends, 1, "Host automation must receive a matching gesture end.");
                 parameter->removeListener (&gestures);
-                expect (callbacks.canUndo(), "An arrow-key edit must create an Undo entry.");
+                expect (callbacks.canUndo(), "A knob edit must create an Undo entry.");
                 callbacks.undo();
                 expectWithinAbsoluteError (synth.parameters().getRawParameterValue ("mouth")->load(), original, 0.00001f);
             }
@@ -279,7 +392,7 @@ public:
             }
         }
 
-        beginTest ("Library selection is non-destructive and Enter explicitly loads");
+        beginTest ("Library selection is non-destructive and LOAD explicitly loads");
         {
             YoiBoiProcessor synth;
             auto callbacks = synth.makeEditorCallbacks();
@@ -288,15 +401,18 @@ public:
             callbacks.loadPreset = [&] (const juce::String& id) { ++loadCount; realLoad (id); };
             YoiBoiEditor editor (synth, synth.parameters(), callbacks);
             expect (clickControl (editor, "LIBRARY"));
-            auto* library = findControl<juce::ListBox> (editor, "Presets. Select a row, then double-click or press Enter to load.");
+            auto* library = findControl<juce::ListBox> (editor, "Presets. Select a row, then double-click it or press LOAD.");
             auto* favorite = findControl<juce::Button> (editor, "FAVORITE");
-            expect (library != nullptr && favorite != nullptr);
-            if (library != nullptr)
+            auto* load = findControl<juce::Button> (editor, "LOAD");
+            expect (library != nullptr && favorite != nullptr && load != nullptr);
+            if (library != nullptr && load != nullptr)
             {
+                expect (! library->getWantsKeyboardFocus(), "The list never takes the keyboard (Return and the arrows are the host's)");
                 expect (library->getListBoxModel()->getNumRows() >= 12);
                 library->selectRow (1);
                 expectEquals (loadCount, 0);
-                library->getListBoxModel()->returnKeyPressed (1);
+                expect (waitForEditor ([&] { return load->isEnabled(); }));
+                expect (clickControl (editor, "LOAD"));
                 expectEquals (loadCount, 1);
                 expect (callbacks.canUndo());
             }
@@ -335,7 +451,7 @@ public:
             {
                 expect (dice->isVisible() && dice->isEnabled());
                 expect (dice->getTooltip().containsIgnoreCase ("preset") && dice->getTooltip() != newYoi->getTooltip());
-                expect (dice->getWantsKeyboardFocus() && ! dice->getMouseClickGrabsKeyboardFocus());
+                expect (! dice->getWantsKeyboardFocus() && ! dice->getMouseClickGrabsKeyboardFocus(), "The die leaves the keyboard to the host");
                 expect (! dice->getBounds().intersects (favorite->getBounds()), "The die sits beside the star");
                 const auto firstName = callbacks.currentPatchName();
                 std::set<juce::String> seen;
@@ -436,7 +552,7 @@ public:
                 expect (folderKeys.size() > 2 && folders->getListBoxModel() != nullptr);
                 if (folderKeys.size() > 2 && folders->getListBoxModel() != nullptr)
                 {
-                    folders->getListBoxModel()->returnKeyPressed (2);
+                    folders->getListBoxModel()->listBoxItemClicked (2, fakeClick (*folders));
                     pumpEditor();
                     for (int pick = 0; pick < 12; ++pick)
                     {
@@ -566,7 +682,7 @@ public:
             YoiBoiProcessor synth;
             std::unique_ptr<juce::AudioProcessorEditor> editor (synth.createEditor());
             expect (clickControl (*editor, "LIBRARY"));
-            auto* library = findControl<juce::ListBox> (*editor, "Presets. Select a row, then double-click or press Enter to load.");
+            auto* library = findControl<juce::ListBox> (*editor, "Presets. Select a row, then double-click it or press LOAD.");
             expect (library != nullptr);
             if (library != nullptr)
             {
@@ -583,17 +699,27 @@ public:
             }
         }
 
-        beginTest ("In-device close calls the supplied window action");
+        beginTest ("In-device close calls the supplied window action and is hidden where it can't close");
         {
             YoiBoiProcessor synth;
             auto callbacks = synth.makeEditorCallbacks();
             int closes = 0;
+            bool closable = true;
             callbacks.requestClose = [&] { ++closes; };
-            callbacks.canClose = [] { return true; };
+            callbacks.canClose = [&] { return closable; };
             YoiBoiEditor editor (synth, synth.parameters(), callbacks);
+            auto* close = findControl<juce::Button> (editor, "Close plug-in window");
+            expect (close != nullptr && close->isVisible());
             expect (clickControl (editor, "Close plug-in window"));
             expectEquals (closes, 1);
             expect (findControl<juce::Button> (editor, "Interface zoom and settings") != nullptr);
+            if (close != nullptr)
+            {
+                closable = false;
+                expect (waitForEditor ([&] { return ! close->isVisible(); }), "No dead close control where the window can't be closed");
+                closable = true;
+                expect (waitForEditor ([&] { return close->isVisible(); }));
+            }
         }
 
         beginTest ("External MIDI disables Preview and resizing retains usable controls");
@@ -626,7 +752,7 @@ public:
                     if (slider == nullptr) continue;
                     const auto bounds = editor->getLocalArea (slider, slider->getLocalBounds());
                     expect (editor->getLocalBounds().contains (bounds), juce::String (title) + " is clipped after resizing");
-                    expect (slider->getWantsKeyboardFocus());
+                    expect (! slider->getWantsKeyboardFocus(), "Knobs leave the keyboard to the host");
                     expect (slider->getTitle().isNotEmpty());
                 }
                 for (const auto* title : { "Sub routing", "BODY LOW-CUT", "Length rhythm", "Interface zoom and settings", "Close plug-in window",
@@ -640,8 +766,257 @@ public:
                 }
             }
         }
+
     }
 };
 
 static EditorInteractionTests editorInteractionTests;
+
+// Host keys (../shared/VfdHostKeys.h) through a real off-screen window: YoiBoiTests --host-keys.
+class HostKeysTests final : public juce::UnitTest
+{
+public:
+    HostKeysTests() : UnitTest ("YOI-BOI host keys", "YOI-BOI host keys") {}
+
+    void runTest() override
+    {
+        juce::MessageManager::getInstance();
+        // The arrows browse presets while the window is focused; space, Return, Tab, letters, Escape and every
+        // shortcut reach the host. Needs a display; skips without one.
+        beginTest ("Host keys: the arrows browse presets and every other key reaches the host");
+        {
+            TemporaryPresetFolder folder;
+            YoiBoiProcessor synth (folder.path);
+            auto callbacks = synth.makeEditorCallbacks();
+            juce::StringArray loaded;
+            auto realLoad = callbacks.loadPreset;
+            callbacks.loadPreset = [&] (const juce::String& id) { loaded.add (id); realLoad (id); };
+            expect (currentPresetId (callbacks).isNotEmpty(), "A new instance starts on a Library preset");
+            YoiBoiEditor editor (synth, synth.parameters(), callbacks);
+            auto* device = editor.getNumChildComponents() > 0 ? editor.getChildComponent (0) : nullptr;
+            auto* mouth = findControl<juce::Slider> (editor, "MOUTH");
+            auto* size = findControl<juce::Slider> (editor, "SIZE");
+            auto* preview = findControl<juce::Button> (editor, "PREVIEW");
+            auto* mutate = findControl<juce::Button> (editor, "MUTATE");
+            auto* libraryTab = findControl<juce::Button> (editor, "LIBRARY");
+            auto* search = findControl<juce::TextEditor> (editor, "Search sounds");
+            auto* canvas = findControl<juce::Component> (editor, "Mouth motion: Start, Body, End");
+            auto* list = findControl<juce::ListBox> (editor, "Presets. Select a row, then double-click it or press LOAD.");
+            auto* folders = findControl<juce::ListBox> (editor, "Preset folders");
+            auto* die = findControl<juce::Button> (editor, "Random preset");
+            const bool found = device != nullptr && mouth != nullptr && size != nullptr && preview != nullptr && mutate != nullptr
+                               && libraryTab != nullptr && search != nullptr && canvas != nullptr && list != nullptr
+                               && folders != nullptr && die != nullptr;
+            expect (found, "The editor has the controls this test uses");
+            expect (keyboardGrabbers (editor).isEmpty(), "No control can take the keyboard: " + keyboardGrabbers (editor).joinIntoString (", "));
+            const juce::Point<int> blankInDevice { 40, 300 }; // plain shell, left of the screen, on every page
+            if (found)
+            {
+                // The suite's shared run. Its control spots are two knob caps and the PREVIEW key; MUTATE is
+                // clicked below, because it replaces the preset with a new sound, which the shared run's
+                // "the left arrow goes back" checks can't follow.
+                vfd::test::HostKeysProbe probe;
+                probe.currentPreset = [&] { return callbacks.currentPatchName(); }; // the name PLAY shows
+                probe.blankSpot = editor.getLocalPoint (device, blankInDevice);
+                probe.openTextField = [&]() -> juce::TextEditor*
+                {
+                    clickInWindow (*libraryTab);
+                    clickInWindow (*search);
+                    return search;
+                };
+                probe.controlSpots = { editor.getLocalPoint (mouth, juce::Point<int> (mouth->getWidth() / 2, 60)),
+                                       editor.getLocalPoint (size, juce::Point<int> (size->getWidth() / 2, 60)),
+                                       editor.getLocalPoint (preview, preview->getLocalBounds().getCentre()) };
+                expectEquals (vfd::test::runHostKeys (editor, probe, std::cout), 0, "The shared host-keys checks pass");
+            }
+            const bool display = juce::Desktop::getInstance().getDisplays().getPrimaryDisplay() != nullptr;
+            if (found && display)
+            {
+                // YOI-BOI's own cases, through a window the same way.
+                OffscreenWindow window (editor);
+                expect (window.isOpen(), "The editor window opens");
+                if (window.isOpen())
+                {
+                    const auto focused = [] { return juce::Component::getCurrentlyFocusedComponent(); };
+                    const auto focusName = [&]
+                    {
+                        auto* c = focused();
+                        return c == nullptr ? juce::String ("nothing") : "'" + c->getTitle() + c->getName() + "' " + juce::String (typeid (*c).name());
+                    };
+                    const auto reachesHost = [&] (int key, juce::ModifierKeys mods = {}) { return ! keptByPlugin (editor, key, mods); };
+                    const auto tab = [&] (const juce::String& name)
+                    {
+                        auto* button = findControl<juce::Button> (editor, name);
+                        return button != nullptr && clickInWindow (*button);
+                    };
+                    const auto onPage = [&] (const juce::String& name)
+                    {
+                        auto* button = findControl<juce::Button> (editor, name);
+                        return button != nullptr && button->getToggleState();
+                    };
+                    const auto arrow = [&] (int key)
+                    {
+                        keptByPlugin (editor, key);
+                        pumpMessages (40);
+                        return currentPresetId (callbacks);
+                    };
+                    const auto blank = [&] { clickInWindow (*device, blankInDevice); };
+
+                    // The vowel canvas (YB-F1 d, YB-F2): a mouse target with a tooltip and a pointer; keys never click it.
+                    expect (tab ("PLAY") && onPage ("PLAY"));
+                    blank();
+                    expect (focused() == &editor, "A click in the device focuses the editor (focus on " + focusName() + ")");
+                    auto* tip = dynamic_cast<juce::TooltipClient*> (canvas);
+                    expect (! canvas->getWantsKeyboardFocus(), "The vowel canvas never takes the keyboard");
+                    expect (tip != nullptr && tip->getTooltip().containsIgnoreCase ("click"), "On PLAY the canvas tooltip says to click it");
+                    expect (canvas->getMouseCursor() == juce::MouseCursor::PointingHandCursor, "A pointing hand over the motion on PLAY");
+                    expect (reachesHost (juce::KeyPress::spaceKey) && reachesHost (juce::KeyPress::returnKey) && onPage ("PLAY"),
+                            "Space and Return reach the host and don't open SHAPE");
+                    clickInWindow (*canvas);
+                    expect (onPage ("SHAPE"), "Clicking the motion opens SHAPE");
+                    expect (focused() == &editor, "Clicking the canvas focuses only the editor (focus on " + focusName() + ")");
+                    expect (tip != nullptr && tip->getTooltip().containsIgnoreCase ("drag"), "On SHAPE the canvas tooltip explains dragging");
+                    hoverInWindow (*canvas, { 3, 3 }); // a corner, away from the three points
+                    expect (canvas->getMouseCursor() == juce::MouseCursor::CrosshairCursor, "A crosshair away from the points on SHAPE");
+                    expect (reachesHost (juce::KeyPress::spaceKey) && onPage ("SHAPE"), "Space reaches the host on SHAPE");
+
+                    // The search field (YB-F1 a): it keeps the keys while you type; Return hands them back.
+                    expect (tab ("LIBRARY") && onPage ("LIBRARY"));
+                    clickInWindow (*search);
+                    expect (focused() == search, "Clicking the search field lets you type (focus on " + focusName() + ")");
+                    keptByPlugin (editor, 'a', juce::ModifierKeys::commandModifier); // replace what the shared run typed
+                    keptByPlugin (editor, juce::KeyPress::backspaceKey);
+                    for (const int key : { 'y', 'o', 'i' })
+                        expect (keptByPlugin (editor, key), "Letters type into the search field");
+                    pumpMessages (40);
+                    expectEquals (search->getText(), juce::String ("yoi"));
+                    keptByPlugin (editor, juce::KeyPress::returnKey);
+                    pumpMessages (60); // the field reports Return asynchronously
+                    expect (focused() == &editor, "Return ends typing and leaves only the editor focused (focus on " + focusName() + ")");
+                    expect (reachesHost (juce::KeyPress::spaceKey) && search->getText() == "yoi", "Space reaches the host after Return");
+
+                    // The arrows step through the searched view in list order, wrap, and each is one Undo step.
+                    const auto searched = libraryView (callbacks, {}, "yoi");
+                    expect (searched.size() >= 3, "The search leaves a few sounds");
+                    if (searched.size() >= 3)
+                    {
+                        const auto last = searched[searched.size() - 1];
+                        realLoad (last);
+                        const auto loads = loaded.size();
+                        expectEquals (arrow (juce::KeyPress::rightKey), searched[0], "The right arrow wraps from the last sound to the first");
+                        expectEquals (arrow (juce::KeyPress::downKey), searched[1], "The down arrow loads the next sound in list order");
+                        expectEquals (arrow (juce::KeyPress::upKey), searched[0], "The up arrow loads the previous sound");
+                        expectEquals (arrow (juce::KeyPress::leftKey), last, "The left arrow wraps from the first sound to the last");
+                        expectEquals (loaded.size(), loads + 4, "Each arrow loads one preset through LOAD's path");
+                        const auto items = callbacks.listPresets();
+                        const auto* shown = findPreset (items, last);
+                        expect (shown != nullptr && callbacks.currentPatchName() == shown->name, "PLAY shows the loaded preset's name");
+                        callbacks.undo();
+                        expectEquals (currentPresetId (callbacks), searched[0], "Undo goes back one arrow step");
+                        callbacks.redo();
+                        expectEquals (currentPresetId (callbacks), last);
+                        expect (reachesHost (juce::KeyPress::rightKey, juce::ModifierKeys::shiftModifier)
+                                    && reachesHost (juce::KeyPress::rightKey, juce::ModifierKeys::altModifier)
+                                    && reachesHost (juce::KeyPress::downKey, juce::ModifierKeys::ctrlModifier)
+                                    && currentPresetId (callbacks) == last,
+                                "Arrows with a modifier go to the host");
+                    }
+
+                    // Clearing the search by typing, then clicking elsewhere, releases the field.
+                    clickInWindow (*search, { 8, search->getHeight() / 2 });
+                    expect (focused() == search);
+                    keptByPlugin (editor, 'a', juce::ModifierKeys::commandModifier);
+                    keptByPlugin (editor, juce::KeyPress::backspaceKey);
+                    pumpMessages (40);
+                    expect (search->getText().isEmpty(), "Cmd-A and Backspace clear the field while typing");
+                    blank();
+                    expect (focused() == &editor, "Clicking elsewhere releases the field (focus on " + focusName() + ")");
+
+                    // Preset and folder rows (YB-F1 b): a click selects, the list never takes the keyboard.
+                    const auto before = currentPresetId (callbacks);
+                    const auto loads = loaded.size();
+                    list->scrollToEnsureRowIsOnscreen (1);
+                    clickInWindow (*list, list->getRowPosition (1, true).getCentre());
+                    expectEquals (list->getSelectedRow(), 1, "Clicking a preset row selects it");
+                    expect (focused() == &editor, "Clicking a preset row leaves only the editor focused (focus on " + focusName() + ")");
+                    for (const int key : { juce::KeyPress::returnKey, juce::KeyPress::deleteKey, juce::KeyPress::backspaceKey,
+                                           juce::KeyPress::pageDownKey, juce::KeyPress::homeKey, juce::KeyPress::endKey })
+                        expect (reachesHost (key), "Keys a focused list used to swallow reach the host: " + juce::KeyPress (key).getTextDescription());
+                    expectEquals (loaded.size(), loads, "Selecting a row loads nothing");
+                    expectEquals (currentPresetId (callbacks), before);
+
+                    juce::StringArray folderKeys;
+                    for (const auto& item : callbacks.listPresets())
+                        if (item.folder.isNotEmpty() && item.folder != "Saved") folderKeys.addIfNotAlreadyThere (item.folder);
+                    // A folder (list row = folder) that doesn't hold the loaded sound.
+                    int folderRow = -1;
+                    juce::StringArray inFolder;
+                    for (int row = 0; row < folderKeys.size() && folderRow < 0; ++row)
+                        if (const auto view = libraryView (callbacks, folderKeys[row], {}); view.size() >= 3 && ! view.contains (currentPresetId (callbacks)))
+                        {
+                            folderRow = row;
+                            inFolder = view;
+                        }
+                    expect (folderRow >= 0, "A folder without the loaded sound");
+                    if (folderRow >= 0)
+                    {
+                        folders->scrollToEnsureRowIsOnscreen (folderRow);
+                        clickInWindow (*folders, folders->getRowPosition (folderRow, true).getCentre());
+                    }
+                    expect (focused() == &editor, "Clicking a folder leaves only the editor focused (focus on " + focusName() + ")");
+                    expect (reachesHost (juce::KeyPress::returnKey) && reachesHost (juce::KeyPress::spaceKey));
+                    if (inFolder.size() >= 3)
+                    {
+                        expectEquals (arrow (juce::KeyPress::leftKey), inFolder[inFolder.size() - 1],
+                                      "With the sound outside the view, the left arrow loads the view's last sound");
+                        expectEquals (arrow (juce::KeyPress::rightKey), inFolder[0], "The right arrow wraps to the folder's first sound");
+                    }
+
+                    // Switching pages while typing (YB-F1 c) leaves the editor, not a control, with the keyboard.
+                    clickInWindow (*search);
+                    expect (focused() == search);
+                    expect (tab ("PLAY") && onPage ("PLAY"));
+                    expect (focused() == &editor, "Clicking a tab while typing focuses only the editor (focus on " + focusName() + ")");
+                    expect (tab ("LIBRARY"));
+                    clickInWindow (*search);
+                    if (auto* play = findControl<juce::Button> (editor, "PLAY"); play != nullptr && play->onClick)
+                        play->onClick(); // a page change that isn't a click: the hidden field lets go
+                    expect (onPage ("PLAY") && focused() == &editor, "A page change hides the field and focuses only the editor (focus on " + focusName() + ")");
+                    expect (reachesHost (juce::KeyPress::spaceKey) && reachesHost (juce::KeyPress::returnKey));
+
+                    // MUTATE: the click leaves no focus behind, and the new sound is outside every view.
+                    if (inFolder.size() >= 3)
+                    {
+                        clickInWindow (*mutate);
+                        expect (focused() == &editor, "Clicking MUTATE leaves only the editor focused (focus on " + focusName() + ")");
+                        expect (reachesHost (juce::KeyPress::returnKey) && reachesHost (juce::KeyPress::spaceKey),
+                                "Return and space reach the host after MUTATE");
+                        expect (currentPresetId (callbacks).isEmpty(), "MUTATE made a new sound");
+                        expectEquals (arrow (juce::KeyPress::rightKey), inFolder[0], "After MUTATE the right arrow loads the view's first sound");
+                        pumpMessages (450); // not a double-click
+                        clickInWindow (*mutate);
+                        expectEquals (arrow (juce::KeyPress::leftKey), inFolder[inFolder.size() - 1], "After MUTATE the left arrow loads the last");
+
+                        // MOD hides the die, and the arrows still browse.
+                        expect (tab ("MOD") && onPage ("MOD") && ! die->isVisible());
+                        expectEquals (arrow (juce::KeyPress::leftKey), inFolder[inFolder.size() - 2], "On MOD the arrows still browse");
+                        expect (reachesHost (juce::KeyPress::escapeKey), "Escape reaches the host when nothing is open");
+                        expect (reachesHost (juce::KeyPress::tabKey) && focused() == nullptr, "Tab reaches the host");
+                    }
+
+                    // Original and latest sounds enable and disable controls; none of them may take the keyboard after.
+                    realLoad ("factory:0");
+                    pumpMessages (120);
+                    if (inFolder.size() > 0) realLoad (inFolder[0]);
+                    pumpMessages (120);
+                    expect (keyboardGrabbers (editor).isEmpty(), "Still no control can take the keyboard: " + keyboardGrabbers (editor).joinIntoString (", "));
+                }
+            }
+            else if (found)
+                logMessage ("YOI-BOI host keys: skipped (no display)");
+        }
+    }
+};
+
+static HostKeysTests hostKeysTests;
 } // namespace yoiboi
