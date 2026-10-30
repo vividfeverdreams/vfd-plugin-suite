@@ -107,6 +107,14 @@ To join the suite later, move `stutter-step/` next to the others in the suite re
 
 1. Scaffold, parameters, state. 2. Groove model + generator + envelope, with tests. 3. Gate in the processor. 4. Slap. 5. Editor over the shell art. 6. Tests, pluginval/auval, install for an Ableton check. 7. Icon and the suite installer.
 
+## Status (v0.4.3, 26 October 2026)
+
+**DRAG MIDI** (user, 2026-10-26: "a handle that drops the current groove as a MIDI clip onto a MIDI track"). A DRAG key labelled MIDI sits right of OUTPUT on the screen's bottom row (the meter moved 20 art px right). Dragging it writes `<groove>.mid` (`MidiClip.cpp`: a C1 note wherever the gate opens, the gate's own event rule, hits 112 / ghosts 43, whole bars) and hands it to the OS drag; a click flashes "DRAG THIS KEY ONTO A MIDI TRACK" in the counter. Details in `README.md`, tests in `VALIDATION.md`. No sound or state change.
+
+## Status (v0.4.2, 21 October 2026)
+
+Suite 1.6.2 SS-F1–SS-F5: shared host-key routing with plain-arrow groove browsing, SAVE drafts retained across focus changes, correct locked-TIME arc and no forced long-time unlock, actual groove titles for host program queries, synchronized groove metadata and switch-only SUB SAFE crossfades. Compatibility constraints and test commands are in `README.md` and `VALIDATION.md`. The former 0.4.1 status below is historical.
+
 ## Status (v0.4.1, 14 October 2026)
 
 - **Random groove.** A shuffle key (two crossing arrows with the chevrons' open heads) sits between SAVE and the arrows, the same size and style as the arrow keys; SAVE moved left to make room and the arrows kept their place on the counter's right edge. One click loads a random factory or USER groove through `loadFactory` / `loadUserGroove`, the arrows' own path, so the name, chip, counter, swing padlock, host notifications and project state behave as for a manual pick. It never picks the loaded groove and skips unreadable USER files. NEW GROOVE is unchanged.

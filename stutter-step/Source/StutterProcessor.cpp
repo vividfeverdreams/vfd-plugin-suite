@@ -1,4 +1,5 @@
 #include "StutterProcessor.h"
+#include "MidiClip.h"
 #include <cstdlib>
 #include <vector>
 #if ! STUTTER_HEADLESS
@@ -70,6 +71,28 @@ StutterProcessor::StutterProcessor()
     loadFactory (0);
 }
 
+StutterProcessor::GrooveInfo StutterProcessor::getGrooveInfo() const
+{
+    const juce::ScopedLock lock (grooveMutex);
+    return groove;
+}
+
+int StutterProcessor::getCurrentProgram()
+{
+    return juce::jmax (0, getGrooveInfo().presetIndex);
+}
+
+const juce::String StutterProcessor::getProgramName (int index)
+{
+    const auto info = getGrooveInfo();
+    // JUCE has no separate current-program title. Custom grooves keep the historical index 0,
+    // but its queried name describes what is actually loaded. Selecting 0 still loads Lean Back.
+    if (index == 0 && info.presetIndex < 0)
+        return info.user.isNotEmpty() ? info.name
+             : "NEW " + juce::String::charToString (0x00B7) + " " + familyName (info.family) + " / " + info.name;
+    return factoryGroove (index).name;
+}
+
 bool StutterProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const
 {
     const auto out = layouts.getMainOutputChannelSet();
@@ -100,14 +123,16 @@ Pattern StutterProcessor::getPattern() const noexcept
 
 void StutterProcessor::setPattern (const Pattern& pattern)
 {
+    const juce::ScopedLock lock (grooveMutex);
     for (int i = 0; i < numSteps; ++i) cells[(size_t) i].store (pack (pattern[(size_t) i]), std::memory_order_relaxed);
     patternVersion.fetch_add (1, std::memory_order_release);
     grooveRevision.fetch_add (1);
-    updateHostDisplay (ChangeDetails().withNonParameterStateChanged (true));
+    updateHostDisplay (ChangeDetails().withProgramChanged (true).withNonParameterStateChanged (true));
 }
 
 void StutterProcessor::setCell (int index, Cell cell)
 {
+    const juce::ScopedLock lock (grooveMutex);
     if (index < 0 || index >= numSteps) return;
     auto pattern = getPattern();
     pattern[(size_t) index] = cell;
@@ -133,6 +158,7 @@ void StutterProcessor::applyGroove (const Pattern& pattern, float swing, float l
 
 void StutterProcessor::loadFactory (int index)
 {
+    const juce::ScopedLock lock (grooveMutex);
     const int i = ((index % numFactoryGrooves) + numFactoryGrooves) % numFactoryGrooves;
     const auto& f = factoryGroove (i);
     setParamValue ("rate", (float) f.rate);
@@ -190,6 +216,7 @@ juce::String StutterProcessor::cleanGrooveName (const juce::String& typed)
 
 juce::Result StutterProcessor::saveUserGroove (const juce::String& typed)
 {
+    const juce::ScopedLock lock (grooveMutex);
     const auto clean = cleanGrooveName (typed);
     if (clean.isEmpty()) return juce::Result::fail ("Type a name for the groove.");
     const auto root = userGrooveRoot();
@@ -216,11 +243,13 @@ juce::Result StutterProcessor::saveUserGroove (const juce::String& typed)
     groove.presetIndex = -1;
     groove.edited = false;
     grooveRevision.fetch_add (1);
+    updateHostDisplay (ChangeDetails().withProgramChanged (true).withNonParameterStateChanged (true));
     return juce::Result::ok();
 }
 
 bool StutterProcessor::loadUserGroove (const juce::File& file)
 {
+    const juce::ScopedLock lock (grooveMutex);
     const auto xml = juce::XmlDocument::parse (file);
     if (xml == nullptr || ! xml->hasTagName ("STUTTERGROOVE")) return false;
     const auto t = juce::ValueTree::fromXml (*xml);
@@ -238,6 +267,7 @@ bool StutterProcessor::loadUserGroove (const juce::File& file)
 
 int StutterProcessor::userGrooveIndex() const
 {
+    const juce::ScopedLock lock (grooveMutex);
     if (groove.presetIndex >= 0 || groove.user.isEmpty()) return -1;
     const auto files = userGrooveFiles();
     for (int i = 0; i < files.size(); ++i)
@@ -247,6 +277,7 @@ int StutterProcessor::userGrooveIndex() const
 
 void StutterProcessor::stepGroove (int direction)
 {
+    const juce::ScopedLock lock (grooveMutex);
     const auto files = userGrooveFiles();
     const int total = numFactoryGrooves + files.size();
     const int user = userGrooveIndex();
@@ -260,6 +291,7 @@ void StutterProcessor::stepGroove (int direction)
 
 bool StutterProcessor::loadRandomGroove (juce::Random& random)
 {
+    const juce::ScopedLock lock (grooveMutex);
     // The same list the arrows step through: the factory grooves, then the user grooves, less the loaded one.
     const auto files = userGrooveFiles();
     const int user = userGrooveIndex();
@@ -277,12 +309,35 @@ bool StutterProcessor::loadRandomGroove (juce::Random& random)
 
 void StutterProcessor::rollNewGroove()
 {
+    const juce::ScopedLock lock (grooveMutex);
     const auto seed = (std::uint32_t) juce::Random::getSystemRandom().nextInt64();
     const auto current = getPattern();
     const auto g = generate (seed, rollFrom, &current);
     groove = { juce::String (g.name), g.family, -1, seed % 100000u, false, {} };
     applyGroove (g.pattern, g.swing, g.length);
     grooveRevision.fetch_add (1);
+}
+
+juce::File StutterProcessor::midiClipFolder()
+{
+    return juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("STUTTER-STEP MIDI");
+}
+
+juce::File StutterProcessor::writeMidiClip (const juce::File& folder) const
+{
+    const auto s = snapshot();
+    auto name = cleanGrooveName (getGrooveInfo().name);
+    if (name.isEmpty()) name = "STUTTER-STEP";
+    const auto clip = makeMidiClip (s.pattern, s.swing, s.length, rateBeats (s.rate), s.bpm, name);
+    if (folder.createDirectory().failed()) return {};
+    // The file's name becomes the clip's name in the host.
+    const auto file = folder.getChildFile (name + ".mid");
+    juce::TemporaryFile temp (file);
+    {
+        juce::FileOutputStream out (temp.getFile());
+        if (! out.openedOk() || ! clip.writeTo (out, 0)) return {};
+    }
+    return temp.overwriteTargetFileWithTemporary() ? file : juce::File();
 }
 
 StutterProcessor::Snapshot StutterProcessor::snapshot() const
@@ -403,6 +458,7 @@ void StutterProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mid
 
 void StutterProcessor::getStateInformation (juce::MemoryBlock& dest)
 {
+    const juce::ScopedLock lock (grooveMutex);
     auto state = apvts.copyState();
     juce::ValueTree g ("GROOVE");
     const auto pattern = getPattern();
@@ -415,9 +471,9 @@ void StutterProcessor::getStateInformation (juce::MemoryBlock& dest)
     g.setProperty ("seed", (juce::int64) groove.seed, nullptr);
     g.setProperty ("edited", groove.edited, nullptr);
     g.setProperty ("user", groove.user, nullptr);
-    g.setProperty ("lockSwing", lockSwing, nullptr);
-    g.setProperty ("rollFrom", rollFrom, nullptr);
-    g.setProperty ("editorScale", editorScale, nullptr);
+    g.setProperty ("lockSwing", lockSwing.load(), nullptr);
+    g.setProperty ("rollFrom", rollFrom.load(), nullptr);
+    g.setProperty ("editorScale", editorScale.load(), nullptr);
     state.removeChild (state.getChildWithName ("GROOVE"), nullptr);
     state.appendChild (g, nullptr);
     if (auto xml = state.createXml()) copyXmlToBinary (*xml, dest);
@@ -425,6 +481,7 @@ void StutterProcessor::getStateInformation (juce::MemoryBlock& dest)
 
 void StutterProcessor::setStateInformation (const void* data, int size)
 {
+    const juce::ScopedLock lock (grooveMutex);
     const auto xml = getXmlFromBinary (data, size);
     if (xml == nullptr) return;
     auto state = juce::ValueTree::fromXml (*xml);
@@ -448,11 +505,12 @@ void StutterProcessor::setStateInformation (const void* data, int size)
         groove.seed = (std::uint32_t) (juce::int64) g["seed"];
         groove.edited = g["edited"];
         groove.user = groove.presetIndex < 0 ? g["user"].toString() : juce::String();
-        lockSwing = g["lockSwing"];
+        lockSwing = (bool) g["lockSwing"];
         rollFrom = juce::jlimit (-1, (int) Family::count - 1, (int) g["rollFrom"]);
-        editorScale = g["editorScale"];
+        editorScale = (float) g["editorScale"];
     }
     grooveRevision.fetch_add (1);
+    updateHostDisplay (ChangeDetails().withProgramChanged (true).withNonParameterStateChanged (true));
 }
 
 juce::AudioProcessorEditor* StutterProcessor::createEditor()

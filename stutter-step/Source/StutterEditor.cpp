@@ -12,7 +12,8 @@ const juce::Colour bench { 0xff050d0e }, cream { 0xfff4ead2 }, glassText { 0xffd
 
 // Artwork coordinates, measured on Assets/DeviceShell.png (1120 x 1408).
 const juce::Rectangle<float> laneArt { 250, 286, 684, 128 }, dotsArt { 250, 440, 684, 30 };
-const juce::Rectangle<float> subSafeArt { 432, 514, 104, 32 }, outputArt { 552, 514, 104, 32 }, meterArt { 724, 494, 210, 52 };
+const juce::Rectangle<float> subSafeArt { 432, 514, 104, 32 }, outputArt { 552, 514, 104, 32 }, midiArt { 672, 514, 56, 32 },
+    meterArt { 744, 494, 190, 52 };
 const juce::Point<float> ledCentre { 948, 127 };
 constexpr float startAngle = juce::MathConstants<float>::pi * 1.25f, sweep = juce::MathConstants<float>::pi * 1.5f;
 constexpr std::array<float, 4> menuScales { 0.9f, 1.0f, 1.25f, 1.5f };
@@ -101,14 +102,22 @@ struct StutterEditor::Knob
     bool slapGroup;
     struct Fine final : juce::Slider
     {
-        std::function<void()> beforeDrag;
+        std::function<bool()> beforeDrag;
+        bool blockedDrag = false;
         void paint (juce::Graphics&) override {}
         void mouseDown (const juce::MouseEvent& e) override
         {
-            if (beforeDrag) beforeDrag();
+            blockedDrag = beforeDrag && ! beforeDrag();
+            if (blockedDrag) return;
             setMouseDragSensitivity (sensitivity * (e.mods.isShiftDown() ? 5 : 1));
             juce::Slider::mouseDown (e);
         }
+        void mouseDrag (const juce::MouseEvent& e) override { if (! blockedDrag) juce::Slider::mouseDrag (e); }
+        void mouseUp (const juce::MouseEvent& e) override { if (! blockedDrag) juce::Slider::mouseUp (e); }
+        void mouseDoubleClick (const juce::MouseEvent& e) override
+        { if (! beforeDrag || beforeDrag()) juce::Slider::mouseDoubleClick (e); }
+        void mouseWheelMove (const juce::MouseEvent& e, const juce::MouseWheelDetails& wheel) override
+        { if (! beforeDrag || beforeDrag()) juce::Slider::mouseWheelMove (e, wheel); }
         void focusGained (FocusChangeType) override { if (auto* p = getParentComponent()) p->repaint(); }
         void focusLost (FocusChangeType) override { if (auto* p = getParentComponent()) p->repaint(); }
         int sensitivity = 220;
@@ -125,7 +134,7 @@ public:
     ScreenKey (const juce::String& name, Style st, juce::Typeface::Ptr f) : juce::Button (name), style (st), face (f)
     {
         setMouseCursor (juce::MouseCursor::PointingHandCursor);
-        setWantsKeyboardFocus (true);
+        setWantsKeyboardFocus (false);
         setTitle (name);
     }
     std::function<juce::String()> label;
@@ -212,7 +221,7 @@ public:
     {
         setClickingTogglesState (true);
         setMouseCursor (juce::MouseCursor::PointingHandCursor);
-        setWantsKeyboardFocus (true);
+        setWantsKeyboardFocus (false);
         setTitle (name);
     }
     void paintButton (juce::Graphics& g, bool over, bool down) override
@@ -252,7 +261,7 @@ public:
     {
         setClickingTogglesState (true);
         setMouseCursor (juce::MouseCursor::PointingHandCursor);
-        setWantsKeyboardFocus (true);
+        setWantsKeyboardFocus (false);
         setTitle ("Slap delay on or off");
     }
     void paintButton (juce::Graphics& g, bool, bool) override
@@ -286,7 +295,7 @@ public:
     {
         setClickingTogglesState (true);
         setMouseCursor (juce::MouseCursor::PointingHandCursor);
-        setWantsKeyboardFocus (true);
+        setWantsKeyboardFocus (false);
         setTitle ("Lock swing");
         setTooltip ("Keep this swing when you roll a new groove or load a factory groove.");
     }
@@ -319,7 +328,7 @@ public:
     explicit DiceButton (juce::Typeface::Ptr f) : juce::Button ("New groove"), face (f)
     {
         setMouseCursor (juce::MouseCursor::PointingHandCursor);
-        setWantsKeyboardFocus (true);
+        setWantsKeyboardFocus (false);
         setTitle ("New groove");
         setTooltip ("Roll a new groove. Most rolls swing; ROLL FROM on the screen picks the family, and the padlock keeps your swing.");
     }
@@ -349,6 +358,68 @@ public:
     }
 private:
     juce::Typeface::Ptr face;
+};
+
+// DRAG: pull the groove out onto a MIDI track as a MIDI clip (MidiClip.h). A click alone says how.
+class StutterEditor::MidiKey final : public juce::Component, public juce::SettableTooltipClient
+{
+public:
+    MidiKey (StutterEditor& e, juce::Typeface::Ptr f) : editor (e), face (f)
+    {
+        setName ("Drag MIDI");
+        setTitle ("Drag MIDI");
+        setDescription ("Drag onto a MIDI track to drop this groove as a MIDI clip.");
+        setTooltip ("Drag onto a MIDI track: drops this groove as a MIDI clip. A C1 note wherever the gate opens, "
+                    "with your swing, LENGTH and RATE; ghosts play softer and ties hold.");
+        setMouseCursor (juce::MouseCursor::DraggingHandCursor);
+        setWantsKeyboardFocus (false);
+        setMouseClickGrabsKeyboardFocus (false);
+    }
+    void paint (juce::Graphics& g) override
+    {
+        const auto s = (float) getHeight() / 32.0f;
+        const auto r = getLocalBounds().toFloat().reduced (1.0f * s);
+        const bool over = isMouseOverOrDragging();
+        g.setColour (dragging ? aqua : keyFill.withAlpha (isMouseButtonDown() ? 1.0f : 0.8f));
+        g.fillRoundedRectangle (r, 7.0f * s);
+        g.setColour (dragging ? aqua : aqua.withAlpha (over ? 0.6f : 0.26f));
+        g.drawRoundedRectangle (r, 7.0f * s, 1.5f * s);
+        // A grip (two columns of three dots), then DRAG.
+        const auto f = juce::Font (juce::FontOptions (face).withHeight (15.0f * s)).withExtraKerningFactor (0.04f);
+        const juce::String label ("DRAG");
+        const float textW = juce::GlyphArrangement::getStringWidth (f, label);
+        const float dot = 2.6f * s, pitch = 4.4f * s, gap = 5.0f * s, gripW = dot + pitch;
+        const float x0 = r.getCentreX() - (gripW + gap + textW) * 0.5f;
+        g.setColour (dragging ? panel : over ? glassText : glassMuted);
+        for (int row = 0; row < 3; ++row)
+            for (int col = 0; col < 2; ++col)
+                g.fillEllipse (x0 + (float) col * pitch, r.getCentreY() - pitch - dot * 0.5f + (float) row * pitch, dot, dot);
+        g.setFont (f);
+        g.drawText (label, juce::Rectangle<float> (x0 + gripW + gap, r.getY(), textW + 2.0f, r.getHeight()), juce::Justification::centredLeft, false);
+    }
+    void mouseEnter (const juce::MouseEvent&) override { repaint(); }
+    void mouseExit (const juce::MouseEvent&) override { repaint(); }
+    void mouseDown (const juce::MouseEvent&) override { dragged = false; repaint(); }
+    void mouseDrag (const juce::MouseEvent& e) override
+    {
+        if (dragged || e.getDistanceFromDragStart() < 5) return;
+        dragged = true;
+        const auto file = editor.proc.writeMidiClip (StutterProcessor::midiClipFolder());
+        if (file == juce::File()) { editor.flash ("COULDN'T WRITE THE MIDI CLIP"); return; }
+        editor.flash ("DROP IT ON A MIDI TRACK");
+        dragging = editor.startExternalDrag != nullptr && editor.startExternalDrag (file);
+        repaint();
+    }
+    void mouseUp (const juce::MouseEvent& e) override
+    {
+        if (! dragged && e.mouseWasClicked()) editor.flash ("DRAG THIS KEY ONTO A MIDI TRACK");
+        dragEnded();
+    }
+    void dragEnded() { dragging = false; repaint(); }
+private:
+    StutterEditor& editor;
+    juce::Typeface::Ptr face;
+    bool dragged = false, dragging = false;
 };
 
 // The step lane: gate shape, swing, echo energy and playhead. Click to edit.
@@ -515,6 +586,7 @@ StutterEditor::StutterEditor (StutterProcessor& p)
 {
     setLookAndFeel (skin.get());
     setOpaque (true);
+    addMouseListener (this, true); // cancel SAVE only on another key, including descendant controls
 
     addKnob ("swing", "SWING", 350, 818, 112, 124, 9, 0, 0, 18, 30, false,
              "Swing: where the second step of each pair lands. 50% is straight, 66.7% is triplet, 75% is fully dotted.");
@@ -523,17 +595,21 @@ StutterEditor::StutterEditor (StutterProcessor& p)
              "Gate edge time. Short is choppy; longer is rounder and click-free on subs. The attack is centred on the beat.");
     addKnob ("depth", "DEPTH", 864, 905, 42, 51, 6, 818, 968, 18, 19, false, "How far the gate closes between hits. FULL is silence.");
     addKnob ("slapTime", "TIME", 460, 1118, 37, 45, 5, 1041, 1172, 16, 17, true,
-             "Slap time in ms. With LOCK on it follows the swing, so a downbeat's echo lands on the swung off-step. Dragging it unlocks.");
+             "Slap time in ms. With LOCK on it follows the swing, so a downbeat's echo lands on the swung off-step. Dragging unlocks at the shown time up to 250 ms. Longer times stay locked; use LOCK to choose free time.");
     addKnob ("slapFeedback", "FEEDBACK", 583, 1118, 37, 45, 5, 1041, 1172, 16, 17, true, "How many repeats each slap leaves.");
     addKnob ("slapTone", "TONE", 707, 1118, 37, 45, 5, 1041, 1172, 16, 17, true, "Darkens or brightens the echoes. The tone sits inside the feedback, so repeats get darker.");
     addKnob ("slapMix", "MIX", 833, 1118, 37, 45, 5, 1041, 1172, 16, 17, true, "Echo level over the gated sound. The dry level is unchanged.");
     for (auto& k : knobs)
         if (k->id == "slapTime")
             k->slider.beforeDrag = [this] {
-                if (param ("slapLock") < 0.5f) return;
-                const auto snap = proc.snapshot();
-                setParam ("slapTime", (float) juce::jlimit (10.0, 250.0, snap.slapSeconds() * 1000.0));
+                if (param ("slapLock") < 0.5f) return true;
+                const auto ms = (float) (proc.snapshot().slapSeconds() * 1000.0);
+                // Free TIME's permanent range cannot represent a longer lock. Keep it intact,
+                // rather than silently shortening the echo on mouse-down, wheel or double-click.
+                if (ms > 250.0f) return false;
+                setParam ("slapTime", ms);
                 setParam ("slapLock", 0.0f);
+                return true;
             };
 
     lane = std::make_unique<Lane> (*this);
@@ -543,7 +619,7 @@ StutterEditor::StutterEditor (StutterProcessor& p)
 
     rollFrom = std::make_unique<ScreenKey> ("Roll from", ScreenKey::Style::text, semiBold);
     rollFrom->label = [this] { return juce::String ("ROLL FROM ") + juce::String::charToString (0x25BE) + " |"
-                                      + (proc.rollFrom < 0 ? juce::String ("ALL GROOVES") : juce::String (familyName ((Family) proc.rollFrom))); };
+                                      + (proc.rollFrom < 0 ? juce::String ("ALL GROOVES") : juce::String (familyName ((Family) proc.rollFrom.load()))); };
     rollFrom->setTooltip ("Which groove family NEW GROOVE rolls from. Click to cycle.");
     rollFrom->onClick = [this] { proc.rollFrom = proc.rollFrom + 1 >= (int) Family::count ? -1 : proc.rollFrom + 1; repaint(); };
     presetMenu = std::make_unique<ScreenKey> ("Grooves", ScreenKey::Style::overlay, semiBold);
@@ -552,7 +628,7 @@ StutterEditor::StutterEditor (StutterProcessor& p)
     saveKey = std::make_unique<ScreenKey> ("Save groove", ScreenKey::Style::key, semiBold);
     saveKey->label = [this] { return juce::String (naming ? "OK" : "SAVE"); };
     saveKey->lit = [this] { return naming; };
-    saveKey->setMouseClickGrabsKeyboardFocus (false); // clicking OK leaves the name field focused, so it saves
+    saveKey->setMouseClickGrabsKeyboardFocus (false); // OK saves explicitly after the field releases focus
     saveKey->setTooltip ("Save this groove to your USER grooves (in the groove menu). Name it, then press Return.");
     saveKey->onClick = [this] { if (naming) finishNaming (true); else beginNaming(); };
     prev = std::make_unique<ScreenKey> ("Previous groove", ScreenKey::Style::left, semiBold);
@@ -578,7 +654,7 @@ StutterEditor::StutterEditor (StutterProcessor& p)
     nameEditor.setColour (juce::CaretComponent::caretColourId, aqua);
     nameEditor.onReturnKey = [this] { finishNaming (true); };
     nameEditor.onEscapeKey = [this] { finishNaming (false); };
-    nameEditor.onFocusLost = [this] { if (naming) finishNaming (false); };
+    // A host/window focus change must leave the typed name intact.
     addChildComponent (nameEditor);
     subSafe = std::make_unique<ScreenKey> ("Sub safe", ScreenKey::Style::readout, semiBold);
     subSafe->label = [this] { const int i = juce::roundToInt (param ("subSafe")); return juce::String (i == 0 ? "OFF" : i == 1 ? "80 Hz" : i == 2 ? "120 Hz" : "200 Hz"); };
@@ -595,6 +671,12 @@ StutterEditor::StutterEditor (StutterProcessor& p)
     for (auto* key : { presetMenu.get(), rollFrom.get(), saveKey.get(), randomKey.get(), prev.get(), next.get(), subSafe.get() })
         addAndMakeVisible (*key);
     for (auto& key : rateKeys) addAndMakeVisible (*key);
+    midiKey = std::make_unique<MidiKey> (*this, semiBold);
+    addAndMakeVisible (*midiKey);
+    startExternalDrag = [this] (const juce::File& file) {
+        return juce::DragAndDropContainer::performExternalDragDropOfFiles ({ file.getFullPathName() }, false, midiKey.get(),
+            [safe = juce::Component::SafePointer<StutterEditor> (this)] { if (safe != nullptr) safe->midiKey->dragEnded(); });
+    };
 
     outputDrag = std::make_unique<Knob::Fine>();
     outputDrag->setSliderStyle (juce::Slider::RotaryVerticalDrag);
@@ -645,17 +727,20 @@ StutterEditor::StutterEditor (StutterProcessor& p)
     if (const auto* display = juce::Desktop::getInstance().getDisplays().getPrimaryDisplay())
         userArea = display->userBounds.toNearestInt();
     const auto fits = [userArea] (float sc) { return baseWidth * sc <= userArea.getWidth() && baseWidth * sc * cropH / cropW + 60 <= userArea.getHeight(); };
-    float initial = proc.editorScale > 0 && fits (proc.editorScale) ? proc.editorScale : 1.0f;
+    const float savedScale = proc.editorScale.load();
+    float initial = savedScale > 0 && fits (savedScale) ? savedScale : 1.0f;
     if (! fits (initial)) { initial = 0.8f; for (const float sc : menuScales) if (sc <= 1.0f && fits (sc)) initial = sc; }
     setSize (juce::roundToInt (baseWidth * initial), juce::roundToInt (baseWidth * initial * cropH / cropW));
     sizeReady = true;
     lastKey = displayKey();
     startTimerHz (30);
+    hostKeys.apply();
 }
 
 StutterEditor::~StutterEditor()
 {
     stopTimer();
+    removeMouseListener (this);
     buttonAttachments.clear();
     outputAttachment.reset();
     for (auto& k : knobs) k->attachment.reset();
@@ -727,12 +812,13 @@ void StutterEditor::showPresetMenu()
     constexpr int userItemBase = 1000, saveItem = 2000, revealItem = 2001;
     juce::PopupMenu menu;
     juce::String folder;
+    const auto groove = proc.getGrooveInfo();
     juce::PopupMenu sub;
-    const auto flush = [&] { if (folder.isNotEmpty()) menu.addSubMenu (folder, sub, true, nullptr, proc.groove.presetIndex >= 0 && folder == factoryGroove (proc.groove.presetIndex).folder); };
+    const auto flush = [&] { if (folder.isNotEmpty()) menu.addSubMenu (folder, sub, true, nullptr, groove.presetIndex >= 0 && folder == factoryGroove (groove.presetIndex).folder); };
     for (int i = 0; i < numFactoryGrooves; ++i) {
         const auto& f = factoryGroove (i);
         if (folder != f.folder) { flush(); folder = f.folder; sub = {}; }
-        sub.addItem (i + 1, f.name, true, i == proc.groove.presetIndex);
+        sub.addItem (i + 1, f.name, true, i == groove.presetIndex);
     }
     flush();
     // USER: every saved groove, by name.
@@ -767,8 +853,9 @@ void StutterEditor::beginNaming()
     if (naming) return;
     naming = true;
     saveProblem.clear();
-    nameEditor.setText (StutterProcessor::cleanGrooveName (proc.groove.name), false);
+    nameEditor.setText (StutterProcessor::cleanGrooveName (proc.getGrooveInfo().name), false);
     nameEditor.setVisible (true);
+    nameEditor.toFront (false);
     nameEditor.selectAll();
     if (getPeer() != nullptr) nameEditor.grabKeyboardFocus();
     saveKey->repaint();
@@ -781,12 +868,20 @@ void StutterEditor::finishNaming (bool save)
     if (save) {
         const auto result = proc.saveUserGroove (nameEditor.getText());
         if (result.failed()) { saveProblem = result.getErrorMessage(); repaint(); return; } // keep the field open
-        savedUntil = juce::Time::getMillisecondCounterHiRes() + 2000.0;
+        flash ("SAVED TO USER");
     }
     naming = false;
     saveProblem.clear();
     nameEditor.setVisible (false);
+    if (isShowing()) grabKeyboardFocus();
     saveKey->repaint();
+    repaint();
+}
+
+void StutterEditor::flash (const juce::String& message)
+{
+    flashText = message;
+    flashUntil = juce::Time::getMillisecondCounterHiRes() + 2500.0;
     repaint();
 }
 
@@ -809,6 +904,7 @@ void StutterEditor::resized()
         rateKeys[(size_t) i]->setBounds (toEditor ({ 196.0f + 56.0f * (float) i, 514, 52, 32 }));
     subSafe->setBounds (toEditor (subSafeArt));
     outputDrag->setBounds (toEditor (outputArt));
+    midiKey->setBounds (toEditor (midiArt));
     swingLock->setBounds (toEditor ({ 446, 620, 36, 36 }));
     dice->setBounds (toEditor ({ 585, 662, 310, 108 }));
     slapSwitch->setBounds (toEditor ({ 290, 1046, 96, 40 }));
@@ -836,7 +932,10 @@ void StutterEditor::applyScale (float sc)
 
 void StutterEditor::mouseDown (const juce::MouseEvent& e)
 {
-    if (! e.mods.isPopupMenu()) return;
+    if (naming && e.eventComponent != saveKey.get()
+        && (dynamic_cast<juce::Button*> (e.eventComponent) != nullptr || e.eventComponent == midiKey.get()))
+        finishNaming (false);
+    if (e.eventComponent != this || ! e.mods.isPopupMenu()) return;
     juce::PopupMenu menu;
     menu.addSectionHeader ("SIZE");
     juce::Rectangle<int> userArea { 0, 0, 1440, 900 };
@@ -887,16 +986,17 @@ void StutterEditor::drawHeader (juce::Graphics& g) const
 void StutterEditor::drawScreen (juce::Graphics& g) const
 {
     const auto snap = proc.snapshot();
-    const auto& gr = proc.groove;
+    const auto gr = proc.getGrooveInfo();
     // Row A: ROLL FROM is a child key; counter on the right.
     const bool user = gr.presetIndex < 0 && gr.user.isNotEmpty();
     const int userIndex = user ? proc.userGrooveIndex() : -1;
+    const bool flashing = juce::Time::getMillisecondCounterHiRes() < flashUntil;
     const juce::String counter = naming ? (saveProblem.isNotEmpty() ? saveProblem.toUpperCase() : juce::String ("NAME THIS GROOVE, THEN RETURN"))
-        : juce::Time::getMillisecondCounterHiRes() < savedUntil ? juce::String ("SAVED TO USER")
+        : flashing ? flashText
         : gr.presetIndex >= 0 ? "FACTORY " + juce::String (gr.presetIndex + 1) + " / " + juce::String (numFactoryGrooves)
         : user ? (userIndex >= 0 ? "USER " + juce::String (userIndex + 1) + " / " + juce::String (StutterProcessor::userGrooveFiles().size()) : juce::String ("USER"))
         : "SEED " + juce::String ((int) gr.seed).paddedLeft ('0', 5);
-    const bool counterLit = naming || juce::Time::getMillisecondCounterHiRes() < savedUntil;
+    const bool counterLit = naming || flashing;
     text (g, counter, { 560, 194, 374, 30 }, 15, counterLit ? lime : glassMuted, juce::Justification::centredRight, false, 0.14f);
     if (naming) return drawLanes (g, snap);
     // Row B: groove name, family chip. A factory groove shows its folder, a saved one USER; a rolled one is marked
@@ -944,6 +1044,7 @@ void StutterEditor::drawLanes (juce::Graphics& g, const StutterProcessor::Snapsh
     text (g, "RATE", { 196, 494, 100, 16 }, 12, glassMuted, juce::Justification::centredLeft, false, 0.16f);
     text (g, "SUB SAFE", subSafeArt.withY (494).withHeight (16), 12, glassMuted, juce::Justification::centredLeft, false, 0.16f);
     text (g, "OUTPUT", outputArt.withY (494).withHeight (16), 12, glassMuted, juce::Justification::centredLeft, false, 0.16f);
+    text (g, "MIDI", midiArt.withY (494).withHeight (16), 12, glassMuted, juce::Justification::centredLeft, false, 0.16f);
     const auto out = outputArt.reduced (1);
     g.setColour (keyFill.withAlpha (0.8f));
     g.fillRoundedRectangle (out, 7);
@@ -1002,7 +1103,8 @@ float StutterEditor::knobNormalised (const Knob& k) const
     auto* parameter = proc.apvts.getParameter (k.id);
     if (parameter == nullptr) return 0;
     if (k.id == "slapTime" && param ("slapLock") > 0.5f)
-        return parameter->convertTo0to1 ((float) juce::jlimit (10.0, 250.0, proc.snapshot().slapSeconds() * 1000.0));
+        // LOCK has its own 10..950 ms arc; the free-time parameter remains 10..250 ms.
+        return (float) (std::log (proc.snapshot().slapSeconds() / 0.01) / std::log (StutterProcessor::maxLockSeconds / 0.01));
     return parameter->getValue();
 }
 
@@ -1029,9 +1131,10 @@ void StutterEditor::drawKnob (juce::Graphics& g, const Knob& k) const
     juce::Path arc;
     arc.addCentredArc (k.cx, k.cy, k.rArc, k.rArc, 0, startAngle, juce::jmax (startAngle + 0.01f, angle), true);
     const float arcAlpha = dim ? 0.25f : 1.0f;
-    g.setColour (aqua.withAlpha (0.25f * arcAlpha));
+    const auto arcColour = k.id == "slapTime" && param ("slapLock") > 0.5f ? lime : aqua;
+    g.setColour (arcColour.withAlpha (0.25f * arcAlpha));
     g.strokePath (arc, juce::PathStrokeType (k.arcW * 2.2f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
-    g.setColour (aqua.withAlpha (arcAlpha));
+    g.setColour (arcColour.withAlpha (arcAlpha));
     g.strokePath (arc, juce::PathStrokeType (k.arcW, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
     const auto at = [&] (float r) { return juce::Point<float> (k.cx + r * std::sin (angle), k.cy - r * std::cos (angle)); };
     g.setColour (pointerInk.withAlpha (dim ? 0.5f : 1.0f));
@@ -1060,7 +1163,8 @@ std::uint64_t StutterEditor::displayKey() const
     mix ((std::uint64_t) (proc.rollFrom + 2));
     mix (proc.uiPlaying.load() ? 1 : 0);
     mix ((std::uint64_t) juce::roundToInt (proc.uiBpm.load() * 10.0));
-    mix (juce::Time::getMillisecondCounterHiRes() < savedUntil ? 3 : naming ? 5 : 7);
+    mix (juce::Time::getMillisecondCounterHiRes() < flashUntil ? 3 : naming ? 5 : 7);
+    mix ((std::uint64_t) flashText.hashCode64());
     return h;
 }
 

@@ -2,6 +2,8 @@
 
 Your own grooves go in **USER** (0.4.0): press **SAVE** beside the arrows, name the groove and press Return. They are at the end of the groove menu and after the factory grooves when you step with the arrows. The files are in `~/Library/Application Support/STUTTER-STEP/Presets` (menu: Show User Grooves Folder); delete or rename them there.
 
+**Keyboard browsing (0.4.2):** plain Left/Up go backward and Right/Down go forward through the same factory-then-USER list as the on-screen arrows. Modified arrows belong to the host. SAVE drafts survive switching windows; Escape or another key cancels naming.
+
 The **shuffle key** between SAVE and the arrows (0.4.1) loads one of the factory or USER grooves at random, never the one you're on. NEW GROOVE is different: it composes a brand-new rhythm.
 
 43 grooves in eight folders, built for 140 halftime dubstep, riddim and left-field bass. Browse them from the menu on the groove name or step through with the arrows. Loading a groove sets the pattern, swing, rate, length, smooth, depth and all slap settings. SUB SAFE, OUTPUT and bypass stay as you set them. With the swing padlock closed, your swing stays too.

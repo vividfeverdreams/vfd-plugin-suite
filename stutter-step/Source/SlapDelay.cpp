@@ -25,7 +25,10 @@ void SlapDelay::prepare (double sampleRate)
     slewCoeff = (float) (1.0 - std::exp (-1.0 / (0.06 * sr)));  // 60 ms time slew: big jumps glide like tape
     paramCoeff = (float) (1.0 - std::exp (-1.0 / (0.02 * sr)));
     guardCoeff = (float) std::exp (-twoPi * 60.0 / sr);           // keeps lows from building up in the loop
-    subSafeHz = -1.0f;
+    subSafeHz = requestedSubSafeHz = -1.0f;
+    hpFadeSamples = std::max (1, (int) std::ceil (0.01 * sr));
+    hp1 = hp2 = hpTarget = {};
+    hpTargetOn = hpOn = false;
     reset();
 }
 
@@ -36,7 +39,11 @@ void SlapDelay::reset()
         line->toneState = line->guardIn = line->guardOut = 0.0f;
         line->delaySamples = line->targetSamples;
     }
+    hp1 = hp2 = hpTarget;
     hp1.clear(); hp2.clear();
+    hpFadeRemaining = 0;
+    subSafeHz = requestedSubSafeHz;
+    hpOn = hpTargetOn;
     writeIndex = 0;
     feedback = feedbackTarget;
     toneCoeff = toneTarget;
@@ -51,12 +58,31 @@ void SlapDelay::setSettings (const Settings& s)
     if (right.delaySamples <= 0.0f) right.delaySamples = right.targetSamples;
     feedbackTarget = std::clamp (s.feedback, 0.0f, 0.75f);
     toneTarget = (float) (1.0 - std::exp (-twoPi * std::clamp ((double) s.toneHz, 100.0, sr * 0.45) / sr));
-    if (std::abs (s.subSafeHz - subSafeHz) > 0.01f) {
-        subSafeHz = s.subSafeHz;
-        hpOn = subSafeHz > 0.0f;
-        // Two Butterworth sections make a 24 dB/oct Linkwitz-Riley: nothing below SUB SAFE ever repeats.
-        if (hpOn) { hp1.setHighPass (sr, subSafeHz, 0.70710678); hp2.setHighPass (sr, subSafeHz, 0.70710678); }
+    if (std::abs (s.subSafeHz - requestedSubSafeHz) > 0.01f) {
+        requestedSubSafeHz = s.subSafeHz;
+        hpTargetOn = requestedSubSafeHz > 0.0f;
+        // Two Butterworth sections make a 24 dB/oct Linkwitz-Riley.
+        hpTarget = {};
+        if (hpTargetOn) hpTarget.setHighPass (sr, requestedSubSafeHz, 0.70710678);
+        if (subSafeHz < 0.0f) {
+            hp1 = hp2 = hpTarget;
+            hpOn = hpTargetOn;
+            subSafeHz = requestedSubSafeHz;
+        } else if (hpFadeRemaining == 0) {
+            beginSubSafeChange();
+        }
+        // During a fade retain just the latest request. Finish the current 10 ms fade first,
+        // so even automation faster than the fade never interrupts a partly blended filter.
     }
+}
+
+void SlapDelay::beginSubSafeChange() noexcept
+{
+    previousHp1 = hp1; previousHp2 = hp2; previousHpOn = hpOn;
+    hp1 = hp2 = hpTarget;
+    hpOn = hpTargetOn;
+    subSafeHz = requestedSubSafeHz;
+    hpFadeRemaining = hpFadeSamples;
 }
 
 float SlapDelay::Line::read (int write) const noexcept
@@ -93,8 +119,14 @@ void SlapDelay::process (float in, float& outLeft, float& outRight) noexcept
 {
     feedback += (feedbackTarget - feedback) * paramCoeff;
     toneCoeff += (toneTarget - toneCoeff) * paramCoeff;
-    float x = in;
-    if (hpOn) x = hp2.process (hp1.process (x));
+    float x = hpOn ? hp2.process (hp1.process (in)) : in;
+    if (hpFadeRemaining > 0) {
+        const float previous = previousHpOn ? previousHp2.process (previousHp1.process (in)) : in;
+        const float mix = 1.0f - (float) --hpFadeRemaining / (float) hpFadeSamples;
+        x = previous + (x - previous) * mix;
+        if (hpFadeRemaining == 0 && std::abs (requestedSubSafeHz - subSafeHz) > 0.01f)
+            beginSubSafeChange();
+    }
     outLeft = runLine (left, x);
     outRight = runLine (right, x);
     if (++writeIndex >= size) writeIndex = 0;

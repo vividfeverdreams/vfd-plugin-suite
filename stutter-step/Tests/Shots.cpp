@@ -3,6 +3,8 @@
 #include "StutterEditor.h"
 #include <juce_events/juce_events.h>
 
+int runStutterHostKeys();
+
 namespace {
 struct Head final : juce::AudioPlayHead
 {
@@ -44,6 +46,7 @@ void shot (juce::AudioProcessorEditor& editor, const juce::File& file, float sca
 int main (int argc, char** argv)
 {
     juce::ScopedJuceInitialiser_GUI init;
+    if (argc > 1 && juce::String (argv[1]) == "--host-keys") return runStutterHostKeys();
     const juce::File folder (argc > 1 ? juce::String (argv[1]) : juce::File::getCurrentWorkingDirectory().getFullPathName());
     folder.createDirectory();
     StutterProcessor proc;
@@ -78,5 +81,16 @@ int main (int argc, char** argv)
     shot (*editor, folder.getChildFile ("06-random-groove.png"));
     editor->setSize (StutterEditor::baseWidth * 4 / 5, StutterEditor::baseWidth * 4 / 5 * StutterEditor::cropH / StutterEditor::cropW);
     shot (*editor, folder.getChildFile ("07-80-percent.png"), 1.0f);
+    editor->setSize (StutterEditor::baseWidth, StutterEditor::baseWidth * StutterEditor::cropH / StutterEditor::cropW);
+    proc.uiBpm = 120.0;
+    rate->setValueNotifyingHost (rate->convertTo0to1 (1.0f));
+    auto* swing = proc.apvts.getParameter ("swing");
+    swing->setValueNotifyingHost (swing->convertTo0to1 (60.0f));
+    auto* lock = proc.apvts.getParameter ("slapLock");
+    lock->setValueNotifyingHost (1.0f);
+    shot (*editor, folder.getChildFile ("08-lock-300-ms.png"));
+    proc.uiBpm = 20.0;
+    rate->setValueNotifyingHost (rate->convertTo0to1 (0.0f));
+    shot (*editor, folder.getChildFile ("09-lock-950-ms.png"));
     return 0;
 }

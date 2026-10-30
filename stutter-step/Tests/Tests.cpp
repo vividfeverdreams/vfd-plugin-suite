@@ -1,11 +1,15 @@
-// STUTTER-STEP console tests: groove math, generator, processor renders, slap, state.
+// STUTTER-STEP console tests: groove math, generator, processor renders, slap, state, MIDI clips.
 #include "Groove.h"
+#include "MidiClip.h"
 #include "SlapDelay.h"
 #include "StutterProcessor.h"
 #include <juce_events/juce_events.h>
 #include <cmath>
 #include <cstdio>
 #include <set>
+#include <thread>
+#include <juce_cryptography/juce_cryptography.h>
+#include "SubSafeReference.h"
 
 using namespace stutter;
 
@@ -285,6 +289,113 @@ void testSlap()
     check (finite && peak < 4.0f, "max feedback stays bounded", peak, 4.0);
 }
 
+void testSubSafeCompatibility()
+{
+    std::puts ("sub safe compatibility");
+   #if JUCE_MAC && JUCE_ARM
+    for (const auto& reference : subSafeReferences) {
+        const int sr = reference.sampleRate;
+        SlapDelay delay;
+        delay.prepare (sr);
+        SlapDelay::Settings settings;
+        settings.subSafeHz = (float) reference.hz; settings.feedback = .37f; settings.toneHz = 3700;
+        delay.setSettings (settings); delay.reset();
+        std::vector<float> data;
+        for (int n = 0; n < sr * 2; ++n) {
+            if (n % 257 == 0) delay.setSettings (settings);
+            const float x = (float) (.2 * std::sin (6.283185307179586 * 43 * n / sr)
+                                  + .17 * std::sin (6.283185307179586 * 731 * n / sr)) + (n % 4093 == 0 ? .4f : 0);
+            float l, r; delay.process (x, l, r); data.push_back (l); data.push_back (r);
+        }
+        check (juce::SHA256 (data.data(), data.size() * sizeof (float)).toHexString() == reference.sha256,
+               "fixed SUB SAFE render is sample-identical to 0.4.1 (whole stereo render)");
+    }
+   #else
+    std::puts ("  fixed-render fingerprints skipped: captured on macOS arm64 (libm rounding is platform-specific)");
+   #endif
+    // Exercise every switch direction on DC with a very short delay, making discontinuities easy to expose.
+    for (float from : { 0.0f, 80.0f, 120.0f, 200.0f }) {
+        float worst = 0;
+        bool finite = true;
+        for (float to : { 0.0f, 80.0f, 120.0f, 200.0f }) {
+            if (std::abs (from - to) < 1.0f) continue;
+            SlapDelay delay;
+            delay.prepare (48000);
+            SlapDelay::Settings settings;
+            settings.timeLeft = settings.timeRight = 2.0f / 48000;
+            settings.feedback = 0; settings.toneHz = 12000; settings.subSafeHz = from;
+            delay.setSettings (settings); delay.reset();
+            float l = 0, r = 0;
+            for (int n = 0; n < 48000; ++n) delay.process (.5f, l, r);
+            settings.subSafeHz = to; delay.setSettings (settings);
+            for (int n = 0; n < 2000; ++n) {
+                const float previous = l;
+                delay.process (.5f, l, r);
+                finite = finite && std::isfinite (l) && std::isfinite (r);
+                worst = std::max (worst, std::abs (l - previous));
+            }
+        }
+        check (finite && worst < .02f, "SUB SAFE switches stay finite with no hard DC step", worst, .02);
+    }
+    SlapDelay rapid;
+    rapid.prepare (48000);
+    SlapDelay::Settings settings;
+    bool finite = true;
+    float peak = 0;
+    for (int n = 0; n < 48000; ++n) {
+        if (n % 32 == 0) { settings.subSafeHz = (float) ((n / 32) % 4) * 80; rapid.setSettings (settings); }
+        float l, r; rapid.process (.4f * std::sin ((float) n * .007f), l, r);
+        finite = finite && std::isfinite (l) && std::isfinite (r);
+        peak = std::max ({ peak, std::abs (l), std::abs (r) });
+    }
+    check (finite && peak < 2, "rapid SUB SAFE retargeting stays stable", peak, 2);
+}
+
+void testConcurrentState()
+{
+    std::puts ("concurrent state");
+    StutterProcessor proc;
+    proc.prepareToPlay (48000, 128);
+    std::atomic<bool> stop { false };
+    std::atomic<int> badStates { 0 }, badSamples { 0 }, saves { 0 }, blocks { 0 };
+    std::thread saver ([&] {
+        while (! stop.load()) {
+            juce::MemoryBlock state;
+            proc.getStateInformation (state);
+            const auto xml = juce::AudioProcessor::getXmlFromBinary (state.getData(), (int) state.getSize());
+            const auto* g = xml != nullptr ? xml->getChildByName ("GROOVE") : nullptr;
+            if (g == nullptr || g->getIntAttribute ("schema") != 2 || g->getStringAttribute ("name").isEmpty()) ++badStates;
+            else {
+                const int preset = g->getIntAttribute ("preset");
+                if (preset >= 0 && g->getStringAttribute ("name") != factoryGroove (preset).name) ++badStates;
+            }
+            const auto name = proc.getProgramName (proc.getCurrentProgram());
+            if (name.isEmpty()) ++badStates;
+            ++saves;
+        }
+    });
+    std::thread audio ([&] {
+        juce::AudioBuffer<float> buffer (2, 128);
+        juce::MidiBuffer midi;
+        while (! stop.load()) {
+            for (int ch = 0; ch < 2; ++ch) for (int n = 0; n < 128; ++n) buffer.setSample (ch, n, .25f);
+            proc.processBlock (buffer, midi);
+            for (int ch = 0; ch < 2; ++ch) for (int n = 0; n < 128; ++n)
+                if (! std::isfinite (buffer.getSample (ch, n))) ++badSamples;
+            ++blocks;
+        }
+    });
+    for (int i = 0; i < 500; ++i) {
+        if (i % 7 == 0) proc.rollNewGroove(); else proc.loadFactory (i % numFactoryGrooves);
+        proc.setCell (i % numSteps, { Step::hit, true });
+        proc.lockSwing = i % 2 == 0; proc.rollFrom = i % 8; proc.editorScale = 1.25f;
+        std::this_thread::yield();
+    }
+    stop = true; saver.join(); audio.join();
+    check (saves > 0 && badStates == 0, "background serialization/program queries safely snapshot changing groove strings");
+    check (blocks > 0 && badSamples == 0, "audio keeps rendering finite samples while states are saved");
+}
+
 void testState()
 {
     std::puts ("state");
@@ -295,12 +406,20 @@ void testState()
     a.lockSwing = true; a.rollFrom = 2; a.editorScale = 1.25f;
     juce::MemoryBlock block;
     a.getStateInformation (block);
+   #if JUCE_MAC
+    // Captured by compiling HEAD's unmodified 0.4.1 processor and serializing this same state.
+    check (juce::SHA256 (block).toHexString() == "d1329ececbc36b88ce6cf580a700516a4f933fd4e0f72ecb8d83d09ccda4b152",
+           "schema 2 state bytes match the unmodified 0.4.1 processor");
+   #endif
     StutterProcessor b;
     b.setStateInformation (block.getData(), (int) block.getSize());
     check (a.getPattern() == b.getPattern(), "pattern round-trips");
-    check (b.groove.name == a.groove.name && b.groove.edited && b.groove.presetIndex == 3, "groove identity round-trips");
+    check (b.getGrooveInfo().name == a.getGrooveInfo().name && b.getGrooveInfo().edited && b.getGrooveInfo().presetIndex == 3, "groove identity round-trips");
     near (b.apvts.getRawParameterValue ("slapMix")->load(), 77.0, 0.11, "parameters round-trip");
     near (b.apvts.getRawParameterValue ("swing")->load(), factoryGroove (3).swing * 100.0, 0.11, "factory swing restored");
+    juce::MemoryBlock reopenedState;
+    b.getStateInformation (reopenedState);
+    check (block == reopenedState, "schema 2 state bytes round-trip unchanged");
     check (b.lockSwing && b.rollFrom == 2 && std::abs (b.editorScale - 1.25f) < 1e-6f, "preferences round-trip");
 
     // Projects saved before 1/4 existed (schema 1) stored RATE as 0 = 1/8, 1 = 1/16, 2 = 1/32.
@@ -322,13 +441,22 @@ void testState()
     // A rolled groove stays rolled when reopened, even if an older build gave it a factory name.
     StutterProcessor rolled;
     rolled.rollNewGroove();
-    check (rolled.groove.presetIndex < 0 && factoryIndexOf (rolled.groove.name.toStdString()) < 0, "NEW GROOVE is not a preset");
-    rolled.groove.name = "Rubber Shuffle";
+    check (rolled.getNumPrograms() == numFactoryGrooves && rolled.getCurrentProgram() == 0
+               && rolled.getProgramName (0).startsWith ("NEW ") && rolled.getProgramName (0).contains (rolled.getGrooveInfo().name),
+           "hosts see the rolled groove in the existing current-program slot");
+    rolled.setCurrentProgram (0);
+    check (rolled.getGrooveInfo().presetIndex == 0 && rolled.getProgramName (0) == factoryGroove (0).name,
+           "selecting program zero still loads Lean Back and restores its factory name");
+    rolled.rollNewGroove();
+    check (rolled.getGrooveInfo().presetIndex < 0 && factoryIndexOf (rolled.getGrooveInfo().name.toStdString()) < 0, "NEW GROOVE is not a preset");
     juce::MemoryBlock rolledBlock;
     rolled.getStateInformation (rolledBlock);
+    auto rolledXml = juce::AudioProcessor::getXmlFromBinary (rolledBlock.getData(), (int) rolledBlock.getSize());
+    rolledXml->getChildByName ("GROOVE")->setAttribute ("name", "Rubber Shuffle");
+    juce::AudioProcessor::copyXmlToBinary (*rolledXml, rolledBlock);
     StutterProcessor reopenedRoll;
     reopenedRoll.setStateInformation (rolledBlock.getData(), (int) rolledBlock.getSize());
-    check (reopenedRoll.groove.presetIndex < 0, "rolled grooves reopen as rolled, not as the preset with that name");
+    check (reopenedRoll.getGrooveInfo().presetIndex < 0, "rolled grooves reopen as rolled, not as the preset with that name");
     check (reopenedRoll.getPattern() == rolled.getPattern(), "rolled pattern round-trips");
 }
 // A held reese-style bass: two detuned saws and a sine sub, about -6 dBFS peak.
@@ -406,7 +534,7 @@ void testFactoryBank()
     juce::AudioProcessor::copyXmlToBinary (*xml, patched);
     StutterProcessor reopened;
     reopened.setStateInformation (patched.getData(), (int) patched.getSize());
-    check (reopened.groove.presetIndex == factoryIndexOf ("Syrup Drag"), "old projects find their preset by name");
+    check (reopened.getGrooveInfo().presetIndex == factoryIndexOf ("Syrup Drag"), "old projects find their preset by name");
 }
 } // namespace
 
@@ -429,8 +557,10 @@ static void testUserGrooves()
     check (a.saveUserGroove ("  My Groove  ").wasOk(), "a rolled groove saves to USER");
     const auto file = root.getChildFile (juce::String ("My Groove") + StutterProcessor::grooveExtension);
     check (file.existsAsFile(), "the file is named after the groove");
-    check (a.groove.user == "My Groove" && a.groove.name == "My Groove" && ! a.groove.edited && a.groove.presetIndex == -1,
+    check (a.getGrooveInfo().user == "My Groove" && a.getGrooveInfo().name == "My Groove" && ! a.getGrooveInfo().edited && a.getGrooveInfo().presetIndex == -1,
            "the saved groove becomes the USER groove");
+    check (a.getNumPrograms() == numFactoryGrooves && a.getCurrentProgram() == 0 && a.getProgramName (0) == "My Groove",
+           "hosts see the USER name without adding or reordering programs");
     check (a.userGrooveIndex() == 0, "it is the first USER groove");
 
     StutterProcessor b;
@@ -442,18 +572,18 @@ static void testUserGrooves()
     near (b.apvts.getRawParameterValue ("slapGaps")->load(), 1, 1e-6, "GAPS comes back");
     near (b.apvts.getRawParameterValue ("swing")->load(), swing, 0.05, "its swing comes back");
     near (b.apvts.getRawParameterValue ("length")->load(), length, 0.05, "its length comes back");
-    check (b.groove.user == "My Groove" && b.groove.presetIndex == -1, "a loaded USER groove knows its name");
+    check (b.getGrooveInfo().user == "My Groove" && b.getGrooveInfo().presetIndex == -1, "a loaded USER groove knows its name");
 
     // A different groove never replaces a saved one; the loaded USER groove updates its own file.
     b.rollNewGroove();
-    check (b.saveUserGroove ("My Groove").wasOk() && b.groove.name == "My Groove 2", "a taken name gets a number");
+    check (b.saveUserGroove ("My Groove").wasOk() && b.getGrooveInfo().name == "My Groove 2", "a taken name gets a number");
     StutterProcessor reread;
     check (reread.loadUserGroove (file) && reread.getPattern() == saved, "the first groove is untouched");
     a.setCell (0, { Step::hit, false });
-    check (a.groove.edited, "editing a USER groove marks it");
-    check (a.saveUserGroove ("my groove").wasOk() && StutterProcessor::userGrooveFiles().size() == 2 && ! a.groove.edited,
+    check (a.getGrooveInfo().edited, "editing a USER groove marks it");
+    check (a.saveUserGroove ("my groove").wasOk() && StutterProcessor::userGrooveFiles().size() == 2 && ! a.getGrooveInfo().edited,
            "saving the loaded USER groove under its own name updates it");
-    check (a.groove.user == "My Groove" && file.existsAsFile(), "an update keeps the groove's name");
+    check (a.getGrooveInfo().user == "My Groove" && file.existsAsFile(), "an update keeps the groove's name");
     check (reread.loadUserGroove (file) && reread.getPattern() == a.getPattern(), "the update reached the file");
     check (a.saveUserGroove (" ... ").failed() && a.saveUserGroove ("").failed(), "an empty name is refused");
     check (! StutterProcessor::cleanGrooveName ("../a/b:c").containsAnyOf ("/:\\") && ! StutterProcessor::cleanGrooveName ("..x").startsWithChar ('.'),
@@ -463,31 +593,31 @@ static void testUserGrooves()
     StutterProcessor c;
     c.loadFactory (numFactoryGrooves - 1);
     c.stepGroove (1);
-    check (c.groove.user == "My Groove", "after the last factory groove comes the first USER groove");
+    check (c.getGrooveInfo().user == "My Groove", "after the last factory groove comes the first USER groove");
     c.stepGroove (1);
-    check (c.groove.user == "My Groove 2", "then the next USER groove");
+    check (c.getGrooveInfo().user == "My Groove 2", "then the next USER groove");
     c.stepGroove (1);
-    check (c.groove.presetIndex == 0 && c.groove.user.isEmpty(), "then back to the first factory groove");
+    check (c.getGrooveInfo().presetIndex == 0 && c.getGrooveInfo().user.isEmpty(), "then back to the first factory groove");
     c.stepGroove (-1);
-    check (c.groove.user == "My Groove 2", "and backwards from it to the last USER groove");
+    check (c.getGrooveInfo().user == "My Groove 2", "and backwards from it to the last USER groove");
     root.getChildFile (juce::String ("Broken") + StutterProcessor::grooveExtension).replaceWithText ("not a groove");
     check (! c.loadUserGroove (root.getChildFile (juce::String ("Broken") + StutterProcessor::grooveExtension)), "an unreadable file doesn't load");
     c.loadFactory (numFactoryGrooves - 1);
     c.stepGroove (1);
-    check (c.groove.user == "Broken" || c.groove.user == "My Groove", "stepping skips an unreadable file");
+    check (c.getGrooveInfo().user == "Broken" || c.getGrooveInfo().user == "My Groove", "stepping skips an unreadable file");
 
     // Projects remember a USER groove.
     juce::MemoryBlock block;
     a.getStateInformation (block);
     StutterProcessor restored;
     restored.setStateInformation (block.getData(), (int) block.getSize());
-    check (restored.groove.user == "My Groove" && restored.groove.presetIndex == -1 && restored.getPattern() == a.getPattern(),
+    check (restored.getGrooveInfo().user == "My Groove" && restored.getGrooveInfo().presetIndex == -1 && restored.getPattern() == a.getPattern(),
            "a project reopens on its USER groove");
     restored.loadFactory (2);
     restored.getStateInformation (block);
     StutterProcessor factory;
     factory.setStateInformation (block.getData(), (int) block.getSize());
-    check (factory.groove.user.isEmpty() && factory.groove.presetIndex == 2, "a factory groove isn't marked USER");
+    check (factory.getGrooveInfo().user.isEmpty() && factory.getGrooveInfo().presetIndex == 2, "a factory groove isn't marked USER");
     root.deleteRecursively();
     unsetenv ("STUTTER_STEP_PRESET_ROOT");
 }
@@ -497,8 +627,8 @@ static bool sameGroove (StutterProcessor& a, StutterProcessor& b)
 {
     for (int i = 0; i < a.getParameters().size(); ++i)
         if (std::abs (a.getParameters()[i]->getValue() - b.getParameters()[i]->getValue()) > 1e-6f) return false;
-    return a.getPattern() == b.getPattern() && a.groove.name == b.groove.name && a.groove.family == b.groove.family
-        && a.groove.presetIndex == b.groove.presetIndex && a.groove.user == b.groove.user && a.groove.edited == b.groove.edited;
+    return a.getPattern() == b.getPattern() && a.getGrooveInfo().name == b.getGrooveInfo().name && a.getGrooveInfo().family == b.getGrooveInfo().family
+        && a.getGrooveInfo().presetIndex == b.getGrooveInfo().presetIndex && a.getGrooveInfo().user == b.getGrooveInfo().user && a.getGrooveInfo().edited == b.getGrooveInfo().edited;
 }
 
 struct HostCounter final : juce::AudioProcessorListener
@@ -522,11 +652,11 @@ static void testRandomGroove()
     std::set<int> seen;
     int repeats = 0, misses = 0, notFactory = 0;
     for (int i = 0; i < 2000; ++i) {
-        const int before = a.groove.presetIndex;
+        const int before = a.getGrooveInfo().presetIndex;
         if (! a.loadRandomGroove (random)) { ++misses; continue; }
-        repeats += a.groove.presetIndex == before ? 1 : 0;
-        notFactory += a.groove.presetIndex < 0 || a.groove.user.isNotEmpty() ? 1 : 0;
-        seen.insert (a.groove.presetIndex);
+        repeats += a.getGrooveInfo().presetIndex == before ? 1 : 0;
+        notFactory += a.getGrooveInfo().presetIndex < 0 || a.getGrooveInfo().user.isNotEmpty() ? 1 : 0;
+        seen.insert (a.getGrooveInfo().presetIndex);
     }
     check (misses == 0, "a random groove always loads", misses, 0);
     check (repeats == 0, "a random pick is never the groove already loaded", repeats, 0);
@@ -539,8 +669,8 @@ static void testRandomGroove()
     picked.addListener (&pickedHost);
     manual.addListener (&manualHost);
     juce::Random once (11);
-    check (picked.loadRandomGroove (once) && picked.groove.presetIndex != 0, "a fresh instance moves off its first groove");
-    manual.loadFactory (picked.groove.presetIndex);
+    check (picked.loadRandomGroove (once) && picked.getGrooveInfo().presetIndex != 0, "a fresh instance moves off its first groove");
+    manual.loadFactory (picked.getGrooveInfo().presetIndex);
     check (sameGroove (picked, manual), "a random factory groove matches loading it from the menu");
     check (pickedHost.gestures > 0 && pickedHost.values > 0 && pickedHost.changes > 0, "the host hears about a random groove");
     check (pickedHost.gestures == manualHost.gestures && pickedHost.values == manualHost.values && pickedHost.changes == manualHost.changes,
@@ -551,7 +681,7 @@ static void testRandomGroove()
     picked.getStateInformation (block);
     StutterProcessor reopened;
     reopened.setStateInformation (block.getData(), (int) block.getSize());
-    check (reopened.groove.presetIndex == picked.groove.presetIndex && reopened.getPattern() == picked.getPattern(),
+    check (reopened.getGrooveInfo().presetIndex == picked.getGrooveInfo().presetIndex && reopened.getPattern() == picked.getPattern(),
            "a project reopens on the random groove");
     StutterProcessor locked;
     locked.lockSwing = true;
@@ -571,20 +701,20 @@ static void testRandomGroove()
     int factoryPicks = 0, broken = 0, userRepeats = 0;
     misses = 0;
     for (int i = 0; i < 3000; ++i) {
-        const auto before = b.groove.user;
+        const auto before = b.getGrooveInfo().user;
         if (! b.loadRandomGroove (random)) { ++misses; continue; }
-        if (b.groove.presetIndex >= 0) { ++factoryPicks; continue; }
-        users.insert (b.groove.user);
-        broken += b.groove.user == "Broken" ? 1 : 0;
-        userRepeats += b.groove.user == before ? 1 : 0;
+        if (b.getGrooveInfo().presetIndex >= 0) { ++factoryPicks; continue; }
+        users.insert (b.getGrooveInfo().user);
+        broken += b.getGrooveInfo().user == "Broken" ? 1 : 0;
+        userRepeats += b.getGrooveInfo().user == before ? 1 : 0;
     }
     check (misses == 0, "a random groove always loads with USER grooves too", misses, 0);
     check (factoryPicks > 0 && users.size() == 3, "factory and every readable USER groove come up", (double) users.size(), 3);
     check (broken == 0, "an unreadable USER file is never loaded", broken, 0);
     check (userRepeats == 0, "a random pick is never the USER groove already loaded", userRepeats, 0);
-    for (int i = 0; i < 400 && b.groove.user.isEmpty(); ++i) b.loadRandomGroove (random);
+    for (int i = 0; i < 400 && b.getGrooveInfo().user.isEmpty(); ++i) b.loadRandomGroove (random);
     StutterProcessor fromMenu;
-    check (b.groove.user.isNotEmpty() && fromMenu.loadUserGroove (root.getChildFile (b.groove.user + StutterProcessor::grooveExtension))
+    check (b.getGrooveInfo().user.isNotEmpty() && fromMenu.loadUserGroove (root.getChildFile (b.getGrooveInfo().user + StutterProcessor::grooveExtension))
                && sameGroove (b, fromMenu),
            "a random USER groove matches loading it from the menu");
     check (b.userGrooveIndex() >= 0, "and shows as USER n / m");
@@ -592,18 +722,199 @@ static void testRandomGroove()
     unsetenv ("STUTTER_STEP_PRESET_ROOT");
 }
 
+// ---- the DRAG key's MIDI clip ----
+struct ClipNote
+{
+    int on, off, velocity;
+    bool operator== (const ClipNote&) const = default;
+};
+struct Clip
+{
+    std::vector<ClipNote> notes;
+    int end = -1, otherEvents = 0, badNotes = 0;
+    bool orderedOffBeforeOn = true; // a note-on never arrives while the note still sounds
+    double secondsPerQuarter = 0;
+    juce::String name;
+    int numerator = 0, denominator = 0;
+};
+static Clip readClip (const juce::MidiFile& file)
+{
+    Clip c;
+    if (file.getNumTracks() != 1) { c.badNotes = 1; return c; }
+    const auto& track = *file.getTrack (0);
+    bool sounding = false;
+    for (int i = 0; i < track.getNumEvents(); ++i) {
+        const auto* e = track.getEventPointer (i);
+        const auto& m = e->message;
+        const int t = juce::roundToInt (m.getTimeStamp());
+        if (m.isNoteOn()) {
+            if (sounding) c.orderedOffBeforeOn = false;
+            sounding = true;
+            if (m.getChannel() != 1 || m.getNoteNumber() != clipNoteNumber || e->noteOffObject == nullptr) ++c.badNotes;
+            c.notes.push_back ({ t, e->noteOffObject != nullptr ? juce::roundToInt (e->noteOffObject->message.getTimeStamp()) : -1, m.getVelocity() });
+        } else if (m.isNoteOff()) {
+            sounding = false;
+        } else if (m.isEndOfTrackMetaEvent()) {
+            c.end = t;
+        } else if (m.isTempoMetaEvent()) {
+            c.secondsPerQuarter = m.getTempoSecondsPerQuarterNote();
+        } else if (m.isTrackNameEvent()) {
+            c.name = m.getTextFromTextMetaEvent();
+        } else if (m.isTimeSignatureMetaEvent()) {
+            m.getTimeSignatureInfo (c.numerator, c.denominator);
+        } else {
+            ++c.otherEvents;
+        }
+    }
+    return c;
+}
+static juce::MemoryBlock clipBytes (const juce::MidiFile& file)
+{
+    juce::MemoryOutputStream out;
+    file.writeTo (out, 0);
+    return out.getMemoryBlock();
+}
+static juce::MidiFile readMidi (const void* data, size_t size)
+{
+    juce::MemoryInputStream in (data, size, false);
+    juce::MidiFile file;
+    if (! file.readFrom (in)) file.clear();
+    return file;
+}
+
+static void testMidiClip()
+{
+    std::puts ("midi clip");
+    check (ghostVelocity == juce::roundToInt (hitVelocity * ghostLevel), "ghosts sit at the gate's ghost level", ghostVelocity, hitVelocity * ghostLevel);
+
+    // Worked by hand at 1/16, 60% swing, LENGTH 50%: 240 ticks a step, even slots 1.2 steps, odd slots 0.8.
+    const auto hand = parsePattern ("X.g-X...--..g..X", "");
+    const auto clip = makeMidiClip (hand, 0.6, 0.5, 0.25, 140.0, "Hand Made");
+    const auto c = readClip (clip);
+    const std::vector<ClipNote> want { { 0, 144, 112 }, { 480, 864, 43 }, { 960, 1104, 112 }, { 1920, 2304, 112 },
+                                       { 2880, 3024, 43 }, { 3648, 3744, 112 } };
+    check (c.notes == want, "hand-worked clip: swing, LENGTH, ghosts, a held tie and a tie after silence", (double) c.notes.size(), 6);
+    check (c.badNotes == 0 && c.otherEvents == 0, "every note is C1 on channel 1 with a matching off, and nothing else is in the track");
+    check (c.end == 3840, "a 1/16 cycle is one bar long", c.end, 3840);
+    check (clip.getTimeFormat() == clipTicksPerQuarter, "960 ticks per quarter", clip.getTimeFormat(), clipTicksPerQuarter);
+    near (c.secondsPerQuarter, 60.0 / 140.0, 1.0e-6, "the tempo is the host's");
+    check (c.name == "Hand Made" && c.numerator == 4 && c.denominator == 4, "the track carries the groove's name and 4/4");
+
+    // Written and read back, the file says the same.
+    const auto bytes = clipBytes (clip);
+    const auto back = readClip (readMidi (bytes.getData(), bytes.getSize()));
+    check (back.notes == want && back.end == 3840 && back.name == "Hand Made", "the written file reads back unchanged");
+
+    const auto quarter = readClip (makeMidiClip (hand, 0.6, 0.5, 1.0, 140.0, "q"));
+    check (quarter.notes.size() == 6 && quarter.notes[1] == ClipNote { 1920, 3456, 43 } && quarter.end == 15360,
+           "1/4 spans four bars", quarter.end, 15360);
+    const auto thirtySecond = readClip (makeMidiClip (hand, 0.6, 0.5, 0.125, 140.0, "t"));
+    bool repeated = thirtySecond.notes.size() == 12;
+    for (size_t i = 0; repeated && i < 6; ++i)
+        repeated = thirtySecond.notes[i + 6] == ClipNote { thirtySecond.notes[i].on + 1920, thirtySecond.notes[i].off + 1920, thirtySecond.notes[i].velocity };
+    check (repeated && thirtySecond.notes[5] == ClipNote { 1824, 1872, 112 } && thirtySecond.end == 3840,
+           "1/32 plays twice to fill a whole bar", thirtySecond.end, 3840);
+    const auto empty = readClip (makeMidiClip (parsePattern ("................", ""), 0.6, 0.5, 0.25, 140.0, "e"));
+    check (empty.notes.empty() && empty.end == 3840, "an empty groove still makes a one-bar clip");
+    const auto lastBarEmpty = readClip (makeMidiClip (parsePattern ("X...X...X.......", ""), 0.5, 0.5, 1.0, 140.0, "l"));
+    check (lastBarEmpty.end == 15360, "an empty last bar keeps its length", lastBarEmpty.end, 15360);
+    const auto legato = readClip (makeMidiClip (parsePattern ("XXXXXXXXXXXXXXXX", ""), 0.6, 1.0, 0.25, 140.0, "x"));
+    bool joined = legato.notes.size() == 16;
+    for (size_t i = 0; joined && i + 1 < legato.notes.size(); ++i) joined = legato.notes[i].off == legato.notes[i + 1].on;
+    check (joined && legato.orderedOffBeforeOn, "LENGTH 100% joins the notes, each off before the next on");
+    const auto held = readClip (makeMidiClip (parsePattern ("X---------------", ""), 0.6, 1.0, 0.25, 140.0, "h"));
+    check (held.notes.size() == 1 && held.notes[0] == ClipNote { 0, 3840, 112 }, "a groove tied all the way is one note");
+
+    // Every factory groove at every RATE, straight to fully swung, shortest to longest LENGTH: a note sounds exactly
+    // where the processor's own gate is open, at the gate's level.
+    int mismatches = 0, levelMismatches = 0, badClips = 0, cases = 0;
+    for (int g = 0; g < numFactoryGrooves; ++g) {
+        const auto& f = factoryGroove (g);
+        const auto pattern = parsePattern (f.cells, f.slap);
+        for (int rate = 0; rate < 4; ++rate)
+            for (const double swing : { 0.5, (double) f.swing, 0.75 })
+                for (const double length : { 0.05, (double) f.length, 1.0 }) {
+                    ++cases;
+                    const double stepBeats = StutterProcessor::rateBeats (rate), ticksPerStep = stepBeats * clipTicksPerQuarter;
+                    const auto m = readClip (makeMidiClip (pattern, swing, length, stepBeats, 120.0, f.name));
+                    const int cycle = juce::roundToInt (numSteps * ticksPerStep), repeats = rate == 3 ? 2 : 1;
+                    bool ok = m.badNotes == 0 && m.orderedOffBeforeOn && m.end == cycle * repeats && m.notes.size() % (size_t) repeats == 0;
+                    for (const auto& n : m.notes)
+                        ok = ok && n.off > n.on && n.on >= 0 && n.off <= m.end && (n.velocity == hitVelocity || n.velocity == ghostVelocity);
+                    if (! ok) { ++badClips; continue; }
+                    Envelope gate;
+                    gate.build (pattern, swing, length, 0.002, 0.0f, false);
+                    for (int k = 0; k < 1600; ++k) {
+                        const double t = (k + 0.5) / 1600.0 * numSteps * repeats, tick = t * ticksPerStep;
+                        const ClipNote* in = nullptr;
+                        bool nearEdge = false;
+                        for (const auto& n : m.notes) {
+                            if (tick >= n.on && tick < n.off) in = &n;
+                            nearEdge = nearEdge || std::abs (tick - n.on) < 0.01 * ticksPerStep || std::abs (tick - n.off) < 0.01 * ticksPerStep;
+                        }
+                        if (nearEdge) continue;
+                        const float level = gate.eval (std::fmod (t, (double) numSteps));
+                        if ((level > 0.1f) != (in != nullptr)) ++mismatches;
+                        else if (in != nullptr && std::abs (level - (in->velocity == hitVelocity ? 1.0f : ghostLevel)) > 0.01f) ++levelMismatches;
+                    }
+                }
+    }
+    check (badClips == 0, "every factory clip is well formed: whole bars, notes in order, C1, two velocities", badClips, 0);
+    check (mismatches == 0, "notes sound exactly where the gate is open, at every RATE, swing and LENGTH", mismatches, 0);
+    check (levelMismatches == 0, "hits are loud and ghosts soft where the gate says so", levelMismatches, 0);
+    check (cases == numFactoryGrooves * 36, "36 settings per factory groove", cases, numFactoryGrooves * 36);
+
+    // The processor writes the clip it plays, named after the groove, and replaces it on the next drag.
+    const auto folder = juce::File::getSpecialLocation (juce::File::tempDirectory)
+        .getChildFile ("stutter-midi-" + juce::String (juce::Time::currentTimeMillis()));
+    StutterProcessor proc;
+    proc.uiBpm = 140.0;
+    proc.loadFactory (factoryIndexOf ("Glass Stairs"));
+    const auto expected = [&proc] {
+        const auto s = proc.snapshot();
+        return makeMidiClip (s.pattern, s.swing, s.length, StutterProcessor::rateBeats (s.rate), s.bpm,
+                             StutterProcessor::cleanGrooveName (proc.getGrooveInfo().name));
+    };
+    const auto file = proc.writeMidiClip (folder);
+    juce::MemoryBlock written;
+    check (file == folder.getChildFile ("Glass Stairs.mid") && file.loadFileAsData (written) && written == clipBytes (expected()),
+           "the file is named after the groove and holds its clip");
+    proc.setCell (0, { proc.getPattern()[0].v == Step::off ? Step::hit : Step::off, false });
+    const auto again = proc.writeMidiClip (folder);
+    juce::MemoryBlock rewritten;
+    check (again == file && again.loadFileAsData (rewritten) && rewritten == clipBytes (expected()) && rewritten != written,
+           "an edited groove replaces the earlier file");
+    check (folder.findChildFiles (juce::File::findFiles, false).size() == 1, "and leaves no temporary files behind");
+    proc.rollNewGroove();
+    const auto rolled = proc.writeMidiClip (folder);
+    check (rolled.getFileNameWithoutExtension() == StutterProcessor::cleanGrooveName (proc.getGrooveInfo().name) && rolled.existsAsFile(),
+           "a rolled groove's clip takes its rolled name");
+    const auto blocker = folder.getChildFile ("not a folder");
+    blocker.replaceWithText ("x");
+    check (proc.writeMidiClip (blocker) == juce::File(), "an unwritable folder gives no file rather than a broken one");
+    check (StutterProcessor::midiClipFolder().isAChildOf (juce::File::getSpecialLocation (juce::File::tempDirectory)),
+           "clips go to the temp directory");
+    folder.deleteRecursively();
+}
+
 int main()
 {
-    juce::ScopedJuceInitialiser_GUI init;
+    // Pure console: no GUI initialiser, MessageManager, NSApplication or editor.
+    // APVTS copyState() flushes parameter values synchronously; its UI timer isn't needed here.
+    check (juce::MessageManager::getInstanceWithoutCreating() == nullptr, "console tests start without a GUI/message runtime");
     testTiming();
     testEnvelope();
     testGenerator();
     testProcessor();
     testSlap();
+    testSubSafeCompatibility();
+    testConcurrentState();
     testState();
     testFactoryBank();
     testUserGrooves();
     testRandomGroove();
+    testMidiClip();
+    check (juce::MessageManager::getInstanceWithoutCreating() == nullptr, "DSP/state tests never create a GUI/message runtime");
     std::printf ("%d checks, %d failures\n", checks, failures);
     return failures == 0 ? 0 : 1;
 }

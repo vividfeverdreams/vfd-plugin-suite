@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.22)
-project(StutterStep VERSION 0.4.1 LANGUAGES C CXX)
+project(StutterStep VERSION 0.4.3 LANGUAGES C CXX)
 
 if (APPLE)
     enable_language(OBJCXX)
@@ -37,6 +37,7 @@ juce_add_plugin(StutterStep
 
 set(STUTTER_CORE_SOURCES
     Source/Groove.cpp
+    Source/MidiClip.cpp
     Source/SlapDelay.cpp
     Source/StutterProcessor.cpp)
 
@@ -76,6 +77,7 @@ if (STUTTER_BUILD_TESTS)
         JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0 STUTTER_HEADLESS=1
         JucePlugin_Name="STUTTER-STEP")
     target_link_libraries(StutterStepTests PRIVATE
+        juce::juce_cryptography
         juce::juce_audio_utils
         juce::juce_dsp
         juce::juce_recommended_config_flags
@@ -84,9 +86,9 @@ endif()
 
 # Offscreen editor renders for review (Tests/Shots.cpp writes PNGs).
 juce_add_console_app(StutterStepShots PRODUCT_NAME "STUTTER-STEP Shots")
-target_sources(StutterStepShots PRIVATE Tests/Shots.cpp ${STUTTER_CORE_SOURCES} Source/StutterEditor.cpp)
+target_sources(StutterStepShots PRIVATE Tests/Shots.cpp Tests/EditorTests.cpp ${STUTTER_CORE_SOURCES} Source/StutterEditor.cpp)
 target_include_directories(StutterStepShots PRIVATE Source ../shared)
-target_compile_definitions(StutterStepShots PRIVATE JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0)
+target_compile_definitions(StutterStepShots PRIVATE JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0 JUCE_MODAL_LOOPS_PERMITTED=1)
 target_link_libraries(StutterStepShots PRIVATE
     StutterStepAssets
     juce::juce_audio_utils

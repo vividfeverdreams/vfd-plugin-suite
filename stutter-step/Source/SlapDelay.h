@@ -37,6 +37,7 @@ private:
             return y;
         }
         void clear() noexcept { z1 = z2 = 0; }
+
     };
     struct Line
     {
@@ -47,10 +48,14 @@ private:
     };
 
     float runLine (Line&, float in) noexcept;
+    void beginSubSafeChange() noexcept;
 
     double sr = 48000.0;
     Line left, right;
-    Biquad hp1, hp2;
+    Biquad hp1, hp2, previousHp1, previousHp2, hpTarget;
+    int hpFadeRemaining = 0, hpFadeSamples = 480;
+    bool hpTargetOn = false, previousHpOn = false;
+    float requestedSubSafeHz = -1.0f;
     int writeIndex = 0, size = 0;
     float feedback = 0, feedbackTarget = 0, toneCoeff = 0.2f, toneTarget = 0.2f;
     float slewCoeff = 0.0005f, guardCoeff = 0.995f, paramCoeff = 0.001f;

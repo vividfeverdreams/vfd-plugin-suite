@@ -116,7 +116,7 @@ float render (int preset, int bars, std::vector<float>& left, std::vector<float>
 
 int main (int argc, char** argv)
 {
-    juce::ScopedJuceInitialiser_GUI init;
+    // Pure offline DSP/WAV rendering: do not initialise JUCE GUI or open an audio device.
     const juce::File folder (argc > 1 ? juce::String (argv[1]) : juce::File::getCurrentWorkingDirectory().getFullPathName());
     folder.createDirectory();
     std::vector<float> tourL, tourR;

@@ -1,6 +1,7 @@
 #pragma once
 #include <array>
 #include "StutterProcessor.h"
+#include "VfdHostKeys.h"
 #include <juce_gui_extra/juce_gui_extra.h>
 #include <memory>
 #include <vector>
@@ -17,15 +18,21 @@ public:
     void paint (juce::Graphics&) override;
     void resized() override;
     void mouseDown (const juce::MouseEvent&) override;
+    std::unique_ptr<juce::ComponentTraverser> createKeyboardFocusTraverser() override
+    { return vfd::HostKeys::createTraverser(); }
 
     // The crop sits on the enclosure's outer edges in Assets/DeviceShell.png, so the device meets the window.
     static constexpr int cropX = 50, cropY = 54, cropW = 1024, cropH = 1304, baseWidth = 660;
+
+    // Hands the DRAG key's MIDI clip to the OS drag. Tests replace it, since a real drag needs a real mouse.
+    std::function<bool (const juce::File&)> startExternalDrag;
 
 private:
     struct Knob;
     class Lane;
     class Dots;
     class ScreenKey;
+    class MidiKey;
     class PlateKey;
     class SlapSwitch;
     class LockButton;
@@ -62,13 +69,17 @@ private:
     std::unique_ptr<Dots> dots;
     std::unique_ptr<ScreenKey> rollFrom, prev, next, randomKey, subSafe, presetMenu, saveKey;
     std::array<std::unique_ptr<ScreenKey>, 4> rateKeys; // 1/4, 1/8, 1/16, 1/32
+    std::unique_ptr<MidiKey> midiKey;
     void showPresetMenu();
     // SAVE: the groove name becomes a text field; Return (or OK) saves the groove to USER, Escape cancels.
     void beginNaming();
     void finishNaming (bool save);
     juce::TextEditor nameEditor;
     bool naming = false;
-    double savedUntil = 0;   // the counter reads SAVED TO USER until then (ms)
+    // A short lime message in the counter's place, such as SAVED TO USER.
+    void flash (const juce::String&);
+    juce::String flashText;
+    double flashUntil = 0;   // ms
     juce::String saveProblem;
     std::unique_ptr<PlateKey> lockKey, gapsKey, wideKey;
     std::unique_ptr<SlapSwitch> slapSwitch;
@@ -84,6 +95,9 @@ private:
     float meterLeft = 0, meterRight = 0, ledLevel = 0;
     std::uint64_t lastKey = 0;
     bool sizeReady = false;
+
+    // Last: listeners leave before any controls are destroyed. Use the on-screen arrows' path.
+    vfd::HostKeys hostKeys { *this, [this] (int step) { proc.stepGroove (step); repaint(); } };
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (StutterEditor)
 };

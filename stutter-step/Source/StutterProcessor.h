@@ -26,9 +26,9 @@ public:
     double getTailLengthSeconds() const override { return 4.0; }
 
     int getNumPrograms() override { return stutter::numFactoryGrooves; }
-    int getCurrentProgram() override { return juce::jmax (0, groove.presetIndex); }
+    int getCurrentProgram() override;
     void setCurrentProgram (int index) override { loadFactory (index); }
-    const juce::String getProgramName (int index) override { return stutter::factoryGroove (index).name; }
+    const juce::String getProgramName (int index) override;
     void changeProgramName (int, const juce::String&) override {}
 
     void getStateInformation (juce::MemoryBlock&) override;
@@ -53,10 +53,10 @@ public:
         bool edited = false;
         juce::String user;            // the saved USER groove this is (presetIndex -1), or empty
     };
-    GrooveInfo groove;
-    bool lockSwing = false;
-    int rollFrom = -1;               // -1 = all families
-    float editorScale = 0.0f;        // 0 = never chosen
+    GrooveInfo getGrooveInfo() const;
+    std::atomic<bool> lockSwing { false };
+    std::atomic<int> rollFrom { -1 };               // -1 = all families
+    std::atomic<float> editorScale { 0.0f };        // 0 = never chosen
 
     void loadFactory (int index);
     void rollNewGroove();
@@ -79,6 +79,11 @@ public:
     // loaded exactly as the arrows load it. NEW GROOVE composes a new rhythm instead. False if nothing else loads.
     bool loadRandomGroove (juce::Random& = juce::Random::getSystemRandom());
     std::atomic<std::uint32_t> grooveRevision { 1 }; // bumps on any groove or pattern change; the editor polls it
+
+    // ---- the groove as a MIDI clip (the editor's DRAG key; see MidiClip.h) ----
+    // Writes <groove name>.mid into folder, replacing any earlier one, and returns it; an empty File if it failed.
+    juce::File writeMidiClip (const juce::File& folder) const;
+    static juce::File midiClipFolder(); // "STUTTER-STEP MIDI" in the temp directory
 
     // ---- values the screen draws ----
     struct Snapshot
@@ -103,6 +108,10 @@ public:
     std::atomic<bool> uiPlaying { false };
 
 private:
+    // Only state/UI/program access takes this lock; processBlock uses atomic cells/parameters.
+    mutable juce::CriticalSection grooveMutex;
+    GrooveInfo groove;
+
     void setParamValue (const juce::String& id, float value);
     void applyGroove (const stutter::Pattern&, float swing, float length);
 
