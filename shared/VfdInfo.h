@@ -3,6 +3,7 @@
 #include <juce_gui_extra/juce_gui_extra.h>
 #include <array>
 #include "VfdUpdate.h"
+#include "VfdHostKeys.h"
 
 // Shared visual identity, credits and suite updates. These components never read or change audio state.
 namespace vfd {
@@ -45,7 +46,7 @@ public:
         setTitle("About Vivid Fever Dreams");
         setDescription("Open the plugin credits, music and support links");
         setTooltip("About Vivid Fever Dreams");
-        setWantsKeyboardFocus(true);
+        setWantsKeyboardFocus(false); // keys belong to the host (VfdHostKeys.h)
         setMouseCursor(juce::MouseCursor::PointingHandCursor);
         updates->addChangeListener(this);
         changeListenerCallback(nullptr);
@@ -138,7 +139,7 @@ class InfoOverlay final : public juce::Component {
         {
             setTitle("Close info");
             setTooltip("Close info (Escape)");
-            setWantsKeyboardFocus(true);
+            setWantsKeyboardFocus(false);
             setMouseCursor(juce::MouseCursor::PointingHandCursor);
         }
         void paintButton(juce::Graphics& g, bool over, bool down) override
@@ -164,7 +165,7 @@ class InfoOverlay final : public juce::Component {
         {
             setTooltip(address);
             setDescription("Opens " + address + " in your browser");
-            setWantsKeyboardFocus(true);
+            setWantsKeyboardFocus(false);
         }
         void paintButton(juce::Graphics& g, bool over, bool down) override
         {
@@ -200,7 +201,7 @@ class InfoOverlay final : public juce::Component {
             ActionButton(Theme colours, juce::Typeface::Ptr typeface)
                 : Button("Suite update"), theme(colours), face(std::move(typeface))
             {
-                setWantsKeyboardFocus(true);
+                setWantsKeyboardFocus(false);
                 setMouseCursor(juce::MouseCursor::PointingHandCursor);
             }
             bool primary = false;
@@ -422,30 +423,39 @@ public:
         setName("VFD Info Page");
         setTitle("About Vivid Fever Dreams");
         setDescription("Plugin credits, executive producers, music and donations");
+        // While open the page holds the arrow keys so presets can't change under it; every other key still
+        // reaches the host (VfdHostKeys.h).
         setWantsKeyboardFocus(true);
+        HostKeys::allowFocus(*this);
         setFocusContainerType(juce::Component::FocusContainerType::keyboardFocusContainer);
         setInterceptsMouseClicks(true, true);
         addAndMakeVisible(panel);
         setVisible(false);
     }
 
-    void open(juce::Component* source)
+    void open(juce::Component* /*source*/)
     {
-        returnFocus = source;
         setVisible(true);
         toFront(false);
         if (getPeer() != nullptr) panel.updates().checkAutomatically();
-        // The page covers the editor and contains keyboard focus without going modal: JUCE's modal state is
-        // shared by every instance of a plug-in, so a modal page here would block the other open instances.
-        // Editors can also be rendered without a peer by host validation tools.
-        if (getPeer() != nullptr) panel.focusOrder().front()->grabKeyboardFocus();
+        // The page covers the editor without going modal: JUCE's modal state is shared by every instance of
+        // a plug-in, so a modal page here would block the other open instances. Editors can also be rendered
+        // without a peer by host validation tools.
+        if (getPeer() != nullptr) grabKeyboardFocus();
     }
 
     void dismiss()
     {
         setVisible(false);
-        if (returnFocus != nullptr && returnFocus->isShowing() && returnFocus->getPeer() != nullptr)
-            returnFocus->grabKeyboardFocus();
+        // Back to the editor, so its arrow keys browse presets again; never to the INFO key, which would
+        // then hold Return and Tab.
+        // The page can sit inside one of the editor's panels, so look for the editor itself.
+        auto* editor = HostKeys::findEditor(getParentComponent());
+        if (editor == nullptr) editor = getParentComponent(); // an editor without HostKeys
+        if (editor != nullptr && editor->getWantsKeyboardFocus() && editor->isShowing() && editor->getPeer() != nullptr)
+            editor->grabKeyboardFocus();
+        else
+            giveAwayKeyboardFocus();
     }
 
     void resized() override
@@ -473,28 +483,17 @@ public:
     bool keyPressed(const juce::KeyPress& key) override
     {
         if (key == juce::KeyPress::escapeKey) { dismiss(); return true; }
-        if (key == juce::KeyPress::tabKey) {
-            const auto buttons = panel.focusOrder();
-            int current = -1;
-            for (int i = 0; i < static_cast<int>(buttons.size()); ++i)
-                if (buttons[static_cast<size_t>(i)]->hasKeyboardFocus(true)) current = i;
-            const int count = static_cast<int>(buttons.size());
-            const bool backwards = key.getModifiers().isShiftDown();
-            const int next = current < 0 ? (backwards ? count - 1 : 0) : (current + (backwards ? count - 1 : 1)) % count;
-            if (getPeer() != nullptr) buttons[static_cast<size_t>(next)]->grabKeyboardFocus();
-            return true;
-        }
-        // Buttons handle their own activation first. Command shortcuts (save, quit, ...) go back to the host so
-        // they still work while the page is open; Undo/Redo and every other key stay here so they can't change
-        // the sound or presets under the page.
-        const auto modifiers = key.getModifiers();
-        const bool undoRedo = modifiers.isCommandDown() && (key.getKeyCode() == 'z' || key.getKeyCode() == 'Z');
-        return undoRedo || !modifiers.isCommandDown();
+        // Plain arrows would step presets in the editor underneath; hold them while the page is open.
+        const int code = key.getKeyCode();
+        const bool arrow = code == juce::KeyPress::leftKey || code == juce::KeyPress::rightKey
+                           || code == juce::KeyPress::upKey || code == juce::KeyPress::downKey;
+        if (arrow && !key.getModifiers().isAnyModifierKeyDown()) return true;
+        // Space, Return, Tab, letters and every shortcut belong to the host.
+        return false;
     }
 
 private:
     Panel panel;
-    juce::Component::SafePointer<juce::Component> returnFocus;
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(InfoOverlay)
 };
 

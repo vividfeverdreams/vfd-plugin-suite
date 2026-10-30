@@ -10,6 +10,10 @@ name: Linux build
 on:
   push:
     branches: [main]
+  # Outside contributions are built and validated before they're merged. `pull_request` runs the
+  # contributor's code without this repo's secrets (none of these jobs use any).
+  pull_request:
+    branches: [main]
   workflow_dispatch:
 
 concurrency:
@@ -17,13 +21,53 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  SUITE_VERSION: "1.6.1" # keep equal to shared/VfdSuiteVersion.h
+  SUITE_VERSION: "1.6.2" # keep equal to shared/VfdSuiteVersion.h
   JUCE_TAG: "9.0.2"
   PLUGINVAL_VERSION: "v1.0.4"
   BUILD_RECIPE: "1"
   DEBIAN_FRONTEND: noninteractive
 
 jobs:
+  checks:
+    name: Text and version checks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Plain C strings are ASCII (juce::String reads them byte by byte)
+        run: python3 shared/tools/check_text_literals.py
+      - name: Every copy of the suite and plug-in versions agrees
+        run: python3 vfd-suite-installer/scripts/suite_versions.py check
+
+  shared-tests:
+    name: Shared INFO, updater and host-keys tests
+    runs-on: ubuntu-24.04
+    container: ubuntu:22.04
+    timeout-minutes: 30
+    steps:
+      - name: Build tools and JUCE's Linux dependencies
+        run: |
+          apt-get update -qq
+          apt-get install -y -qq --no-install-recommends git ca-certificates curl unzip xvfb xauth perl \
+            cmake ninja-build g++ pkg-config libasound2-dev libcurl4-openssl-dev libfontconfig1-dev \
+            libfreetype-dev libx11-dev libxcomposite-dev libxcursor-dev libxext-dev libxi-dev libxinerama-dev \
+            libxrandr-dev libxrender-dev > /dev/null
+
+      - uses: actions/checkout@v4
+
+      - name: JUCE ${{ env.JUCE_TAG }}
+        run: |
+          git clone --quiet --depth 1 --branch "$JUCE_TAG" https://github.com/juce-framework/JUCE.git energy-harvester/external/JUCE
+          rm -rf energy-harvester/external/JUCE/.git
+
+      - name: Build and run (offline; the host-keys check needs a display, so it runs under Xvfb)
+        run: |
+          set -eu
+          cmake -S shared/Tests -B shared-tests-build -G Ninja -DCMAKE_BUILD_TYPE=Release
+          cmake --build shared-tests-build
+          exe="$(find shared-tests-build -type f -name VfdUpdateTests -perm -u+x | head -1)"
+          HOME="$RUNNER_TEMP/home" xvfb-run -a "$exe"
+
   plugin:
     name: ${{ matrix.bundle }}
     runs-on: ubuntu-24.04

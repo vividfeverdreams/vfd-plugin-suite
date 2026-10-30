@@ -2,6 +2,7 @@
 // page's update row. --shots <folder> saves the page in each state; --live checks GitHub and downloads and
 // verifies the latest release's installer for this computer without opening it.
 #include "VfdInfo.h"
+#include "Tests/HostKeysTest.h"
 #include <iostream>
 
 namespace {
@@ -176,9 +177,19 @@ void testInterface(const juce::File& shots)
         service->dispatchPendingMessages();
         check(! key.showsUpdate() && button->getButtonText() == "CHECK AGAIN", name + ": an older release leaves INFO dark");
         shot("up-to-date");
-        // Keyboard: Tab reaches the update button last.
-        const auto order = page.keyPressed(juce::KeyPress(juce::KeyPress::tabKey));
-        check(order, name + ": Tab is handled on the page");
+        // Keyboard (VfdHostKeys.h): the page holds only the arrows, so presets can't change under it.
+        check(! page.keyPressed(juce::KeyPress(juce::KeyPress::tabKey))
+                  && ! page.keyPressed(juce::KeyPress(juce::KeyPress::spaceKey, {}, ' '))
+                  && ! page.keyPressed(juce::KeyPress(juce::KeyPress::returnKey))
+                  && ! page.keyPressed(juce::KeyPress('z', juce::ModifierKeys::commandModifier, 0)),
+              name + ": Tab, space, Return and Cmd-Z pass through the page to the host");
+        check(page.keyPressed(juce::KeyPress(juce::KeyPress::leftKey))
+                  && page.keyPressed(juce::KeyPress(juce::KeyPress::downKey)),
+              name + ": the page holds the arrow keys");
+        check(! key.getWantsKeyboardFocus() && ! button->getWantsKeyboardFocus(),
+              name + ": the INFO key and the page's buttons never take the keyboard");
+        page.keyPressed(juce::KeyPress(juce::KeyPress::escapeKey));
+        check(! page.isVisible(), name + ": Escape closes the page");
     }
 }
 
@@ -212,6 +223,61 @@ void testLive()
    #endif
     Service::updatesFolder().getChildFile(latest.version).deleteRecursively();
 }
+
+// A stand-in editor with the controls the plug-ins use, run through the same host-keys check they run.
+struct HostKeysEditor final : juce::Component {
+    HostKeysEditor(const char* logo, size_t logoSize, juce::Typeface::Ptr face)
+        : key(vfd::themeFor("YOI-BOI"), face), info("YOI-BOI", vfd::themeFor("YOI-BOI"), logo, logoSize, face)
+    {
+        setName("Host keys editor");
+        setSize(518, 691);
+        button.setButtonText("NEW");
+        button.onClick = [this] { ++clicks; };
+        button.setWantsKeyboardFocus(true); // the helper must take this away
+        slider.setWantsKeyboardFocus(true);
+        combo.addItem("One", 1);
+        combo.addItem("Two", 2);
+        for (auto* c : std::initializer_list<juce::Component*> { &button, &slider, &combo, &field, &key })
+            addAndMakeVisible(c);
+        button.setBounds(20, 20, 100, 30);
+        slider.setBounds(20, 70, 240, 30);
+        combo.setBounds(20, 120, 160, 26);
+        field.setBounds(20, 170, 240, 26);
+        key.setBounds(211, 640, 96, 38);
+        key.onClick = [this] { info.open(&key); };
+        addChildComponent(info);
+        info.setBounds(getLocalBounds());
+        hostKeys.apply();
+    }
+    std::unique_ptr<juce::ComponentTraverser> createKeyboardFocusTraverser() override { return vfd::HostKeys::createTraverser(); }
+    juce::String presetName() const { return "Preset " + juce::String(preset); }
+
+    int preset = 5, clicks = 0;
+    juce::TextButton button;
+    juce::Slider slider;
+    juce::ComboBox combo;
+    juce::TextEditor field;
+    vfd::InfoButton key;
+    vfd::InfoOverlay info;
+    vfd::HostKeys hostKeys { *this, [this](int step) { preset += step; } };
+};
+
+void testHostKeys()
+{
+    juce::MemoryBlock fontData, logo;
+    juce::File(VFD_FONT_FILE).loadFileAsData(fontData);
+    juce::File(VFD_LOGO_FILE).loadFileAsData(logo);
+    const auto face = juce::Typeface::createSystemTypefaceFor(fontData.getData(), fontData.getSize());
+    HostKeysEditor editor(static_cast<const char*>(logo.getData()), logo.getSize(), face);
+    vfd::test::HostKeysProbe probe;
+    probe.currentPreset = [&editor] { return editor.presetName(); };
+    probe.blankSpot = { 400, 400 };
+    probe.openTextField = [&editor] { editor.field.grabKeyboardFocus(); return &editor.field; };
+    probe.controlSpots = { editor.button.getBounds().getCentre(), editor.slider.getBounds().getCentre() };
+    const int hostKeyFailures = vfd::test::runHostKeys(editor, probe, std::cout);
+    check(hostKeyFailures == 0, "host keys: the shared helper keeps only the arrows and text fields");
+    check(editor.clicks == 1, "host keys: Return after clicking a button doesn't press it again (clicks " + juce::String(editor.clicks) + ")");
+}
 } // namespace
 
 int main(int argc, char** argv)
@@ -226,6 +292,7 @@ int main(int argc, char** argv)
     }
     testLogic();
     testInterface(shots);
+    testHostKeys();
     if (args.contains("--live")) testLive();
     std::cout << (failures == 0 ? "ALL PASSED" : juce::String(failures) + " FAILED") << '\n';
     return failures == 0 ? 0 : 1;

@@ -9,6 +9,10 @@ name: Windows build
 on:
   push:
     branches: [main]
+  # Outside contributions are built and validated before they're merged. `pull_request` runs the
+  # contributor's code without this repo's secrets (none of these jobs use any).
+  pull_request:
+    branches: [main]
   workflow_dispatch:
 
 concurrency:
@@ -16,7 +20,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  SUITE_VERSION: "1.6.1" # keep equal to shared/VfdSuiteVersion.h
+  SUITE_VERSION: "1.6.2" # keep equal to shared/VfdSuiteVersion.h
   JUCE_TAG: "9.0.2"
   PLUGINVAL_VERSION: "v1.0.4"
   BUILD_RECIPE: "1"

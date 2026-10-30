@@ -16,7 +16,7 @@ add_subdirectory("${JUCE_SOURCE_DIR}" "${CMAKE_BINARY_DIR}/JUCE")
 juce_add_console_app(VfdUpdateTests PRODUCT_NAME "VFD Update Tests" NEEDS_CURL TRUE)
 target_sources(VfdUpdateTests PRIVATE UpdateTests.cpp)
 target_include_directories(VfdUpdateTests PRIVATE ..)
-target_compile_definitions(VfdUpdateTests PRIVATE JUCE_WEB_BROWSER=0 JUCE_LOAD_CURL_SYMBOLS_LAZILY=1
+target_compile_definitions(VfdUpdateTests PRIVATE JUCE_WEB_BROWSER=0 JUCE_LOAD_CURL_SYMBOLS_LAZILY=1 JUCE_MODAL_LOOPS_PERMITTED=1
     VFD_FONT_FILE="${CMAKE_CURRENT_SOURCE_DIR}/../../energy-harvester/Assets/ChakraPetch-SemiBold.ttf"
     VFD_LOGO_FILE="${CMAKE_CURRENT_SOURCE_DIR}/../VfdLogo.svg")
 target_link_libraries(VfdUpdateTests PRIVATE juce::juce_gui_extra juce::juce_recommended_config_flags
