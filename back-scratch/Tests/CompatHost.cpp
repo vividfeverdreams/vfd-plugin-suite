@@ -4,8 +4,11 @@
 //   BackScratchCompatHost --save  <0.10.2 BACK-SCRATCH.vst3> <folder>
 //   BackScratchCompatHost --check <new BACK-SCRATCH.vst3>    <folder>
 //   BackScratchCompatHost --au <new BACK-SCRATCH.component> <new BACK-SCRATCH.vst3>
+//   BackScratchCompatHost --bypass-save  <0.11.2 BACK-SCRATCH.vst3> <folder>
+//   BackScratchCompatHost --bypass-check <new BACK-SCRATCH.vst3>    <folder>
 #include <juce_audio_processors/juce_audio_processors.h>
 #include <juce_gui_basics/juce_gui_basics.h>
+#include <array>
 #include <cmath>
 #include <cstring>
 
@@ -148,8 +151,8 @@ inline void run(const juce::String& componentPath, const juce::String& vst3Path)
     juce::StringArray unitNames, vstNames;
     for (auto* parameter : unit->getParameters()) unitNames.add(parameter->getName(128));
     for (auto* parameter : vst3->getParameters()) vstNames.add(parameter->getName(128));
-    // The VST3 wrapper adds its own host Bypass and Program entries, and the
-    // AU host lists controls by their hashed IDs, so compare the sets.
+    // The VST3 wrapper adds a Program entry (and, before 0.11.3, its own host
+    // Bypass), and the AU host lists controls by their hashed IDs, so compare the sets.
     vstNames.removeString("Program");
     vstNames.removeDuplicates(false);
     unitNames.sort(false);
@@ -198,10 +201,148 @@ inline void run(const juce::String& componentPath, const juce::String& vst3Path)
 } // namespace backScratch::audioUnitCheck
 #endif
 
+// 0.11.3: the plug-in's Bypass became the host's bypass. Step 1 (--bypass-save) lets the 0.11.2 VST3 save
+// projects with its Bypass off and on, and with the JUCE wrapper's separate host Bypass on, and records
+// what each renders. Step 2 (--bypass-check), in a second process, opens them in the new VST3: the
+// controls and audio must come back, and a fresh new instance given the same settings must write the
+// same plug-in state bytes. The JUCE private data the wrapper appends after those bytes is reported.
+namespace backScratch::bypassCheck {
+using compatibilityTests::require;
+
+struct Scenario { const char* file; const char* name; float bypass; bool hostBypass; };
+constexpr std::array<Scenario, 3> scenarios {{
+    {"bypass-off", "Bypass off", 0.0f, false},
+    {"bypass-on", "Bypass on", 1.0f, false},
+    {"host-bypass-on", "0.11.2 wrapper host Bypass on", 0.0f, true}}};
+
+// The plug-in's own Bypass: the sixth control in both builds (0.11.2 also has a wrapper "Bypass" at the end).
+inline juce::AudioProcessorParameter& ownBypass(juce::AudioPluginInstance& plugin)
+{
+    auto* parameter = plugin.getParameters()[5];
+    require(parameter != nullptr && parameter->getName(128) == "Bypass", "the sixth control is the plug-in's Bypass");
+    return *parameter;
+}
+
+inline void configure(juce::AudioPluginInstance& plugin, const Scenario& scenario)
+{
+    compatibilityTests::configured().clear();
+    compatibilityTests::set(plugin, "Scratch Pattern", 37.0f / 74.0f);
+    compatibilityTests::set(plugin, "Phrase Timing", 0.5f);
+    compatibilityTests::set(plugin, "Pattern Grid Shift", 5.0f / 15.0f);
+    compatibilityTests::set(plugin, "Mix", 0.7f);
+    auto& bypass = ownBypass(plugin);
+    bypass.beginChangeGesture(); bypass.setValueNotifyingHost(scenario.bypass); bypass.endChangeGesture();
+    if (scenario.hostBypass) {
+        auto* host = plugin.getBypassParameter();
+        require(host != nullptr && host != &bypass, "0.11.2 has a separate wrapper host Bypass");
+        host->setValueNotifyingHost(1.0f);
+    }
+}
+
+// The IComponent chunk of a hosted VST3 state: the plug-in's getStateInformation bytes, then the wrapper's
+// trailer (int64 0, private data, int64 private-data size, "JUCEPrivateData").
+inline std::pair<juce::MemoryBlock, juce::MemoryBlock> split(const juce::MemoryBlock& state)
+{
+    auto container = juce::AudioProcessor::getXmlFromBinary(state.getData(), static_cast<int>(state.getSize()));
+    require(container != nullptr, "the VST3 state container decodes");
+    juce::MemoryBlock component;
+    for (auto* node : container->getChildIterator())
+        if (node->getTagName() == "IComponent") component.fromBase64Encoding(node->getAllSubText());
+    const juce::String id("JUCEPrivateData");
+    const auto idSize = static_cast<size_t>(id.length());
+    const auto* bytes = static_cast<const char*>(component.getData());
+    require(component.getSize() > idSize + 16 && std::memcmp(bytes + component.getSize() - idSize, id.toRawUTF8(), idSize) == 0,
+            "the IComponent chunk ends with JUCE's private data");
+    juce::int64 privateSize = 0;
+    std::memcpy(&privateSize, bytes + component.getSize() - idSize - 8, 8);
+    const auto ownSize = component.getSize() - idSize - 16 - static_cast<size_t>(privateSize);
+    return {juce::MemoryBlock(bytes, ownSize), juce::MemoryBlock(bytes + ownSize, component.getSize() - ownSize)};
+}
+
+inline juce::String describe(juce::AudioPluginInstance& plugin)
+{
+    auto* host = plugin.getBypassParameter();
+    juce::String text = juce::String(plugin.getParameters().size()) + " controls; host bypass = ";
+    if (host == nullptr) return text + "none";
+    text << "'" << host->getName(128) << "' at index " << host->getParameterIndex();
+    if (auto* hosted = dynamic_cast<juce::HostedAudioProcessorParameter*>(host)) text << ", VST3 ID " << hosted->getParameterID();
+    return text;
+}
+
+inline void save(const juce::String& oldPath, const juce::File& directory)
+{
+    require(directory.createDirectory().wasOk(), "bypass folder");
+    for (const auto& scenario : scenarios) {
+        auto old = compatibilityTests::load(oldPath);
+        configure(*old, scenario);
+        juce::MemoryBlock saved;
+        old->getStateInformation(saved);
+        const auto [own, trailer] = split(saved);
+        require(directory.getChildFile(juce::String(scenario.file) + ".state").replaceWithData(saved.getData(), saved.getSize())
+                    && directory.getChildFile(juce::String(scenario.file) + ".own").replaceWithData(own.getData(), own.getSize()),
+                "0.11.2 bypass state saved");
+        compatibilityTests::writeAudio(directory.getChildFile(juce::String(scenario.file) + ".f32"),
+                                       compatibilityTests::render(*old, saved, 120));
+        std::cout << "0.11.2 " << scenario.name << ": " << describe(*old) << "; own state " << own.getSize()
+                  << " bytes, wrapper trailer " << trailer.getSize() << " bytes\n";
+    }
+}
+
+inline void check(const juce::String& newPath, const juce::File& directory)
+{
+    for (const auto& scenario : scenarios) {
+        juce::MemoryBlock saved, oldOwn;
+        require(directory.getChildFile(juce::String(scenario.file) + ".state").loadFileAsData(saved)
+                    && directory.getChildFile(juce::String(scenario.file) + ".own").loadFileAsData(oldOwn),
+                "0.11.2 bypass state found");
+        // Same settings in a fresh new instance: the plug-in's own state bytes are unchanged.
+        auto fresh = compatibilityTests::load(newPath);
+        if (!scenario.hostBypass) {
+            configure(*fresh, scenario);
+            juce::MemoryBlock state;
+            fresh->getStateInformation(state);
+            const auto [own, trailer] = split(state);
+            require(own == oldOwn, std::string(scenario.name) + ": the same settings write the same plug-in state bytes");
+            require(&ownBypass(*fresh) == fresh->getBypassParameter(), "the host's bypass is the plug-in's Bypass");
+            std::cout << "0.11.3 " << scenario.name << ": " << describe(*fresh) << "; own state bytes identical to 0.11.2 ("
+                      << own.getSize() << "), wrapper trailer " << trailer.getSize() << " bytes\n";
+        }
+        // The 0.11.2 project opens in a fresh new instance.
+        auto current = compatibilityTests::load(newPath);
+        const auto before = compatibilityTests::readAudio(directory.getChildFile(juce::String(scenario.file) + ".f32"));
+        const auto after = compatibilityTests::render(*current, saved, 120);
+        require(before.size() == after.size(), "both builds render the same length");
+        double worst = 0.0;
+        for (size_t i = 0; i < before.size(); ++i) worst = std::max(worst, static_cast<double>(std::abs(before[i] - after[i])));
+        const float bypass = ownBypass(*current).getValue();
+        std::cout << "0.11.2 " << scenario.name << " -> 0.11.3: Bypass " << bypass << ", maximum difference " << worst << '\n';
+        if (scenario.hostBypass) continue; // reported, not required: see README "Updating"
+        for (const auto& [name, value] : compatibilityTests::configured())
+            require(std::abs(compatibilityTests::parameter(*current, name).getValue() - value) < 1.0e-6f,
+                    std::string(scenario.name) + ": restores " + name.toStdString());
+        require(juce::approximatelyEqual(bypass, scenario.bypass), std::string(scenario.name) + ": restores Bypass");
+        require(worst < 0.00003, std::string(scenario.name) + ": a 0.11.2 project renders the same in 0.11.3");
+        juce::MemoryBlock resaved;
+        current->getStateInformation(resaved);
+        std::cout << "  resaved own state " << (split(resaved).first == oldOwn ? "identical to" : "differs from")
+                  << " the 0.11.2 bytes\n";
+    }
+    std::cout << "BACK-SCRATCH 0.11.2 bypass state compatibility passed\n";
+}
+} // namespace backScratch::bypassCheck
+
 int main(int argc, char* argv[])
 {
     try {
         juce::ScopedJuceInitialiser_GUI gui;
+        if (argc == 4 && juce::String(argv[1]) == "--bypass-save") {
+            backScratch::bypassCheck::save(juce::String::fromUTF8(argv[2]), juce::File(juce::String::fromUTF8(argv[3])));
+            return 0;
+        }
+        if (argc == 4 && juce::String(argv[1]) == "--bypass-check") {
+            backScratch::bypassCheck::check(juce::String::fromUTF8(argv[2]), juce::File(juce::String::fromUTF8(argv[3])));
+            return 0;
+        }
 #if JUCE_MAC
         if (argc == 4 && juce::String(argv[1]) == "--au") {
             backScratch::audioUnitCheck::run(juce::String::fromUTF8(argv[2]), juce::String::fromUTF8(argv[3]));
@@ -216,7 +357,8 @@ int main(int argc, char* argv[])
             backScratch::compatibilityTests::checkAgainstPayload(juce::String::fromUTF8(argv[2]), juce::File(juce::String::fromUTF8(argv[3])));
             return 0;
         }
-        std::cerr << "usage: --save <0.10.2 vst3> <folder> | --check <new vst3> <folder> | --au <new component> <new vst3>\n";
+        std::cerr << "usage: --save <0.10.2 vst3> <folder> | --check <new vst3> <folder> | --au <new component> <new vst3>"
+                     " | --bypass-save <0.11.2 vst3> <folder> | --bypass-check <new vst3> <folder>\n";
         return 2;
     } catch (const std::exception& e) {
         std::cerr << "FAIL: " << e.what() << '\n';

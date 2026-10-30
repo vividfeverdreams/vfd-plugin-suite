@@ -167,6 +167,7 @@ inline void checkFactoryShiftIsolation()
         processor.getStateInformation(project);
         processor.selectFactoryPreset(54);
         checkOriginal(processor, 54);
+        processor.setPhraseLocked(false); // a locked phrase keeps its own length and timing on preset loads
         require(processor.loadPreset(savedPreset.file).wasOk() && processor.patternShiftSteps() == 11
                     && patternTests::fingerprint(processor.currentPattern()) == patternTests::fingerprint(shifted),
                 "user preset recall preserves its intentionally saved grid offset after factory navigation");
@@ -221,6 +222,7 @@ inline void checkTimingRecall()
             BackScratchProcessor restoredPreset;
             restoredPreset.setPhraseTimingChoice((timing + 1) % 3);
             restoredPreset.shiftPattern(12);
+            restoredPreset.setPhraseLocked(false); // a locked phrase would keep its own length and timing
             require(restoredPreset.loadPreset(preset.file).wasOk()
                         && restoredPreset.phraseTimingChoice() == timing
                         && restoredPreset.patternShiftSteps() == timing + 5
@@ -278,6 +280,7 @@ inline void checkLegacyTimingDefaults()
             require(preset.file.replaceWithText(oldPreset.toString()), "legacy preset fixture writes");
             target.setPhraseTimingChoice(1);
             target.shiftPattern(13 - target.patternShiftSteps());
+            target.setPhraseLocked(false); // the old project below restores a locked phrase
             require(target.loadPreset(preset.file).wasOk()
                         && target.phraseTimingChoice() == 0 && target.patternShiftSteps() == 0,
                     "version four through six presets always restore straight unshifted timing on a previously modified instance");

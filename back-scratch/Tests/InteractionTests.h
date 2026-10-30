@@ -130,8 +130,12 @@ inline void checkInfoInteraction(BackScratchEditor& editor, BackScratchProcessor
     button->onClick();
     check(overlay->isVisible() && overlay->getBounds() == editor.getLocalBounds(),
           "INFO opens a credits page filling the editor");
-    check(overlay->keyPressed(juce::KeyPress(juce::KeyPress::spaceKey)) && overlay->isVisible(),
-          "credits page consumes unrelated keys without activating underlying controls");
+    // Since 1.6.2 the shared page passes everything but Escape and the plain
+    // arrows to the host; it holds the arrows so presets can't change under it.
+    check(!overlay->keyPressed(juce::KeyPress(juce::KeyPress::spaceKey)) && overlay->isVisible(),
+          "credits page passes space to the host and stays open");
+    check(overlay->keyPressed(juce::KeyPress(juce::KeyPress::rightKey)) && overlay->isVisible(),
+          "credits page holds the arrow keys so the preset can't change under it");
     const auto countLinks = [](const auto& self, juce::Component& parent) -> int {
         int count = dynamic_cast<juce::HyperlinkButton*>(&parent) != nullptr ? 1 : 0;
         for (auto* child : parent.getChildren()) count += self(self, *child);
@@ -365,11 +369,20 @@ inline void runInteractionTests(backScratch::BackScratchProcessor& processor)
           "space passes through so the DAW can start and stop transport");
     check(processor.generationSeed() == seed && processor.selectedFactoryPreset() == factory,
           "space leaves the pattern unchanged");
+    // The plain arrows are handled by the editor's HostKeys listener (checked
+    // through the window's peer in the host-keys run), never by keyPressed.
     check(!editor->keyPressed(juce::KeyPress(juce::KeyPress::leftKey))
               && !editor->keyPressed(juce::KeyPress(juce::KeyPress::rightKey)),
-          "arrow keys are left to the host");
+          "keyPressed leaves the arrows to the preset listener");
     check(!editor->keyPressed(juce::KeyPress(juce::KeyPress::spaceKey, juce::ModifierKeys::commandModifier, 0)),
           "modified shortcuts are left to the host");
+    for (const auto key : {juce::KeyPress(juce::KeyPress::returnKey), juce::KeyPress(juce::KeyPress::tabKey),
+                           juce::KeyPress('a'), juce::KeyPress(juce::KeyPress::escapeKey),
+                           juce::KeyPress('z', juce::ModifierKeys::commandModifier, 0),
+                           juce::KeyPress('z', juce::ModifierKeys::commandModifier | juce::ModifierKeys::shiftModifier, 0)})
+        check(!editor->keyPressed(key), "Return, Tab, letters, Cmd-Z, Shift-Cmd-Z and an idle Escape are left to the host");
+    check(processor.generationSeed() == seed && processor.selectedFactoryPreset() == factory,
+          "keys left to the host leave the pattern unchanged");
     check(processor.generationSeed() == seed, "modified space leaves the pattern alone");
     editor->mouseDown(event(*editor, button, button));
     editor->keyPressed(juce::KeyPress(juce::KeyPress::escapeKey));

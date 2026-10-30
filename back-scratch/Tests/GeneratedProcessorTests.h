@@ -157,6 +157,7 @@ inline void checkDurationIdentity() {
         .getNonexistentChildFile("BACK-SCRATCH-short-recall", ".backscratch");
     require(p.savePreset(file).wasOk(), "half-beat preset saves");
     p.randomizePattern(); p.setPhraseBars(16);
+    p.setPhraseLocked(false); // a locked length would keep its 16 bars
     require(p.loadPreset(file).wasOk() && p.phraseDurationChoice() == 0, "half-beat preset duration restores");
     compare(halfBeat, p.currentPattern());
     p.setPhraseBars(8); compare(original, p.currentPattern());
@@ -165,6 +166,7 @@ inline void checkDurationIdentity() {
     restored.setStateInformation(saved.getData(), static_cast<int>(saved.getSize()));
     restored.setPhraseDurationChoice(0); compare(halfBeat, restored.currentPattern());
     file.replaceWithText("<BACK_SCRATCH_PRESET version=\"5\" generatorVersion=\"1\" name=\"Older generated phrase\" factory=\"0\" variation=\"0\" generated=\"1\" generationSeed=\"83177\" phraseBars=\"4\" phraseLocked=\"1\" keepSub=\"1\"/>");
+    p.setPhraseLocked(false); // a locked phrase keeps its own length and timing on preset loads
     require(p.loadPreset(file).wasOk() && p.phraseDurationChoice() == 5, "version 5 preset migrates original duration");
     const auto previous = generatePattern(83177, 16.0, 4.0, 1);
     compare(previous, p.currentPattern());
@@ -173,6 +175,7 @@ inline void checkDurationIdentity() {
     // Use a non-4/4 meter to catch freezing the default meter into its identity.
     file.replaceWithText(file.loadFileAsString().replace("83177", "6482"));
     BackScratchProcessor migrated;
+    migrated.setPhraseLocked(false); // a locked phrase keeps its own length and timing on preset loads
     require(migrated.loadPreset(file).wasOk(), "legacy preset loads before host meter exists");
     MeterHead meter; meter.numerator = 6; meter.denominator = 4;
     migrated.setPlayHead(&meter); migrated.prepareToPlay(48000, 64);
@@ -225,10 +228,16 @@ inline void runGeneratedProcessorTests() {
     require(processor.savePreset(preset).wasOk(), "generated preset saves");
     processor.randomizePattern(); processor.setPhraseBars(1); processor.setPhraseLocked(true); processor.setKeepSub(false);
     require(processor.loadPreset(preset).wasOk(), "generated preset loads");
+    // A locked phrase keeps its length and its lock through every preset load (user, 2026-10-28).
+    require(processor.isGenerated() && processor.generationSeed() == seed && processor.phraseBars() == 1
+                && processor.phraseLocked() && processor.keepSub(),
+            "a locked one-bar phrase keeps its length and lock through a preset saved at 8 bars, unlocked");
+    processor.setPhraseLocked(false);
+    require(processor.loadPreset(preset).wasOk(), "generated preset loads unlocked");
     require(processor.isGenerated() && processor.generationSeed() == seed && processor.phraseBars() == 8
                 && !processor.phraseLocked() && processor.keepSub()
                 && patternTests::structuralFingerprint(processor.currentPattern()) == hash,
-            "saved generated preset restores exact phrase, length, unlocked state and sub toggle");
+            "unlocked, the saved generated preset restores exact phrase, length and sub toggle");
     juce::MemoryBlock saved;
     processor.getStateInformation(saved);
     BackScratchProcessor restored;
@@ -239,6 +248,15 @@ inline void runGeneratedProcessorTests() {
                 && patternTests::structuralFingerprint(restored.currentPattern()) == hash
                 && restored.currentPresetName() == processor.currentPresetName(),
             "project recall restores the full generated preset identity");
+    BackScratchProcessor lockedBank;
+    lockedBank.setPhraseBars(2); lockedBank.setPhraseTimingChoice(1); lockedBank.setPhraseLocked(true);
+    int lengthHeld = 0;
+    const int bankCount = static_cast<int>(bankPresets().size());
+    for (int index = 0; index < bankCount; ++index) {
+        lockedBank.selectBankPreset(index);
+        lengthHeld += lockedBank.phraseBars() == 2 && lockedBank.phraseTimingChoice() == 1 && lockedBank.phraseLocked() ? 1 : 0;
+    }
+    require(lengthHeld == bankCount, "a locked 2-bar triplet phrase holds through every bank preset");
     preset.deleteFile();
 
     MeterHead meter;

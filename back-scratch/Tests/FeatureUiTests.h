@@ -260,6 +260,7 @@ inline void checkPresets()
     processor.setValue("depth", 150.0f);
     check(processor.savePreset(file).wasOk() && file.existsAsFile(), "saving creates the chosen folder and preset");
     BackScratchProcessor other;
+    other.setPhraseLocked(false); // a locked phrase keeps its own length and timing on preset loads
     check(other.loadPreset(file).wasOk() && juce::approximatelyEqual(other.parameterValue("depth"), 150.0f)
               && other.slotFilled(1) == processor.slotFilled(1),
           "a 0.11 preset restores Depth and its slots");

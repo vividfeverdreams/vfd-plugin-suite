@@ -1,8 +1,16 @@
-# BACK-SCRATCH 0.11.0
+# BACK-SCRATCH 0.11.3
 
 A live scratch-pattern effect for bass, drums and vocals. Insert it on a track, start playback, and click **Randomize**. A repeating time-warp pattern processes fresh incoming audio; no capture is needed.
 
 The **700 × 940** interface keeps its translucent red shell, recessed smoked-glass display, frosted coral control plates and sculpted ivory controls. Version 0.11 adds a **PERFORM** page to the same display, so nothing new hangs off the hardware.
+
+## What's new in 0.11.3
+
+- **Your DAW keeps its keys.** While BACK-SCRATCH is open, space (play/stop), Return, Tab, letters (Live's computer keyboard), Escape and every shortcut, **Cmd+Z** and **Cmd+Shift+Z** included, reach the host. Clicking a key or the Length knob never leaves it holding the keyboard.
+- **Arrow keys browse presets.** After a click in the plug-in, **← / ↑** load the previous preset and **→ / ↓** the next, exactly as the upper arrows on the screen do: the same 230 browser entries in menu order, wrapping at the ends. With a slot selected they load into that slot as one undoable step, and the display says which preset landed there (the screen's arrows now say so too). Arrows with Shift, Cmd, Alt or Ctrl go to the host.
+- **Escape only cancels.** It closes an open menu, cancels a held key, bar drag or unfinished gesture, and disarms the drawing tool. Otherwise it reaches the host.
+- **One bypass switch.** BACK-SCRATCH's own **Bypass** is now the host's bypass (VST3 and AU), so the DAW's bypass button and the Bypass control are the same switch. See **Updating**.
+- **Long status text wraps** onto a second line above the preset name instead of being squeezed.
 
 ## What's new in 0.11
 
@@ -25,11 +33,11 @@ Projects and presets from 0.10 open with every setting intact and sound the same
 ## Start here
 
 1. Quit your audio apps, open the installer and choose **Install / Update**. Rescan plug-ins in your DAW if necessary.
-2. Insert BACK-SCRATCH and start the track. Keep Sub starts on; phrase length starts at one bar, locked.
+2. Insert BACK-SCRATCH and start the track. Keep Sub starts on; phrase length starts at one bar, locked. A locked length and timing hold through RANDOMIZE and every preset change (the preset's pattern fits the length); unlock it to load each preset at its own length.
 3. Drag the **Phrase Length** knob up or down to select **½ beat, 1 beat, 2 beats, 1 bar, 2 bars, 4 bars, 8 bars or 16 bars**. The wheel also changes its value; Shift-drag makes finer movements, and double-click restores one bar.
 4. Click **Dotted** to multiply the base length by **1.5**, or **Triplet** to multiply it by **⅔**. Only one can be active; click the lit button again for straight timing.
 5. Click **Randomize** to compose a new pattern. The length lock holds the base knob setting; unlock it to let Randomize choose that base length too. Timing mode and grid shift stay as you set them.
-6. Browse the presets with the **⌄** menu beside the name or the **upper arrows**, or press the **shuffle** key beside them for a random one. The centered **bottom arrows** move the current pattern one grid cell left or right, wrapping across the edges.
+6. Browse the presets with the **⌄** menu beside the name, the **upper arrows** or the arrow keys, or press the **shuffle** key beside them for a random one. The centered **bottom arrows** move the current pattern one grid cell left or right, wrapping across the edges.
 7. Click the screen's **Pencil** button to draw. Its small arrow opens **Free Draw, Line, Curve** and the **rolls**. Choose **Eraser** to restore clean input in selected cells. Click the selected tool again to stop editing.
 8. Open **Shapes** for 15 starting contours. Selecting one replaces the phrase with an editable starting shape; Undo brings back the previous phrase.
 9. Click **PERFORM** for Engage, Play Every, slots, Mix, Depth and the other 0.11 controls.
@@ -71,7 +79,7 @@ Steep Free Draw, Line and Curve gestures are kept within the engine's **2×** fo
 
 Click **Eraser**, then click or drag across cells to restore original clean input there. Erasing does not mute the track.
 
-The **Undo** and **Redo** icons restore whole mouse gestures, shape selections, slot copies and clears, and presets loaded into a slot, with up to **64 actions** in history. While a tool is armed, **Cmd+Z** undoes and **Cmd+Shift+Z** redoes. **Escape** cancels an unfinished gesture and disarms the tool; closing the editor also cancels an unfinished drag.
+The **Undo** and **Redo** icons restore whole mouse gestures, shape selections, slot copies and clears, and presets loaded into a slot, with up to **64 actions** in history. **Cmd+Z** and **Cmd+Shift+Z** belong to your DAW (since 0.11.3), so use the icons. **Escape** cancels an unfinished gesture and disarms the tool; closing the editor also cancels an unfinished drag.
 
 Length, Dotted, Triplet and the bottom shift arrows keep your edits. **Randomize** or choosing a preset starts a new pattern and clears drawing history. Save a drawing before replacing it if you want to keep it.
 
@@ -144,6 +152,7 @@ Version 0.11 writes **preset/project schema 10**. Everything 0.10 saved still lo
 - **0.10 preset files** load the same way. Engage and Output stay as you have them, as for any preset.
 - **Parameter IDs** are unchanged; the new ones are appended. Existing automation keeps working.
 - **Factory selection by number** (the Scratch Pattern control) still selects the same 75 recipes.
+- **Bypass (0.11.3):** the plug-in's Bypass (ID `bypass`, still the sixth control) is now flagged as the host's bypass. Its ID, position and saved value are unchanged, and its automation keeps working. The VST3 no longer lists the second **Bypass** entry that the JUCE wrapper used to add at the end of the list, so automation drawn on that extra entry (rare) no longer applies; with the plug-in's Bypass on, the host now shows it bypassed. Choosing a preset or Randomize still turns Bypass off, as it always did, which now also releases the host's bypass.
 - **Arrows:** the upper arrows now walk the whole 230-preset bank in menu order. From a project made in 0.10 they start at the Classic entry of its recipe, then step through Classic in folder order (bass, then drums, then vocals) instead of the old 1–75 numbering.
 - **History:** new instances use Auto; older projects keep 128 s.
 - Schemas 4–8 still load with their original motion; see PRESETS.md for older migration details. Versions 0.1–0.3 used captured audio and wheel gestures; those states open bypassed.

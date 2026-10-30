@@ -118,6 +118,7 @@ inline void runProcessorTests()
     const auto invalid = preset.getSiblingFile(preset.getFileNameWithoutExtension() + "-invalid.backscratch");
     check(p.savePreset(preset).wasOk(), "custom preset saves");
     p.randomizePattern(); p.setKeepSub(false);
+    p.setPhraseLocked(false); // a locked phrase keeps its own length and timing on preset loads
     check(p.loadPreset(preset).wasOk(), "custom preset loads");
     check(p.selectedFactoryPreset() == 5 && p.variationSeed() == 18421 && p.keepSub(), "preset restores exact recipe and sub choice");
     check(p.currentPresetName() == preset.getFileNameWithoutExtension(), "saved preset name visible");

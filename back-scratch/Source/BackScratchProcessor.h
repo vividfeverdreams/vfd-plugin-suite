@@ -20,9 +20,15 @@ public:
     void prepareToPlay(double sampleRate, int samplesPerBlock) override;
     void releaseResources() override;
     void processBlock(juce::AudioBuffer<float>&, juce::MidiBuffer&) override;
-    // Hosts that drive VST3 bypass call this instead of processBlock. It runs
-    // the normal path with a latency-aligned dry output, so the host's delay
-    // compensation stays correct and transport/history tracking continues.
+    // Since 0.11.3 the plug-in's own Bypass is the host's bypass (VST3 kIsBypass,
+    // AU kAudioUnitProperty_BypassEffect), so the two are one switch and the
+    // JUCE wrappers always call processBlock. Its ID, order and saved state are
+    // unchanged.
+    juce::AudioProcessorParameter* getBypassParameter() const override;
+    // A host that bypasses through AudioProcessor itself calls this instead of
+    // processBlock (JUCE's VST3 and AU wrappers did before 0.11.3). It runs the
+    // normal path with a latency-aligned dry output, so delay compensation
+    // stays correct and transport/history tracking continues.
     void processBlockBypassed(juce::AudioBuffer<float>&, juce::MidiBuffer&) override;
     bool isBusesLayoutSupported(const BusesLayout&) const override;
     juce::AudioProcessorEditor* createEditor() override;

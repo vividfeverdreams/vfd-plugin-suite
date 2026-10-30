@@ -614,6 +614,11 @@ void BackScratchProcessor::randomizePattern()
     writeParameterGesture("bypass", 0.0f);
 }
 
+juce::AudioProcessorParameter* BackScratchProcessor::getBypassParameter() const
+{
+    return state.getParameter("bypass");
+}
+
 void BackScratchProcessor::processBlockBypassed(juce::AudioBuffer<float>& audio, juce::MidiBuffer& midi)
 {
     // Render the delayed dry path, so the host's latency compensation still
@@ -1288,6 +1293,12 @@ juce::Result BackScratchProcessor::loadPresetXml(const juce::XmlElement& xmlIn, 
         performance[0] = rawControls[engage]->load();
         performance[7] = rawControls[outputTrim]->load();
     }
+    // A locked phrase keeps its length and timing through every preset load (user, 2026-10-28);
+    // the preset's pattern fits that length, as classic presets always did. A preset never
+    // changes the lock itself: it is this instance's choice.
+    const bool keepPhrase = phraseLocked();
+    const int appliedDuration = keepPhrase ? phraseDurationChoice() : duration;
+    const int appliedTiming = keepPhrase ? phraseTimingChoice() : timing;
     if (editedPatterns.publish(restoredPattern) < 0) return juce::Result::fail("The pattern is updating. Try loading again.");
     if (slotBanks.publish(bank) < 0) return juce::Result::fail("The pattern is updating. Try loading again.");
     clearEditHistory();
@@ -1295,20 +1306,19 @@ juce::Result BackScratchProcessor::loadPresetXml(const juce::XmlElement& xmlIn, 
     writeParameterGesture("motionVersion", static_cast<float>(restoredMotion));
     writeParameterGesture("factory", static_cast<float>(index)); writeParameterGesture("variation", static_cast<float>(variationValue));
     writeParameterGesture("generated", static_cast<float>(generatedPattern)); writeParameterGesture("generationSeed", static_cast<float>(generation));
-    setPhraseDurationChoice(duration);
-    setPhraseTimingChoice(timing);
+    setPhraseDurationChoice(appliedDuration);
+    setPhraseTimingChoice(appliedTiming);
     writeParameterGesture("patternShift", static_cast<float>(shift));
     writeParameterGesture("sourceBeats", static_cast<float>(originalBeats)); writeParameterGesture("sourceBarBeats", static_cast<float>(originalBar));
-    writeParameterGesture("phraseLock", static_cast<float>(locked));
     writeParameterGesture("keepSub", static_cast<float>(keep)); writeParameterGesture("bypass", 0);
     for (size_t i = 0; i < neutralControls.size(); ++i) writeParameterGesture(neutralControls[i].id, performance[i]);
     {
         const juce::ScopedLock lock(nameLock);
         savedName = xml->getStringAttribute("name", fallbackName).substring(0, 80);
-        namedFactory = index; namedGenerated = generatedPattern != 0; namedDuration = duration;
+        namedFactory = index; namedGenerated = generatedPattern != 0; namedDuration = appliedDuration;
         namedEdited = enabled != 0;
         namedMotionVersion = restoredMotion;
-        namedTiming = timing; namedShift = shift;
+        namedTiming = appliedTiming; namedShift = shift;
         namedSourceBeats = static_cast<float>(originalBeats); namedSourceBarBeats = static_cast<float>(originalBar);
         namedSeed = static_cast<std::uint32_t>(generatedPattern ? generation : variationValue);
     }

@@ -142,8 +142,7 @@ inline void runVstTimingTests(juce::AudioPluginInstance& plugin, backScratch::Ba
     setBoth(plugin, direct, "phraseTiming", "Phrase Timing", 1.0f);
     setBoth(plugin, direct, "patternShift", "Pattern Grid Shift", 5.0f);
     setBoth(plugin, direct, "keepSub", "Keep Sub", 0.0f);
-    // JUCE also exposes a separate host bypass parameter; the two Bypass
-    // names are deliberately excluded from name-based parameter discovery.
+    // Bypass is also the host's bypass (since 0.11.3); it stays off here.
     direct.setHostParameter("bypass", 0.0f);
     plugin.prepareToPlay(48000.0, 512); direct.prepareToPlay(48000.0, 512);
     require(plugin.getLatencySamples() == direct.getLatencySamples(), "packaged timing mode keeps reported audio latency");

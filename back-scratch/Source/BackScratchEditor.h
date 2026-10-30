@@ -4,6 +4,7 @@
 #include <optional>
 #include "BackScratchProcessor.h"
 #include "PatternEditing.h"
+#include "VfdHostKeys.h"
 
 namespace vfd { class InfoButton; class InfoOverlay; }
 
@@ -22,7 +23,10 @@ public:
     void mouseExit(const juce::MouseEvent&) override;
     void mouseDoubleClick(const juce::MouseEvent&) override;
     void mouseWheelMove(const juce::MouseEvent&, const juce::MouseWheelDetails&) override;
+    // Keys belong to the host (shared/VfdHostKeys.h): the plain arrows browse presets like the screen's
+    // previous / next keys, and Escape is used only while it cancels something here.
     bool keyPressed(const juce::KeyPress&) override;
+    std::unique_ptr<juce::ComponentTraverser> createKeyboardFocusTraverser() override;
     juce::String getTooltip() override;
 
     enum class Control { none, randomize, keepSub, phraseDuration,
@@ -52,6 +56,15 @@ public:
     // preset file (bank -1). Public for tests.
     struct PresetChoice { int bank = -1; juce::File file; };
     std::vector<PresetChoice> randomPresetChoices() const;
+    // The line above the preset name: a status message, the armed tool's hint,
+    // or the preset's folder. Public so tests can show the longest messages.
+    void showStatus(const juce::String& text, bool error = false);
+    juce::String statusText() const { return statusLine; }
+    // Status lines are 15 units tall and never narrower than 90%: text that
+    // does not fit one line wraps onto two balanced lines in a taller box.
+    static constexpr float statusFontHeight = 15.0f, statusMinimumScale = 0.9f;
+    static juce::Rectangle<float> statusBounds(bool performPage, bool twoLines) noexcept;
+    static juce::StringArray statusLayout(const juce::Font&, const juce::String&, bool performPage);
 
 private:
     void timerCallback() override;
@@ -71,6 +84,7 @@ private:
     void loadUserPreset(const juce::File&);
     void loadRandomPreset();
     void stepPreset(int direction);
+    void stepPresetFromKeys(int direction);
     void updateHover(juce::Point<float>);
     Control controlAt(juce::Point<float>) const noexcept;
     static bool patternHitTest(juce::Point<float>) noexcept;
@@ -78,6 +92,7 @@ private:
     void drawText(juce::Graphics&, const juce::String&, juce::Rectangle<float>, float,
                   juce::Colour, juce::Justification = juce::Justification::centred,
                   bool italic = false) const;
+    void drawStatus(juce::Graphics&, const juce::String&, juce::Colour) const;
     void drawPresetBrowser(juce::Graphics&, const BackScratchProcessor::DisplayState&);
     void drawEditTools(juce::Graphics&);
     void drawPattern(juce::Graphics&, const BackScratchProcessor::DisplayState&);
@@ -163,6 +178,9 @@ private:
     bool graphHovered = false;
     float flash = 0.0f;
     int blink = 0;
+    // Last member: built after the controls, gone before them. Plain arrows
+    // step presets exactly as the previous / next keys do.
+    vfd::HostKeys hostKeys {*this, [this](int step) { stepPresetFromKeys(step); }};
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(BackScratchEditor)
 };

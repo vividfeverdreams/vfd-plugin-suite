@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.22)
-project(BackScratch VERSION 0.11.2 LANGUAGES C CXX)
+project(BackScratch VERSION 0.11.3 LANGUAGES C CXX)
 
 if (APPLE)
     enable_language(OBJCXX)
@@ -83,15 +83,17 @@ target_compile_definitions(BackScratchTests PRIVATE JUCE_WEB_BROWSER=0 JUCE_USE_
 
 juce_add_console_app(BackScratchHostSmoke PRODUCT_NAME "BACK-SCRATCH Host Smoke")
 target_sources(BackScratchHostSmoke PRIVATE Tests/HostSmoke.cpp)
-target_include_directories(BackScratchHostSmoke PRIVATE Source)
+# ../shared: the editor's VfdHostKeys.h and the suite's host-keys test (Tests/HostKeysTest.h).
+target_include_directories(BackScratchHostSmoke PRIVATE Source ../shared)
 target_link_libraries(BackScratchHostSmoke PRIVATE
     BackScratch
     BackScratchAssets
     juce::juce_audio_utils
     juce::juce_recommended_config_flags
     juce::juce_recommended_warning_flags)
+# The host-keys test pumps the message loop (runDispatchLoopUntil).
 target_compile_definitions(BackScratchHostSmoke PRIVATE
-    JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0 JUCE_PLUGINHOST_VST3=1)
+    JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0 JUCE_PLUGINHOST_VST3=1 JUCE_MODAL_LOOPS_PERMITTED=1)
 
 # A plain VST3/AU host without BACK-SCRATCH code, for the 0.10.2 project
 # compatibility check (it loads the old release's plug-in, read-only) and the

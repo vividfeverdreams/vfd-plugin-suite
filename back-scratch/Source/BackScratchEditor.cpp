@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <limits>
 
 namespace backScratch {
 
@@ -187,6 +188,9 @@ public:
     }
     // Menus use the device's Chakra Petch lettering, like the screen.
     juce::Font getPopupMenuFont() override { return juce::Font(juce::FontOptions(face).withHeight(16.0f)); }
+    // Every menu window this editor opens, submenus included, may hold the
+    // keyboard while it is open (VfdHostKeys.h); clicks in it stay its own.
+    void preparePopupMenuWindow(juce::Component& window) override { vfd::HostKeys::allowFocus(window); }
     void drawRotarySlider(juce::Graphics& g, int x, int y, int width, int height,
                           float position, float startAngle, float endAngle, juce::Slider& slider) override
     {
@@ -277,9 +281,16 @@ BackScratchEditor::BackScratchEditor(BackScratchProcessor& owner)
         }
     }
     setSize(width, juce::roundToInt(width * double(editorHeight) / editorWidth));
-    setWantsKeyboardFocus(true);
     setTitle(juce::String::fromUTF8("BACK-SCRATCH — live scratch variations"));
     startTimerHz(30);
+    // No child takes the keyboard (the knob, INFO key and tooltip); the INFO
+    // page and open menus are allowed to while they are showing.
+    hostKeys.apply();
+}
+
+std::unique_ptr<juce::ComponentTraverser> BackScratchEditor::createKeyboardFocusTraverser()
+{
+    return vfd::HostKeys::createTraverser();
 }
 
 BackScratchEditor::~BackScratchEditor()
@@ -499,6 +510,63 @@ void BackScratchEditor::drawText(juce::Graphics& g, const juce::String& text, ju
     g.drawFittedText(text, box.toNearestInt(), align, 1, 0.72f);
 }
 
+void BackScratchEditor::showStatus(const juce::String& text, bool error)
+{
+    statusLine = text;
+    statusIsError = error;
+    repaint();
+}
+
+juce::Rectangle<float> BackScratchEditor::statusBounds(bool perform, bool twoLines) noexcept
+{
+    // One line sits just above the preset name. Two lines reach up into the
+    // glass margin above it (the screen starts at y 181); on PATTERN the
+    // drawing tools to the right share the row.
+    const float width = perform ? 664.0f : 232.0f;
+    return twoLines ? rectangle(230, 195, width, 38) : rectangle(230, 207, width, 26);
+}
+
+juce::StringArray BackScratchEditor::statusLayout(const juce::Font& font, const juce::String& text, bool perform)
+{
+    const float width = statusBounds(perform, false).getWidth();
+    const auto widthOf = [&font](const juce::String& line) { return juce::GlyphArrangement::getStringWidth(font, line); };
+    if (widthOf(text) * statusMinimumScale <= width) return {text};
+    // Two lines. Prefer a break just after a " / " separator, then any space;
+    // among breaks whose lines both fit, take the best balanced. Never break
+    // just before a "/", so a line may end with one but not start with it.
+    int best = -1;
+    float bestScore = std::numeric_limits<float>::max();
+    for (int space = text.indexOfChar(' '); space > 0; space = text.indexOfChar(space + 1, ' ')) {
+        if (text[space + 1] == '/') continue;
+        const float widest = std::max(widthOf(text.substring(0, space).trimEnd()), widthOf(text.substring(space + 1).trimStart()));
+        const bool fits = widest * statusMinimumScale <= width;
+        const bool separator = text[space - 1] == '/';
+        const float score = widest + (fits ? 0.0f : 1.0e6f) + (separator ? 0.0f : 1.0e3f);
+        if (score < bestScore) { bestScore = score; best = space; }
+    }
+    if (best < 0) return {text};
+    return {text.substring(0, best).trimEnd(), text.substring(best + 1).trimStart()};
+}
+
+void BackScratchEditor::drawStatus(juce::Graphics& g, const juce::String& text, juce::Colour colour) const
+{
+    const juce::Font font(juce::FontOptions(regularTypeface).withHeight(statusFontHeight));
+    const auto lines = statusLayout(font, text, performPage);
+    g.setColour(colour);
+    g.setFont(font);
+    // Never squeezed below 90%: only a line still too long after wrapping
+    // (a very long file name) ends in an ellipsis.
+    if (lines.size() == 1) {
+        g.drawFittedText(text, statusBounds(performPage, false).toNearestInt(), juce::Justification::centredLeft, 1,
+                         statusMinimumScale);
+        return;
+    }
+    auto box = statusBounds(performPage, true).withSizeKeepingCentre(statusBounds(performPage, true).getWidth(), 32.0f);
+    for (const auto& line : lines)
+        g.drawFittedText(line, box.removeFromTop(16.0f).toNearestInt(), juce::Justification::centredLeft, 1,
+                         statusMinimumScale);
+}
+
 void BackScratchEditor::paintEnclosure(juce::Graphics& g)
 {
     // Composite the shell once per size and screen density, then blit it 1:1 on every frame. Resampling
@@ -579,9 +647,7 @@ void BackScratchEditor::drawPresetBrowser(juce::Graphics& g, const BackScratchPr
         : editTool == Control::eraser && !performPage ? juce::String("ERASE / DRAG TO RESTORE AUDIO")
         : category + (usingLiveInput ? " / LIVE INPUT" : "")
             + (display.chainLength > 1 ? " / CHAIN PLAYING " + slotName(display.slot) : juce::String {});
-    drawText(g, eyebrow, rectangle(230, 207, performPage ? 664.0f : 232.0f, 26), 15,
-             statusLine.isNotEmpty() && statusIsError ? juce::Colour::fromRGB(255, 164, 153) : cyan,
-             juce::Justification::centredLeft);
+    drawStatus(g, eyebrow, statusLine.isNotEmpty() && statusIsError ? juce::Colour::fromRGB(255, 164, 153) : cyan);
     const bool sameIdentity = display.edited == scratchProcessor.hasCustomPattern()
         && generated == scratchProcessor.isGenerated()
         && (generated ? display.seed == scratchProcessor.generationSeed()
@@ -1194,7 +1260,7 @@ void BackScratchEditor::mouseDown(const juce::MouseEvent& e)
         return;
     }
     if (!e.mods.isLeftButtonDown()) return;
-    if (isShowing()) grabKeyboardFocus();
+    // hostKeys gives the editor (and only the editor) keyboard focus on a click.
     updateHover(e.position);
     if (editTool != Control::none && graphHovered) {
         pressed = Control::none;
@@ -1480,6 +1546,20 @@ void BackScratchEditor::stepPreset(int direction)
     if (current < 0 || current >= count) current = classicBankIndex(scratchProcessor.selectedFactoryPreset());
     const int next = current < 0 ? (direction > 0 ? 0 : count - 1) : (current + direction + count) % count;
     loadBankPreset(next);
+    // Into a slot the name field keeps saying "Slot B", so say what landed
+    // there, as the random key does.
+    if (scratchProcessor.selectedSlot() > 0)
+        showStatus("LOADED: " + juce::String(presets[static_cast<std::size_t>(next)].name));
+}
+
+void BackScratchEditor::stepPresetFromKeys(int direction)
+{
+    // The plain arrow keys take exactly the previous / next keys' path. Not
+    // during a drawing gesture or a bar drag, so a preset never replaces the
+    // pattern under the pointer.
+    if (editPreview || draggingBar != Control::none) return;
+    stepPreset(direction);
+    repaint();
 }
 
 void BackScratchEditor::loadBankPreset(int index)
@@ -1492,8 +1572,7 @@ void BackScratchEditor::loadBankPreset(int index)
 void BackScratchEditor::loadUserPreset(const juce::File& file)
 {
     const auto loaded = scratchProcessor.loadPreset(file);
-    statusIsError = loaded.failed();
-    statusLine = loaded.failed() ? loaded.getErrorMessage() : "LOADED: " + file.getFileNameWithoutExtension();
+    showStatus(loaded.failed() ? loaded.getErrorMessage() : "LOADED: " + file.getFileNameWithoutExtension(), loaded.failed());
     if (loaded.wasOk()) {
         userPresetFile = file;
         userPresetShownAs = scratchProcessor.currentPresetName();
@@ -1531,7 +1610,7 @@ void BackScratchEditor::loadRandomPreset()
         loadBankPreset(choice.bank);
         // Into a slot the name field keeps saying "Slot B", so say what landed there.
         if (scratchProcessor.selectedSlot() > 0)
-            statusLine = "LOADED: " + juce::String(bankPresets()[static_cast<std::size_t>(choice.bank)].name);
+            showStatus("LOADED: " + juce::String(bankPresets()[static_cast<std::size_t>(choice.bank)].name));
     }
 }
 
@@ -1646,8 +1725,7 @@ void BackScratchEditor::chooseScratchShape()
             safe->scratchProcessor.commitPatternEdit();
             safe->editTool = Control::pencil;
             safe->drawMode = DrawMode::free;
-            safe->statusIsError = false;
-            safe->statusLine = juce::String(scratchShapeName(result - 1)).toUpperCase();
+            safe->showStatus(juce::String(scratchShapeName(result - 1)).toUpperCase());
         } else safe->scratchProcessor.cancelPatternEdit();
         safe->repaint();
     });
@@ -1739,9 +1817,7 @@ void BackScratchEditor::saveToFolder(const juce::File& folder)
         if (file != juce::File()) {
             file = file.withFileExtension("backscratch");
             const auto result = safe->scratchProcessor.savePreset(file);
-            safe->statusIsError = result.failed();
-            safe->statusLine = result.failed() ? result.getErrorMessage() : "SAVED: " + file.getFileNameWithoutExtension();
-            safe->repaint();
+            safe->showStatus(result.failed() ? result.getErrorMessage() : "SAVED: " + file.getFileNameWithoutExtension(), result.failed());
         }
         // Do not destroy the chooser from inside its own callback.
         juce::MessageManager::callAsync([safe] { if (safe != nullptr) safe->fileChooser.reset(); });
@@ -1809,18 +1885,16 @@ void BackScratchEditor::choosePresetFile(bool save)
 
 bool BackScratchEditor::keyPressed(const juce::KeyPress& key)
 {
-    if (fileChooser != nullptr) return false;
-    if (editTool != Control::none && !editPreview && key.getModifiers().isCommandDown()
-        && !key.getModifiers().isAltDown() && (key.getKeyCode() == 'z' || key.getKeyCode() == 'Z')) {
-        const bool redo = key.getModifiers().isShiftDown();
-        if (redo ? scratchProcessor.canRedoPatternEdit() : scratchProcessor.canUndoPatternEdit()) {
-            activate(redo ? Control::redo : Control::undo);
-            return true;
-        }
+    // Every key belongs to the host (space, Return, Tab, letters, Cmd-Z and
+    // every other shortcut); hostKeys handles the plain arrows before this.
+    // Escape is used only when it cancels something here: an open menu, a
+    // held key or bar, a drawing gesture, or the armed drawing tool.
+    if (fileChooser != nullptr || key.getModifiers().isAnyModifierKeyDown()
+        || key.getKeyCode() != juce::KeyPress::escapeKey)
         return false;
-    }
-    if (key.getModifiers().isAnyModifierKeyDown()) return false;
-    if (key.getKeyCode() == juce::KeyPress::escapeKey) {
+    const bool cancels = editMenu != nullptr || pressed != Control::none || draggingBar != Control::none
+        || editPreview.has_value() || (editTool != Control::none && !performPage);
+    if (cancels) {
         closeEditMenu();
         if (draggingBar != Control::none) {
             if (const auto bar = barFor(draggingBar)) {
@@ -1868,7 +1942,7 @@ juce::String BackScratchEditor::getTooltip()
         case Control::triplet: return "Triplet length: two thirds of the knob value. Click again for straight timing.";
         case Control::shiftLeft: return "Shift the whole pattern left by one grid cell. It wraps across the edges.";
         case Control::shiftRight: return "Shift the whole pattern right by one grid cell. It wraps across the edges.";
-        case Control::phraseLock: return "Keep this length and timing when creating a new pattern.";
+        case Control::phraseLock: return "Keep this length and timing through new patterns and preset changes.";
         case Control::randomize: return "Create a new scratch pattern.";
         case Control::keepSub: return "Preserve the original sub when on. Scratch the full signal when off.";
         case Control::previous: return "Previous preset in the browser.";

@@ -15,6 +15,7 @@
 #include "PerformanceRender.h"
 #include "TransportContinuityTests.h"
 #include "FeatureUiTests.h"
+#include "HostKeysRun.h"
 #include <juce_audio_utils/juce_audio_utils.h>
 #include <iostream>
 
@@ -74,6 +75,9 @@ int main(int argc, char* argv[])
             runTimingStateTests();
             return 0;
         }
+        // Keys through the editor window's peer only (shared/Tests/HostKeysTest.h).
+        if (argc == 2 && juce::String(argv[1]) == "--host-keys")
+            return backScratch::hostKeysRun::run() == 0 ? 0 : 1;
         runProcessorTests();
         runGeneratedProcessorTests();
         runPlaybackAlignmentTests();
@@ -87,6 +91,10 @@ int main(int argc, char* argv[])
         backScratch::BackScratchProcessor processor;
         processor.prepareToPlay(48000, 512);
         runInteractionTests(processor);
+        backScratch::processorTests::check(backScratch::hostKeysRun::checkStatusLines(std::cout) == 0,
+                                           "status lines wrap instead of squeezing below 90%");
+        backScratch::processorTests::check(backScratch::hostKeysRun::run() == 0,
+                                           "keys reach the host; plain arrows browse presets");
         processor.selectFactoryPreset(0); processor.setKeepSub(true); processor.setPhraseBars(1); processor.setPhraseLocked(true);
         if (argc >= 2) {
             const juce::File file(juce::String::fromUTF8(argv[1]));
@@ -156,6 +164,7 @@ int main(int argc, char* argv[])
                 }
             };
             backScratch::featureUiTests::renderFeatureScreens(file.getParentDirectory());
+            backScratch::hostKeysRun::renderStatusScreens(file.getParentDirectory());
             renderEditor(file, [](auto&) {});
             renderEditor(file.getSiblingFile(file.getFileNameWithoutExtension() + "-pencil.png"), [](auto&) {});
             renderEditor(file.getSiblingFile(file.getFileNameWithoutExtension() + "-eraser.png"), [](auto&) {});

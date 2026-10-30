@@ -209,6 +209,7 @@ inline void checkEditRecall()
     compare(expected, source.currentPattern());
     require(source.savePreset(preset.file).wasOk(), "custom geometry saves as a portable preset");
     BackScratchProcessor restoredPreset;
+    restoredPreset.setPhraseLocked(false); // a locked phrase keeps its own length and timing on preset loads
     require(restoredPreset.loadPreset(preset.file).wasOk() && restoredPreset.hasCustomPattern()
             && !restoredPreset.keepSub() && !restoredPreset.phraseLocked(),
             "preset recall restores custom mode and all accompanying controls");
@@ -230,6 +231,7 @@ inline void checkEditRecall()
     require(legacyPreset != nullptr, "custom preset serializes valid XML");
     legacyPreset->setAttribute("version", 7);
     legacyPreset->setAttribute("generatorVersion", 1);
+    restoredPreset.setPhraseLocked(false); // a locked phrase keeps its own length and timing on preset loads
     require(preset.file.replaceWithText(legacyPreset->toString()) && restoredPreset.loadPreset(preset.file).wasOk()
             && !restoredPreset.hasCustomPattern(), "schema seven preset restoration clears stale custom mode");
     auto legacyProject = juce::AudioProcessor::getXmlFromBinary(saved.getData(), static_cast<int>(saved.getSize()));
@@ -388,6 +390,7 @@ inline void checkInvalidAndLargeEditFiles()
             && processor.savePreset(preset.file).wasOk(), "the full fixed segment capacity remains saveable");
     require(preset.file.getSize() > 65536, "dense custom preset exercises sizes beyond the previous 64KiB file limit");
     BackScratchProcessor restored;
+    restored.setPhraseLocked(false); // a locked phrase keeps its own length and timing on preset loads
     require(restored.loadPreset(preset.file).wasOk() && restored.hasCustomPattern(),
             "all 512 custom segments survive portable preset recall");
     compare(processor.currentPattern(), restored.currentPattern());

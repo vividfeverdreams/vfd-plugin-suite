@@ -248,6 +248,17 @@ inline void runGridEditorInteractionTests()
     check(!editor->keyPressed(juce::KeyPress(juce::KeyPress::spaceKey))
               && !editor->keyPressed(juce::KeyPress(juce::KeyPress::leftKey)),
           "grid editing leaves DAW transport and navigation keys alone");
+    // Cmd-Z reaches the host even with a tool armed (the screen's undo and
+    // redo keys stay); Escape is kept only while it disarms the tool.
+    const auto beforeShortcut = processor.currentPattern();
+    const bool couldUndo = processor.canUndoPatternEdit();
+    check(!editor->keyPressed(juce::KeyPress('z', juce::ModifierKeys::commandModifier, 0))
+              && !editor->keyPressed(juce::KeyPress('z', juce::ModifierKeys::commandModifier | juce::ModifierKeys::shiftModifier, 0))
+              && samePlayback(beforeShortcut, processor.currentPattern()) && processor.canUndoPatternEdit() == couldUndo,
+          "Cmd-Z and Shift-Cmd-Z go to the host while a drawing tool is armed");
+    check(editor->keyPressed(juce::KeyPress(juce::KeyPress::escapeKey)), "Escape disarms the armed drawing tool");
+    check(!editor->keyPressed(juce::KeyPress(juce::KeyPress::escapeKey)), "with nothing to cancel, Escape goes to the host");
+    click(*editor, Control::pencil);
     // Tool menus select through the actual popup component. A geometric tool
     // always previews from its initial snapshot, so reversing a drag has no trail.
     chooseMenuItem(*editor, Control::drawOptions, "Line");

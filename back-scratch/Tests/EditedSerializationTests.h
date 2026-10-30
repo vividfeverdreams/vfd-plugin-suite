@@ -102,6 +102,7 @@ inline void checkClippedRecall(bool generated)
             "curve recall tests exercise non-default polynomial domains and saved graph range");
     require(source.savePreset(preset.file).wasOk(), "clipped custom geometry saves as a preset");
     BackScratchProcessor fromPreset;
+    fromPreset.setPhraseLocked(false); // a locked phrase keeps its own length and timing on preset loads
     require(fromPreset.loadPreset(preset.file).wasOk() && fromPreset.hasCustomPattern()
                 && fromPreset.isGenerated() == generated && !fromPreset.keepSub() && !fromPreset.phraseLocked(),
             "clipped preset restores custom identity and accompanying controls");

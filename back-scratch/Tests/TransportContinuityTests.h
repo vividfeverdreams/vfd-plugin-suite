@@ -98,6 +98,24 @@ inline void checkHostBypass()
             require(view.historyReady && view.scratchActive, "leaving host bypass keeps the stroke's history readable");
         }
     }
+    // Since 0.11.3 the host's bypass is the plug-in's own Bypass, at its 0.10
+    // place in an unchanged parameter list, and it keeps the same guarantees.
+    Run own(512);
+    auto* bypassParameter = own.processor.parameters().getParameter("bypass");
+    require(own.processor.getBypassParameter() == bypassParameter && bypassParameter->getParameterIndex() == 5
+                && own.processor.getParameters().size() == 33,
+            "the host's bypass is the Bypass parameter, with IDs, order and count unchanged");
+    useHeldDelay(own.processor);
+    own.processor.setKeepSub(false);
+    for (int block = 0; block < 200; ++block) {
+        if (block == 100 || block == 120) bypassParameter->setValueNotifyingHost(block == 100 ? 1.0f : 0.0f);
+        own.block(512, tone);
+        own.head.ppq += 512.0 * own.head.bpm / (60.0 * 48000.0);
+        if (block == 121) {
+            const auto view = own.processor.displayState();
+            require(view.historyReady && view.scratchActive, "leaving Bypass keeps the stroke's history readable");
+        }
+    }
 }
 
 // Fixes 2 and 3: tempo ramps are not seeks; genuine seeks and unreported
@@ -295,12 +313,17 @@ inline void checkParameterGroups()
     for (int block = 0; block < 40; ++block) process(true);    // switched together
 }
 
-// Fix 1 through the built VST3: the host's own bypass parameter (the one the
-// JUCE wrapper exposes as "Bypass") keeps the reported latency.
+// Fix 1 through the built VST3: the host's bypass keeps the reported latency.
+// Since 0.11.3 it is the plug-in's own Bypass (flagged kIsBypass), not a
+// second "Bypass" added by the JUCE wrapper, so the two are one switch.
 inline void checkPackagedHostBypass(juce::AudioPluginInstance& plugin)
 {
     auto* hostBypass = plugin.getBypassParameter();
     require(hostBypass != nullptr, "the packaged VST3 exposes a host bypass parameter");
+    int named = 0;
+    for (auto* parameter : plugin.getParameters()) named += parameter->getName(128) == "Bypass" ? 1 : 0;
+    require(named == 1 && hostBypass->getName(128) == "Bypass" && hostBypass->getParameterIndex() == 5,
+            "the host's bypass is the plug-in's own Bypass, at its 0.10 position, with no second wrapper Bypass");
     RampHead head;
     plugin.setPlayHead(&head);
     plugin.prepareToPlay(48000.0, 1024);

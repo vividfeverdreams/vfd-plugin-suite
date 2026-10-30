@@ -37,6 +37,7 @@ inline void checkRecallAndMigration()
         source.setPhraseBars(2); source.setPhraseTimingChoice(2); source.shiftPattern(5);
         const auto expected = source.currentPattern();
         require(source.savePreset(preset.file).wasOk(), "both motion versions save as schema9 presets");
+        target.setPhraseLocked(false); // a locked phrase keeps its own length and timing on preset loads
         require(target.loadPreset(preset.file).wasOk(), "both motion versions restore from schema9 presets");
         compare(expected, target.currentPattern());
         const auto saved = stateOf(source);
@@ -70,6 +71,7 @@ inline void checkRecallAndMigration()
         }
         require(preset.file.replaceWithText(oldPreset.toString()), "legacy motion fixture writes");
         target.setHostParameter("motionVersion", 2);
+        target.setPhraseLocked(false); // a locked phrase keeps its own length and timing on preset loads
         require(target.loadPreset(preset.file).wasOk(), "schemas4–8 presets still load");
         auto expected = fitPatternToPhrase(makePattern(5, 0, 1), target.phraseBeats());
         expected.gridOffset = version < 7 ? 0 : 11;

@@ -1,5 +1,16 @@
 # BACK-SCRATCH 0.11.0 validation
 
+## 0.11.3 (suite 1.6.2): keys, bypass and status text
+
+Checked on Apple Silicon macOS, 21 October 2026, with the Release build from this source; nothing installed, HOME pointed at a scratch folder.
+
+- `BackScratchTests`: all engine and pattern suites pass, exit 0.
+- `BackScratchHostSmoke <shots>/BACK-SCRATCH-editor.png <VST3>`: every existing suite passes, plus 118 status-line layouts (59 of the longest messages on both pages, 11 of them wrapped onto two lines, none below 90% width or cut) and the host-keys run through the editor window's peer: the shared suite check (`shared/Tests/HostKeysTest.h`, 41 checks: space, Return, Tab, letters, Cmd-Z, Shift-Cmd-Z and Cmd-arrows reach the host; clicks on the shell, Length knob, RANDOMIZE and DOTTED focus only the editor; arrows browse; INFO holds only the arrows) and 13 BACK-SCRATCH checks (arrows into slot B as one Undo step with "LOADED: <name>", modified arrows and an idle Escape reach the host, Escape disarms the pencil, Cmd-Z reaches the host while it is armed). `BackScratchHostSmoke --host-keys` runs the key checks alone. The packaged VST3 reports the plug-in's own Bypass (index 5) as its only bypass.
+- `BackScratchCompatHost --bypass-save <0.11.2 VST3> <dir>`, then `--bypass-check <new VST3> <dir>`: 0.11.2 projects saved with Bypass off and on reopen with every setting, Bypass and identical audio (maximum difference 0), and the same settings write byte-identical plug-in state (2,571 bytes). The VST3 now has 34 controls instead of 35 (the wrapper's own "Bypass", VST3 ID 1652125811, is gone; the plug-in's Bypass keeps VST3 ID 773352680) and the wrapper's trailer after the plug-in state shrinks from 60 to 31 bytes (no private Bypass value). A 0.11.2 project saved with the wrapper's host Bypass on reopens un-bypassed unless the host reapplies its bypass.
+- `BackScratchCompatHost --au <component> <VST3>`: same 33 controls, identical audio and AU state recall.
+- pluginval not run (per user).
+
+
 Checked on Apple Silicon macOS, 5 October 2026, with the Release build from this source (VST3 and AU in `build/BackScratch_artefacts/Release`). Nothing was installed into `~/Library` or `/Library`; every run used a scratch folder as HOME, and preset tests used a temporary preset root, never the real one.
 
 ## What was checked
