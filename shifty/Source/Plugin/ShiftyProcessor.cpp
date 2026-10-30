@@ -133,6 +133,7 @@ ShiftyProcessor::ShiftyProcessor()
     static_assert(std::size(ids) == parameterCount);
     for (size_t i = 0; i < std::size(ids); ++i)
         paramValues[i] = state.getRawParameterValue(ids[i]);
+    bypassParameter = state.getParameter(ids[iBypass]);
     originalEngine.configure(FormantEngine::Mode::original042, false);
     classicEngine.configure(FormantEngine::Mode::latest, false);
     classicLowLatencyEngine.configure(FormantEngine::Mode::latest, true);
@@ -141,7 +142,7 @@ ShiftyProcessor::ShiftyProcessor()
     // replace all of this in setStateInformation().
     ++undoSuppression;
     if (const int index = factoryPresetIndex(defaultFolder, defaultPreset); index >= 0)
-        applyFactoryPreset(factoryBank()[(size_t) index]);
+        applyFactoryPreset(factoryBank()[(size_t) index], false);
     --undoSuppression;
     // Gestures come only from SHIFTY's own controls; host automation does not
     // begin or end gestures, so it never becomes an undo step.
@@ -1024,10 +1025,12 @@ bool ShiftyProcessor::loadUserPreset(const juce::File& file)
     if (!tree.isValid() || tree.getType() != state.state.getType()
         || (int)tree.getProperty("schemaVersion", 1) > 1) return false;
     // Apply the sound as one undoable step, like a factory preset. This
-    // instance keeps its own randomization locks. Presets saved before 0.5.0
-    // recall the 0.4.2 sound; newer controls they lack load at their defaults.
+    // instance keeps its own locks, and locked controls keep their values.
+    // Presets saved before 0.5.0 recall the 0.4.2 sound; newer controls they
+    // lack load at their defaults.
     beginUndoableEdit();
     for (const auto* id : ids) {
+        if (isParameterLocked(id)) continue;
         const auto child = tree.getChildWithProperty("id", id);
         if (child.isValid() && child.hasProperty("value"))
             setParameterAsGesture(id, static_cast<float>(child.getProperty("value")));
@@ -1039,7 +1042,7 @@ bool ShiftyProcessor::loadUserPreset(const juce::File& file)
     const auto mode = tree.hasProperty("engineMode")
         ? static_cast<EngineMode>(juce::jlimit(0, 3, (int) tree.getProperty("engineMode")))
         : EngineMode::original;
-    applyEngine(mode, (bool) tree.getProperty("classicLowLatency", false));
+    if (!isParameterLocked(engineLockId)) applyEngine(mode, (bool) tree.getProperty("classicLowLatency", false));
     const auto parent = file.getParentDirectory();
     const auto folder = parent == presetDirectory() || ! parent.isAChildOf(presetDirectory())
         ? juce::String("User") : "User/" + parent.getFileName();
@@ -1084,9 +1087,13 @@ int ShiftyProcessor::factoryPresetIndex(const juce::String& folder, const juce::
     return -1;
 }
 
-void ShiftyProcessor::applyFactoryPreset(const FactoryPreset& p)
+void ShiftyProcessor::applyFactoryPreset(const FactoryPreset& p, bool keepLocked)
 {
-    const auto set = [this](const char* id, float value) { setParameterAsGesture(id, value); };
+    // Locked controls (and a locked engine) keep their values through every preset load.
+    const auto set = [this, keepLocked](const char* id, float value) {
+        if (keepLocked && isParameterLocked(id)) return;
+        setParameterAsGesture(id, value);
+    };
     set("shift", p.shift);
     set("focus", p.focus);
     set("bite", p.bite);
@@ -1116,7 +1123,7 @@ void ShiftyProcessor::applyFactoryPreset(const FactoryPreset& p)
     set("yoiTime", p.yoiTime);
     set("yoiShift", p.yoiShift);
     set("motionTarget", (float)p.target);
-    applyEngine(p.engine, p.lowLatency);
+    if (!(keepLocked && isParameterLocked(engineLockId))) applyEngine(p.engine, p.lowLatency);
     assignPresetName(p.name, p.folder);
 }
 

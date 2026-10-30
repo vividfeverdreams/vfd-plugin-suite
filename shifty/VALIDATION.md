@@ -17,6 +17,28 @@ Validated on Apple Silicon, macOS 14.5, on 2026-10-05. Release build, arm64, JUC
 | pluginval / auval on the AU | **Not run**: needs the AU installed (see below) |
 | Editor snapshots (default, Motion on, Vowel on, INFO, 21-image gallery) | Pass |
 
+## 0.5.4 additions (2026-10-21)
+
+Release build, arm64, JUCE 9.0.2, from `build/`.
+
+| Check | Result |
+| --- | --- |
+| `ShiftyDspTests`, `ShiftyImpactTests` | Pass; 22/22 source-formant checks |
+| `--feature-tests`: 0.4, 0.5.0 and 0.5.4 sets (23 sections) and the host-keys run | Pass |
+| `--host-keys`: shared check (53) and SHIFTY's own (14), off-screen window | Pass |
+| `--host-latency`: 29 parameters, host bypass is SHIFTY's Bypass (index 14), latency kept while bypassed | Pass |
+| `--au`: bypass property and Bypass parameter are one switch, latency kept while bypassed | Pass |
+| `--bypass-state` against the 0.5.3 VST3 | Pass (see below) |
+| `--menu-placement`, `--gallery` (26 images, no focus ring after RANDOM), default and INFO snapshots | Pass |
+| pluginval | Not run (per user) |
+
+The host bypass is now SHIFTY's own BYPASS. 0.5.3 projects (BYPASS on or off) open with their BYPASS, and SHIFTY's state bytes are identical in 0.5.3 and 0.5.4. The VST3 wrapper no longer adds its own "Bypass" (30 parameters become 29), and the JUCE private block in the VST3 state no longer carries a separate host bypass. A 0.5.3 VST3 project saved with the DAW's own bypass on (and SHIFTY's BYPASS off) therefore opens active.
+
+```
+PASS 0.5.3 project, BYPASS off, DAW bypass on : opens with BYPASS off; SHIFTY's state byte-identical (1379 bytes); JUCE private block <JUCEPrivateData Bypass="1"/> -> empty
+PASS 0.5.3 project, BYPASS on , DAW bypass off: opens with BYPASS on; SHIFTY's state byte-identical (1379 bytes); JUCE private block <JUCEPrivateData Bypass="0"/> -> empty
+```
+
 ## Existing projects (0.4.2 compatibility)
 
 The test loads SHIFTY 0.4.2 from the released installer payload and SHIFTY 0.5.0 as real VST3 plug-ins in the same host. It saves a state in 0.4.2, opens it in 0.5.0, and renders three test sounds through both: a 55 Hz saw, an FM growl and a Reese. The states are the 24 factory presets, plus Vowel Color with Sub Safe off and −3 dB Output, plus internal bypass.

@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.22)
-project(Shifty VERSION 0.5.3 LANGUAGES C CXX)
+project(Shifty VERSION 0.5.4 LANGUAGES C CXX)
 
 if (APPLE)
     enable_language(OBJCXX)
@@ -112,7 +112,9 @@ if (SHIFTY_BUILD_TESTS)
         juce::juce_dsp
         juce::juce_recommended_config_flags
         juce::juce_recommended_warning_flags)
+    # The host-keys test (--host-keys, ../shared/Tests/HostKeysTest.h) pumps the message loop.
     target_compile_definitions(ShiftyEditorSnapshot PRIVATE
+        JUCE_MODAL_LOOPS_PERMITTED=1
         JUCE_WEB_BROWSER=0
         JUCE_USE_CURL=0
         JUCE_PLUGINHOST_VST3=1

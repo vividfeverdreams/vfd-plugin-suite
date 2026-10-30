@@ -23,10 +23,15 @@ public:
     void prepareToPlay(double sampleRate, int samplesPerBlock) override;
     void releaseResources() override;
     void processBlock(juce::AudioBuffer<float>&, juce::MidiBuffer&) override;
-    // Host (VST3 kIsBypass) bypass runs the normal engine with SHIFTY's own
-    // bypass forced on, so the dry signal keeps the reported latency and no
-    // stale audio is left in the engine when the host re-enables it. The host
-    // bypass parameter itself stays the wrapper's, keeping the 0.4.2 list.
+    // The host's bypass is SHIFTY's own BYPASS (since 0.5.4), so the DAW's
+    // bypass and the BYPASS pill are one switch: the VST3 wrapper flags it
+    // kIsBypass (and no longer adds a "Bypass" of its own) and the AU bypass
+    // property sets it. Bypass runs the normal engine with BYPASS on, so the
+    // dry signal keeps the reported latency and no stale audio is left in the
+    // engine when it is switched off. Its ID, place and state are unchanged.
+    juce::AudioProcessorParameter* getBypassParameter() const override { return bypassParameter; }
+    // The wrappers no longer call this (SHIFTY names its bypass); a host that
+    // still does gets the same path as BYPASS.
     void processBlockBypassed(juce::AudioBuffer<float>&, juce::MidiBuffer&) override;
     bool isBusesLayoutSupported(const BusesLayout&) const override;
     juce::AudioProcessorEditor* createEditor() override;
@@ -146,7 +151,7 @@ private:
     juce::File presetDirectory() const;
     void migrateLegacyPresetsOnce() const;
     void setParameterAsGesture(const char* id, float value);
-    void applyFactoryPreset(const FactoryPreset&);
+    void applyFactoryPreset(const FactoryPreset& p, bool keepLocked = true);
     void applyEngine(EngineMode, bool lowLatency);
     ParameterSnapshot captureSnapshot() const;
     void applySnapshot(const ParameterSnapshot& target, const ParameterSnapshot& other);
@@ -187,6 +192,7 @@ private:
     static constexpr uint32_t engineLockBit = 1u << parameterCount;
     static constexpr uint32_t allRandomLocks = (engineLockBit << 1) - 1u;
     std::array<std::atomic<float>*, parameterCount> paramValues {};
+    juce::AudioProcessorParameter* bypassParameter = nullptr; // "bypass", the host's bypass too
 
     // Motion: latest engines
     double motionPhase = 0.0;

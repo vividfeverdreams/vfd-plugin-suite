@@ -3,8 +3,10 @@
 #include <juce_gui_extra/juce_gui_extra.h>
 #include <array>
 #include <memory>
+#include <optional>
 #include <vector>
 #include "../Plugin/ShiftyProcessor.h"
+#include "VfdHostKeys.h"
 #include "VfdInfo.h"
 
 namespace shifty {
@@ -22,7 +24,17 @@ public:
     void mouseDown(const juce::MouseEvent&) override;
     void mouseDoubleClick(const juce::MouseEvent&) override;
     void mouseWheelMove(const juce::MouseEvent&, const juce::MouseWheelDetails&) override;
+    /** Only Escape, and only while the save panel is open. Every other key reaches the host (VfdHostKeys.h). */
     bool keyPressed(const juce::KeyPress&) override;
+    std::unique_ptr<juce::ComponentTraverser> createKeyboardFocusTraverser() override
+    { return vfd::HostKeys::createTraverser(); }
+
+    /** A value typed into a control's value box: a number with an optional unit ("1 s", "250ms", "0.5 s",
+        "50%", "120 Hz", "1.2 kHz", "-3 dB", "+4 st"), or for the vowel a name (OO, OH, AH, EH, EE, or
+        "AH-EH" for halfway). Nothing for text that is not a value of that control. */
+    static std::optional<double> parseTypedValue(const juce::String& id, const juce::String& text);
+    /** A control's name in plain English, as its tooltips and value boxes use it. */
+    static juce::String displayNameFor(const juce::String& id);
 
     enum class Page { sound, voice, motion, presets };
     enum class MotionTab { lfo, envelope, yoi };
@@ -44,6 +56,12 @@ public:
     /** anchor: shape, rate, target, yoiFrom, yoiTo, folder or saveFolder. */
     juce::PopupMenu::Options menuOptionsForTesting(const juce::String& anchor) { return menuOptions(anchor); }
     juce::Slider* sliderForTesting(const juce::String& id) noexcept;
+    void stepPresetForTesting(int direction) { stepPreset(direction); }
+    int selectedPresetForTesting() const noexcept { return selectedPreset; }
+    int firstVisiblePresetForTesting() const noexcept { return firstPreset; }
+    /** "Folder/Name" of a row of the PRESETS list as it is filtered now. */
+    juce::String presetItemForTesting(int index) const;
+    int favoriteCountForTesting() const noexcept { return favorites.size(); }
 
 private:
     enum class PresetFilter { factory, user, favorites };
@@ -65,6 +83,15 @@ private:
     void updatePage();
     void refreshPresetList();
     void loadSelectedPreset();
+    /** The arrow keys: the previous (-1) or next (+1) row of the PRESETS list, loaded like a double-click. */
+    void stepPreset(int direction);
+    int indexOfLoadedPreset() const;
+    void showSelectedRow();
+    /** Follows a change of the loaded sound: the list's highlight and the SOUND page's star. */
+    void syncLoadedPreset();
+    void updateFavoriteButton();
+    /** True for a factory preset or a saved user preset; false for RANDOM variations and other unsaved sounds. */
+    bool isSavedPreset(const juce::String& folder, const juce::String& name) const;
     void loadRandomPreset();
     void beginPresetSave();
     void finishPresetSave();
@@ -122,15 +149,19 @@ private:
     juce::String presetFolderFilter; // empty = all folders
     std::vector<Control> controls;
     std::vector<Switch> switches;
-    std::unique_ptr<juce::Button> randomButton, locksButton, undoButton, redoButton, latestButton, randomPresetButton;
+    std::unique_ptr<juce::Button> randomButton, locksButton, undoButton, redoButton, latestButton, randomPresetButton,
+                                  favoriteButton;
     juce::Random presetDice;
     std::vector<PresetItem> presetItems;
     juce::TextEditor presetSearch;
     juce::TextEditor presetNameEditor;
     juce::TextEditor presetFolderEditor;
     bool savingPreset = false;
-    int selectedPreset = -1;
+    int selectedPreset = -1; // the list's highlight: the loaded preset, or the row last clicked or browsed
     int firstPreset = 0;
+    float wheelRows = 0.0f;  // trackpad travel not yet worth a whole row
+    juce::String loadedKey;  // "Folder/Name" of the loaded sound, as last seen
+    bool loadedIsSaved = false;
     juce::StringArray favorites;
     std::unique_ptr<juce::PropertiesFile> favoritesFile;
     std::array<float, 2> meterPeaks {0.0f, 0.0f};
@@ -138,6 +169,8 @@ private:
     ShiftyProcessor::Display live;
     bool sizeReady = false;
     juce::TooltipWindow tooltips { this, 500 };
+    // Last: built after the controls it manages and removed before them (VfdHostKeys.h).
+    vfd::HostKeys hostKeys { *this, [this](int direction) { stepPreset(direction); } };
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(ShiftyEditor)
 };
 

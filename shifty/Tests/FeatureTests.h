@@ -387,18 +387,28 @@ void checkPersistenceAndPresets(Checks& checks)
     recipient.setParameterLocked("focus", true);
     recipient.setParameterLocked("motionDepth", true);
     const auto recipientLocks = locksOf(recipient);
+    // Locked controls keep their values through every preset load (user, 2026-10-28).
+    const auto withLocksKept = [&recipient](Values expected, const Values& before) {
+        for (size_t i = 0; i < expectedParameterIds.size(); ++i)
+            if (recipient.isParameterLocked(expectedParameterIds[i])) expected[i] = before[i];
+        return expected;
+    };
     const juce::TemporaryFile fixture(".shifty");
     checks.require(fixture.getFile().replaceWithData(session.getData(), session.getSize()),
                    "create isolated user-preset fixture");
+    auto beforeLoad = valuesOf(recipient);
     checks.require(recipient.loadUserPreset(fixture.getFile()), "load user preset fixture");
-    reportValueDifferences(recipient, originalValues, "user preset roundtrip");
-    checks.require(valuesOf(recipient) == originalValues, "user preset restores the complete sound");
+    reportValueDifferences(recipient, withLocksKept(originalValues, beforeLoad), "user preset roundtrip");
+    checks.require(valuesOf(recipient) == withLocksKept(originalValues, beforeLoad),
+                   "user preset restores the sound except the locked FOCUS and MOTION DEPTH, which hold");
     checks.require(locksOf(recipient) == recipientLocks, "user preset preserves this instance's lock choices");
     checks.require(fixture.getFile().replaceWithData(legacy.getData(), legacy.getSize()),
                    "create isolated legacy user-preset fixture");
+    beforeLoad = valuesOf(recipient);
     checks.require(recipient.loadUserPreset(fixture.getFile()), "load v0.1 user preset fixture");
-    reportValueDifferences(recipient, legacyValues, "legacy user preset roundtrip");
-    checks.require(valuesOf(recipient) == legacyValues, "legacy user preset restores source-formant settings with vowel color off");
+    reportValueDifferences(recipient, withLocksKept(legacyValues, beforeLoad), "legacy user preset roundtrip");
+    checks.require(valuesOf(recipient) == withLocksKept(legacyValues, beforeLoad),
+                   "legacy user preset restores source-formant settings with vowel color off, locked controls hold");
     checks.require(locksOf(recipient) == recipientLocks, "legacy user preset preserves local lock choices");
     const auto beforeInvalidPreset = valuesOf(recipient);
     checks.require(fixture.getFile().replaceWithText("Not a SHIFTY preset"), "write invalid preset fixture");
@@ -432,13 +442,33 @@ void checkPersistenceAndPresets(Checks& checks)
                        "factory name and folder match index " + juce::String(index));
         checks.require(locksOf(recipient) == recipientLocks, "factory preset preserves parameter locks");
         setPattern(recipient, true);
+        const auto patterned = valuesOf(recipient);
         recipient.loadFactoryPreset(index);
-        checks.require(valuesOf(recipient) == first, "factory preset fully specifies its sound: " + names[index]);
+        checks.require(valuesOf(recipient) == withLocksKept(first, patterned),
+                       "factory preset fully specifies its unlocked sound, locked controls hold: " + names[index]);
         checks.require(locksOf(recipient) == recipientLocks, "factory reload preserves parameter locks");
         checkLegalValues(checks, recipient, names[index]);
-        factorySounds.insert({ first, static_cast<int>(recipient.engineMode()) * 2 + (recipient.classicLowLatency() ? 1 : 0) });
+        ShiftyProcessor open;
+        setAllLocks(open, false);
+        open.loadFactoryPreset(index);
+        factorySounds.insert({ valuesOf(open), static_cast<int>(open.engineMode()) * 2 + (open.classicLowLatency() ? 1 : 0) });
     }
     checks.require(factorySounds.size() == static_cast<size_t>(names.size()), "all factory sounds have distinct settings");
+
+    // A locked engine keeps its engine and latency through every factory and user preset.
+    ShiftyProcessor engineLocked;
+    engineLocked.setEngine(EngineMode::mouth, false);
+    engineLocked.setParameterLocked(ShiftyProcessor::engineLockId, true);
+    const auto lockedLatency = engineLocked.getLatencySamples();
+    int engineHeld = 0;
+    for (int index = 0; index < names.size(); ++index) {
+        engineLocked.loadFactoryPreset(index);
+        engineHeld += engineLocked.engineMode() == EngineMode::mouth && engineLocked.getLatencySamples() == lockedLatency ? 1 : 0;
+    }
+    checks.require(engineHeld == names.size(), "a locked engine holds through every factory preset (" + juce::String(engineHeld) + "/" + juce::String(names.size()) + ")");
+    checks.require(fixture.getFile().replaceWithData(legacy.getData(), legacy.getSize()), "rewrite the 0.4.2 user preset fixture");
+    checks.require(engineLocked.loadUserPreset(fixture.getFile()) && engineLocked.engineMode() == EngineMode::mouth,
+                   "a locked engine holds through a user preset saved on another engine");
     checks.section("session persistence, old sessions, user presets, and every deterministic factory preset");
 }
 
@@ -653,8 +683,11 @@ void prepareForTest(ShiftyProcessor& processor, double sampleRate, int blockSize
     processor.prepareToPlay(sampleRate, blockSize);
 }
 
-void checkHostBypassFor(Checks& checks, EngineMode engine, bool lowLatency, const char* label)
+// viaParameter: the host bypass as the VST3 and AU wrappers now apply it, through SHIFTY's own BYPASS
+// (getBypassParameter); otherwise processBlockBypassed, for a host that still calls it.
+void checkHostBypassFor(Checks& checks, EngineMode engine, bool lowLatency, const char* engineLabel, bool viaParameter)
 {
+    const auto label = juce::String(engineLabel) + (viaParameter ? " (bypass parameter)" : " (processBlockBypassed)");
     ShiftyProcessor processor;
     if (engine == EngineMode::original)
         processor.loadFactoryPreset(ShiftyProcessor::factoryPresetIndex("Classic", "Rubber Throat"));
@@ -665,6 +698,8 @@ void checkHostBypassFor(Checks& checks, EngineMode engine, bool lowLatency, cons
     prepareForTest(processor, sampleRate, block);
     const int latency = processor.getLatencySamples();
     juce::MidiBuffer midi;
+    auto* hostBypass = processor.getBypassParameter();
+    bool latencyKept = true;
     auto run = [&](bool hostBypassed, int samples, auto&& input) {
         std::vector<float> result;
         for (int done = 0; done < samples;) {
@@ -673,8 +708,15 @@ void checkHostBypassFor(Checks& checks, EngineMode engine, bool lowLatency, cons
             for (int i = 0; i < count; ++i)
                 for (int channel = 0; channel < 2; ++channel)
                     audio.setSample(channel, i, input(done + i));
-            if (hostBypassed) processor.processBlockBypassed(audio, midi);
-            else processor.processBlock(audio, midi);
+            if (viaParameter) {
+                if ((hostBypass->getValue() >= 0.5f) != hostBypassed) hostBypass->setValueNotifyingHost(hostBypassed ? 1.0f : 0.0f);
+                processor.processBlock(audio, midi);
+            } else if (hostBypassed) {
+                processor.processBlockBypassed(audio, midi);
+            } else {
+                processor.processBlock(audio, midi);
+            }
+            latencyKept = latencyKept && processor.getLatencySamples() == latency;
             result.insert(result.end(), audio.getReadPointer(0), audio.getReadPointer(0) + count);
             done += count;
         }
@@ -695,7 +737,7 @@ void checkHostBypassFor(Checks& checks, EngineMode engine, bool lowLatency, cons
             strayDuringBypass = juce::jmax(strayDuringBypass, std::abs(bypassed[i]));
     const float impulseOut = bypassed[static_cast<size_t>(impulseAt + latency)];
     checks.require(std::abs(impulseOut - 1.0f) < 1.0e-5f && strayDuringBypass < 1.0e-5f,
-                   juce::String(label) + ": host-bypassed impulse leaves at exactly the reported latency ("
+                   label + ": host-bypassed impulse leaves at exactly the reported latency ("
                        + juce::String(impulseOut, 6) + " at +" + juce::String(latency)
                        + ", stray " + juce::String(strayDuringBypass, 8) + ")");
     const int settle = juce::jmax(4096, 3 * latency);
@@ -703,8 +745,9 @@ void checkHostBypassFor(Checks& checks, EngineMode engine, bool lowLatency, cons
     const auto resumed = run(false, settle, silence);
     float stale = 0.0f;
     for (const auto sample : resumed) stale = juce::jmax(stale, std::abs(sample));
-    checks.require(stale < 1.0e-6f, juce::String(label) + ": no stale pre-bypass audio after leaving host bypass (peak "
+    checks.require(stale < 1.0e-6f, label + ": no stale pre-bypass audio after leaving host bypass (peak "
                                         + juce::String(stale, 9) + ")");
+    checks.require(latencyKept, label + ": the reported latency stays the same while bypassed");
     std::cout << "Host bypass, " << label << ": impulse " << impulseOut << " at the reported " << latency
               << "-sample latency, stray " << strayDuringBypass << ", after re-enable peak " << stale << ".\n";
 }
@@ -712,9 +755,14 @@ void checkHostBypassFor(Checks& checks, EngineMode engine, bool lowLatency, cons
 void checkHostBypass(Checks& checks)
 {
     ShiftyProcessor processor;
-    // SHIFTY does not claim the host bypass, so the VST3 wrapper keeps adding its own "Bypass".
+    // Since 0.5.4 the host's bypass is SHIFTY's own BYPASS, in its 0.4.2 place (index 14), so the VST3
+    // wrapper flags it kIsBypass instead of adding a "Bypass" of its own, and the AU bypass property sets it.
     // The 16 controls of 0.4.2 keep their order, IDs and version hint; the 0.5.0 controls follow them.
-    checks.require(processor.getBypassParameter() == nullptr, "host bypass parameter is still the wrapper's own");
+    auto* bypass = processor.parameters().getParameter("bypass");
+    checks.require(bypass != nullptr && processor.getBypassParameter() == bypass
+                       && processor.getParameters()[14] == bypass
+                       && dynamic_cast<juce::AudioParameterBool*>(bypass) != nullptr,
+                   "the host's bypass is SHIFTY's own BYPASS switch, at index 14");
     const auto& parameters = processor.getParameters();
     checks.require(parameters.size() == static_cast<int>(expectedParameterIds.size()), "29 parameters, append-only");
     for (int i = 0; i < juce::jmin(parameters.size(), static_cast<int>(expectedParameterIds.size())); ++i) {
@@ -724,12 +772,32 @@ void checkHostBypass(Checks& checks)
                            && parameters[i]->getVersionHint() == expectedHint,
                        juce::String("parameter order, ID and version hint at index ") + juce::String(i));
     }
-    checkHostBypassFor(checks, EngineMode::talk, false, "TALK");
-    checkHostBypassFor(checks, EngineMode::mouth, false, "MOUTH");
-    checkHostBypassFor(checks, EngineMode::classic, false, "CLASSIC");
-    checkHostBypassFor(checks, EngineMode::classic, true, "CLASSIC low latency");
-    checkHostBypassFor(checks, EngineMode::original, false, "original 0.4.2 sound");
-    checks.section("host bypass keeps the latency-aligned dry path on every engine, and the parameter list is append-only");
+    for (const bool viaParameter : { true, false }) {
+        checkHostBypassFor(checks, EngineMode::talk, false, "TALK", viaParameter);
+        checkHostBypassFor(checks, EngineMode::mouth, false, "MOUTH", viaParameter);
+        checkHostBypassFor(checks, EngineMode::classic, false, "CLASSIC", viaParameter);
+        checkHostBypassFor(checks, EngineMode::classic, true, "CLASSIC low latency", viaParameter);
+        checkHostBypassFor(checks, EngineMode::original, false, "original 0.4.2 sound", viaParameter);
+    }
+
+    // Sessions keep their BYPASS. A state saved with it on or off opens that way whatever the instance
+    // held, and saves the same bytes again (the hosted 0.5.3 comparison is --bypass-state).
+    for (const bool on : { false, true }) {
+        ShiftyProcessor source;
+        source.loadFactoryPreset(3);
+        setActual(source, "bypass", on ? 1.0f : 0.0f);
+        juce::MemoryBlock saved;
+        source.getStateInformation(saved);
+        ShiftyProcessor restored;
+        setActual(restored, "bypass", on ? 0.0f : 1.0f);
+        restored.setStateInformation(saved.getData(), static_cast<int>(saved.getSize()));
+        juce::MemoryBlock again;
+        restored.getStateInformation(again);
+        checks.require((restored.getBypassParameter()->getValue() >= 0.5f) == on && valuesOf(restored) == valuesOf(source),
+                       juce::String("a session saved with BYPASS ") + (on ? "on" : "off") + " opens with it " + (on ? "on" : "off"));
+        checks.require(again == saved, juce::String("a session with BYPASS ") + (on ? "on" : "off") + " saves the same bytes again");
+    }
+    checks.section("host bypass is BYPASS: latency-aligned dry path on every engine, latency kept, sessions keep it, list append-only");
 }
 
 std::vector<float> renderMotionOffsets(ShiftyProcessor& processor, TestHost* host, double sampleRate,

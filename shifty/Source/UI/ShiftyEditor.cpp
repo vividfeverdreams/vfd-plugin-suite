@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <initializer_list>
+#include <utility>
 
 namespace shifty {
 namespace {
@@ -40,6 +42,7 @@ const juce::Rectangle<float> engineLockBounds {505, 200, 30, 44}; // centred bet
 const juce::Rectangle<float> motionTabBounds {180, 202, 330, 40};
 const juce::Rectangle<float> folderChipBounds {640, 204, 290, 38};
 const juce::Rectangle<float> randomPresetBounds {318, 203, 42, 42};
+const juce::Rectangle<float> favoriteStarBounds {462, 200, 42, 48}; // the star beside the preset name on SOUND
 const juce::Rectangle<float> lowLatencyBounds {300, 254, 180, 40};
 const juce::Rectangle<float> vowelSwitchBounds {300, 316, 180, 40};
 const juce::Rectangle<float> voiceSetBounds {300, 330, 300, 42};
@@ -234,6 +237,21 @@ bool isPercentage(const juce::String& id) {
         || id == "talk" || id == "yoiAmount" || id == "envAmount";
 }
 
+bool isTime(const juce::String& id) { return id == "envAttack" || id == "envRelease" || id == "yoiTime"; }
+bool isHertz(const juce::String& id) { return id == "subCut" || id == "motionFreeHz"; }
+bool isSemitones(const juce::String& id) { return id == "shift" || id == "motionDepth" || id == "yoiShift"; }
+
+/** What a value box takes, for its tooltip. */
+juce::String typingHint(const juce::String& id) {
+    if (isTime(id)) return " in ms, or with a unit (250 ms, 0.5 s)";
+    if (id == "vowelMorph") return ": OO, OH, AH, EH or EE";
+    if (isPercentage(id)) return " in %";
+    if (isHertz(id)) return " in Hz";
+    if (isSemitones(id)) return " in semitones";
+    if (id == "output") return " in dB";
+    return {};
+}
+
 /** The folder a typed name saves into: one level, no separators, no leading dots (as the processor does). */
 juce::String cleanFolderName(const juce::String& typed) {
     auto folder = juce::File::createLegalFileName(typed.trim());
@@ -342,6 +360,68 @@ std::vector<double> ShiftyEditor::sizesFitting(juce::Rectangle<int> userArea) {
     return result;
 }
 
+juce::String ShiftyEditor::displayNameFor(const juce::String& id) {
+    static const std::pair<const char*, const char*> names[] {
+        {"shift", "Shift"}, {"focus", "Focus"}, {"bite", "Bite"}, {"drive", "Drive"}, {"mix", "Mix"},
+        {"subCut", "Sub Safe frequency"}, {"output", "Output"}, {"motionDepth", "LFO depth"},
+        {"motionFreeHz", "LFO rate"}, {"envAmount", "Envelope amount"}, {"envAttack", "Envelope attack"},
+        {"envRelease", "Envelope release"}, {"yoiAmount", "YOI amount"}, {"yoiTime", "YOI sweep time"},
+        {"yoiShift", "YOI shift"}, {"vowelMorph", "Vowel"}, {"character", "Character"}, {"talk", "Talk"} };
+    for (const auto& [key, name] : names)
+        if (id == key) return name;
+    return id;
+}
+
+std::optional<double> ShiftyEditor::parseTypedValue(const juce::String& id, const juce::String& typed) {
+    // Spaces and case don't matter ("1 s" = "1S"), and a decimal comma reads as a point.
+    const auto text = typed.toLowerCase().removeCharacters(" \t").replaceCharacter(',', '.');
+    if (text.isEmpty()) return std::nullopt;
+    if (id == "vowelMorph") {
+        const auto vowelIndex = [](const juce::String& name) {
+            for (int v = 0; v <= 4; ++v)
+                if (name.equalsIgnoreCase(vowelName(v))) return v;
+            return -1;
+        };
+        if (const int v = vowelIndex(text); v >= 0) return static_cast<double>(v);
+        const int from = vowelIndex(text.upToFirstOccurrenceOf("-", false, false));
+        const int to = vowelIndex(text.fromFirstOccurrenceOf("-", false, false));
+        if (from >= 0 && to >= 0) return 0.5 * (from + to); // "AH-EH", as the value box shows a morph
+    }
+    // A number (a sign, digits, one point), then its unit.
+    int end = text[0] == '+' || text[0] == '-' ? 1 : 0;
+    int digits = 0;
+    bool point = false;
+    for (; end < text.length(); ++end) {
+        const auto c = text[end];
+        if (juce::CharacterFunctions::isDigit(c)) ++digits;
+        else if (c == '.' && !point) point = true;
+        else break;
+    }
+    if (digits == 0) return std::nullopt;
+    const double value = text.substring(0, end).getDoubleValue();
+    const auto unit = text.substring(end);
+    const auto unitIs = [&unit](std::initializer_list<const char*> spellings) {
+        for (const auto* spelling : spellings)
+            if (unit == spelling) return true;
+        return false;
+    };
+    const auto when = [value](bool accepted, double scale = 1.0) {
+        return accepted ? std::optional<double>(value * scale) : std::nullopt;
+    };
+    if (isTime(id)) {
+        if (unitIs({"s", "sec", "secs", "second", "seconds"})) return value * 1000.0;
+        return when(unitIs({"", "ms", "msec", "msecs", "millisecond", "milliseconds"}));
+    }
+    if (isPercentage(id)) return when(unitIs({"", "%"}), 0.01);
+    if (isHertz(id)) {
+        if (unitIs({"khz", "k"})) return value * 1000.0;
+        return when(unitIs({"", "hz"}));
+    }
+    if (isSemitones(id)) return when(unitIs({"", "st", "semi", "semis", "semitone", "semitones"}));
+    if (id == "output") return when(unitIs({"", "db"}));
+    return when(unit.isEmpty());
+}
+
 ShiftyEditor::ShiftyEditor(ShiftyProcessor& p)
     : juce::AudioProcessorEditor(p), plugin(p),
       shell(juce::ImageCache::getFromMemory(BinaryData::DeviceShelleditor_png,
@@ -352,7 +432,7 @@ ShiftyEditor::ShiftyEditor(ShiftyProcessor& p)
       displayTypeface(juce::Typeface::createSystemTypefaceFor(
           BinaryData::ChakraPetchBoldItalic_ttf, BinaryData::ChakraPetchBoldItalic_ttfSize)) {
     setOpaque(true);
-    setWantsKeyboardFocus(true);
+    // The editor itself takes the keyboard (for the preset arrows) when clicked; no control does (hostKeys).
     live = plugin.display();
 
     addControl("shift", {196, 606, 310, 285}, {245, 896, 220, 70}, true, true);
@@ -400,7 +480,7 @@ ShiftyEditor::ShiftyEditor(ShiftyProcessor& p)
     };
     addAction(randomButton, "Randomize", "Create a new variation using every unlocked control, the engine included. Undo restores the previous sound.",
               [this] { plugin.randomizeParameters(); updateValueLabels(); updatePage(); repaint(); });
-    addAction(locksButton, "Randomization locks", "Choose which parameters RANDOM keeps unchanged. Locks do not affect manual changes or preset loading.",
+    addAction(locksButton, "Locks", "Choose which parameters keep their values through RANDOM and preset changes. Locks do not stop your own changes.",
               [this] { showLocksMenu(); });
     addAction(undoButton, "Undo", "Undo the last change, preset, engine change or random variation", [this] {
         plugin.undo(); updateValueLabels(); updatePage(); repaint();
@@ -414,24 +494,34 @@ ShiftyEditor::ShiftyEditor(ShiftyProcessor& p)
     addAction(randomPresetButton, "Random preset",
               "Load a random preset from the list as it is filtered now (tab, folder and search). Undo returns to the previous sound.",
               [this] { loadRandomPreset(); });
+    // The star beside the preset name on SOUND. Only a saved or factory preset can be a favourite.
+    addAction(favoriteButton, "Favorite", "", [this] {
+        if (!loadedIsSaved) return;
+        toggleFavorite(plugin.currentPresetFolder(), plugin.currentPresetName());
+        updateFavoriteButton();
+        repaint();
+    });
 
     for (auto& c : controls) {
         c.slider->onValueChange = [this] { updateValueLabels(); repaint(); };
         c.label->onTextChange = [this, id = c.id, slider = c.slider.get(), label = c.label.get()] {
-            float value = static_cast<float>(label->getText().getDoubleValue());
-            if (isPercentage(id))
-                value *= 0.01f;
-            // A typed value is one complete edit, so it becomes one Undo step.
-            auto* parameter = plugin.parameters().getParameter(id);
-            if (parameter != nullptr) parameter->beginChangeGesture();
-            slider->setValue(value, juce::sendNotificationSync);
-            if (parameter != nullptr) parameter->endChangeGesture();
+            const auto value = parseTypedValue(id, label->getText());
+            if (value.has_value()) {
+                // A typed value is one complete edit, so it becomes one Undo step.
+                auto* parameter = plugin.parameters().getParameter(id);
+                if (parameter != nullptr) parameter->beginChangeGesture();
+                slider->setValue(*value, juce::sendNotificationSync);
+                if (parameter != nullptr) parameter->endChangeGesture();
+            }
+            // Text that is not a value of this control changes nothing; the box shows the value again.
+            updateValueLabels();
         };
     }
     for (auto& s : switches)
         s.button->onClick = [this] { updatePage(); repaint(); };
 
     addAndMakeVisible(presetSearch);
+    presetSearch.setName("Search presets");
     presetSearch.setMultiLine(false);
     presetSearch.setFont(juce::Font(juce::FontOptions(normalTypeface).withHeight(22.0f)));
     presetSearch.setTextToShowWhenEmpty("Search presets", muted);
@@ -440,7 +530,10 @@ ShiftyEditor::ShiftyEditor(ShiftyProcessor& p)
     presetSearch.setColour(juce::TextEditor::outlineColourId, screenLine);
     presetSearch.setColour(juce::TextEditor::focusedOutlineColourId, lime);
     presetSearch.onTextChange = [this] { refreshPresetList(); repaint(); };
-    presetSearch.onReturnKey = [this] { loadSelectedPreset(); };
+    // Return and Escape end the search and give the keyboard back: the arrows then browse what it found.
+    // Return no longer loads a row; double-click one, or use the arrows.
+    presetSearch.onReturnKey = [this] { if (isShowing()) grabKeyboardFocus(); };
+    presetSearch.onEscapeKey = [this] { if (isShowing()) grabKeyboardFocus(); };
 
     for (auto* editor : { &presetNameEditor, &presetFolderEditor }) {
         addAndMakeVisible(*editor);
@@ -453,6 +546,8 @@ ShiftyEditor::ShiftyEditor(ShiftyProcessor& p)
         editor->onEscapeKey = [this] { savingPreset = false; updatePage(); repaint(); };
         editor->onTextChange = [this] { repaint(); };
     }
+    presetNameEditor.setName("Preset name");
+    presetFolderEditor.setName("Preset folder");
     presetNameEditor.setTextToShowWhenEmpty("Preset name", muted);
     presetFolderEditor.setTextToShowWhenEmpty("Folder (optional)", muted);
 
@@ -474,6 +569,7 @@ ShiftyEditor::ShiftyEditor(ShiftyProcessor& p)
     addChildComponent(*infoOverlay);
 
     refreshPresetList();
+    syncLoadedPreset();
     updateValueLabels();
     updatePage();
     setResizable(true, false);
@@ -494,6 +590,7 @@ ShiftyEditor::ShiftyEditor(ShiftyProcessor& p)
     setSize(size.x, size.y);
     sizeReady = true;
     startTimerHz(30);
+    hostKeys.apply();
 }
 
 ShiftyEditor::~ShiftyEditor() { stopTimer(); }
@@ -520,7 +617,7 @@ void ShiftyEditor::addControl(const char* id, juce::Rectangle<float> hit,
     c.slider->setTextBoxStyle(juce::Slider::NoTextBox, false, 0, 0);
     c.slider->setScrollWheelEnabled(false);
     c.slider->setPopupMenuEnabled(false);
-    juce::String description = c.id;
+    juce::String description = displayNameFor(c.id);
     if (c.id == "shift") description = "Shift: move the formants lower (bigger, darker) or higher (smaller, brighter) while keeping the notes";
     else if (c.id == "focus") description = "Focus: TALK formant width, MOUTH grain length, CLASSIC envelope detail";
     else if (c.id == "bite") description = "Bite: TALK resonance and drive into the vowels, MOUTH pitch-synchronous buzz, CLASSIC contrast";
@@ -538,7 +635,7 @@ void ShiftyEditor::addControl(const char* id, juce::Rectangle<float> hit,
     else if (c.id == "yoiShift") description = "YOI shift: formant offset at the start of each sweep, gliding back to zero";
     const juce::String how = c.id == "vowelMorph" ? "Click or drag along the bar" :
                              rotary ? "Drag up or down" : "Drag up or right to raise";
-    c.slider->setTooltip(description + ". " + how + ", hold Shift for fine steps, double click to reset, right click for randomization lock.");
+    c.slider->setTooltip(description + ". " + how + ", hold Shift for fine steps, double click to reset, right click to lock it through RANDOM and preset changes.");
     c.slider->onContextMenu = [this, parameterId = c.id, slider = c.slider.get()] {
         showParameterLockMenu(parameterId, slider);
     };
@@ -559,7 +656,8 @@ void ShiftyEditor::addControl(const char* id, juce::Rectangle<float> hit,
     c.label->setColour(juce::Label::outlineColourId, juce::Colours::transparentBlack);
     c.label->setColour(juce::Label::textWhenEditingColourId, darkText ? ink : screenText);
     c.label->setEditable(false, true, false);
-    c.label->setTooltip(c.id + ": double click to type a value");
+    c.label->setName(displayNameFor(c.id) + " value");
+    c.label->setTooltip(displayNameFor(c.id) + ": double click to type a value" + typingHint(c.id));
     addAndMakeVisible(*c.label);
     if (rotary && lockable) {
         c.lockButton = std::make_unique<InvisibleAction>();
@@ -587,7 +685,7 @@ void ShiftyEditor::addSwitch(const char* id, juce::Rectangle<float> hit) {
     s.button->setTooltip(s.id == "motionEnable" ? "Turn motion on or off" :
                          s.id == "bypass" ? "Bypass SHIFTY" :
                          s.id == "motionSync" ? "Sync movement to the host tempo (it keeps running at the host tempo while the transport is stopped)" :
-                         s.id == "vowel" ? "CLASSIC: add the optional vowel color contour. Locked out of RANDOM by default; right click to unlock." :
+                         s.id == "vowel" ? "CLASSIC: add the optional vowel color contour. Right click to lock it through RANDOM and preset changes." :
                          "Protect the original low end");
     addAndMakeVisible(*s.button);
     s.attachment = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(
@@ -627,7 +725,7 @@ void ShiftyEditor::updateValueLabels() {
             if (c.lockButton) {
                 const bool locked = plugin.isParameterLocked(c.id);
                 c.lockButton->setTooltip((locked ? "Unlock " : "Lock ") + c.slider->getName()
-                    + (locked ? " for randomization" : " to keep its value when using RANDOM"));
+                    + (locked ? "" : " to keep its value through RANDOM and preset changes"));
                 c.lockButton->setToggleState(locked, juce::dontSendNotification);
             }
         }
@@ -685,6 +783,8 @@ void ShiftyEditor::updatePage() {
         vowel->button->setVisible(onVoice && (engine == EngineMode::classic || original));
     }
     latestButton->setVisible(onVoice && original);
+    favoriteButton->setVisible(page == Page::sound);
+    updateFavoriteButton();
     presetSearch.setVisible(onPresets && !savingPreset);
     randomPresetButton->setVisible(onPresets && !savingPreset);
     presetNameEditor.setVisible(onPresets && savingPreset);
@@ -767,6 +867,7 @@ void ShiftyEditor::resized() {
     redoButton->setBounds(scaled(redoBounds));
     latestButton->setBounds(scaled(latestButtonBounds));
     randomPresetButton->setBounds(scaled(randomPresetBounds));
+    favoriteButton->setBounds(scaled(favoriteStarBounds));
     presetSearch.setBounds(scaled({645, 253, 275, 40}));
     presetSearch.setFont(juce::Font(juce::FontOptions(normalTypeface).withHeight(22.0f * scale)));
     presetNameEditor.setBounds(scaled({300, 305, 540, 44}));
@@ -892,7 +993,10 @@ void ShiftyEditor::drawSoundScreen(juce::Graphics& g) {
     g.setFont(juce::Font(juce::FontOptions(displayTypeface).withHeight(32.0f)));
     g.setColour(screenText);
     g.drawFittedText(name, juce::Rectangle<int>(184, 202, 272, 42), juce::Justification::centredLeft, 1);
-    drawFavoriteStar(g, {482.0f, 223.0f}, 18.0f, isFavorite(plugin.currentPresetFolder(), plugin.currentPresetName()), screenText);
+    // An unsaved sound (a RANDOM variation) can't be a favourite: its star is dimmed.
+    drawFavoriteStar(g, {482.0f, 223.0f}, 18.0f,
+                     loadedIsSaved && isFavorite(plugin.currentPresetFolder(), plugin.currentPresetName()),
+                     loadedIsSaved ? screenText : screenText.withAlpha(0.3f));
 
     if (engine == EngineMode::original) {
         // The ORIGINAL SOUND badge, with its upgrade key.
@@ -1667,6 +1771,7 @@ void ShiftyEditor::timerCallback() {
     if (glowLevel < 0.004f) glowLevel = 0.0f;
     glowShift += (juce::jlimit(-12.0f, 12.0f, live.shift) - glowShift) * 0.3f;
     glowVowel += (live.morph - glowVowel) * 0.25f;
+    syncLoadedPreset();
     updateValueLabels();
     bool needsPageUpdate = live.engine != previousEngine;
     if (page == Page::motion)
@@ -1704,9 +1809,11 @@ void ShiftyEditor::refreshPresetList() {
             presetItems.push_back(item);
         }
     }
-    selectedPreset = presetItems.empty() ? -1 : 0;
+    // The highlight marks the loaded sound when it is in the list; otherwise nothing is highlighted, and
+    // the arrows start from the top (or the bottom, going back).
+    selectedPreset = -1;
     firstPreset = 0;
-    // Start on the sound that is loaded, when it is in the list.
+    wheelRows = 0.0f;
     const auto currentFolder = plugin.currentPresetFolder(), currentName = plugin.currentPresetName();
     for (int i = 0; i < static_cast<int>(presetItems.size()); ++i) {
         const auto& item = presetItems[static_cast<size_t>(i)];
@@ -1723,9 +1830,88 @@ void ShiftyEditor::loadSelectedPreset() {
     const auto& item = presetItems[static_cast<size_t>(selectedPreset)];
     if (item.factoryIndex >= 0) plugin.loadFactoryPreset(item.factoryIndex);
     else plugin.loadUserPreset(item.file);
+    syncLoadedPreset();
     updateValueLabels();
     updatePage();
     repaint();
+}
+
+juce::String ShiftyEditor::presetItemForTesting(int index) const {
+    if (!juce::isPositiveAndBelow(index, static_cast<int>(presetItems.size()))) return {};
+    const auto& item = presetItems[static_cast<size_t>(index)];
+    return item.folder + "/" + item.name;
+}
+
+int ShiftyEditor::indexOfLoadedPreset() const {
+    const auto folder = plugin.currentPresetFolder(), name = plugin.currentPresetName();
+    for (int i = 0; i < static_cast<int>(presetItems.size()); ++i)
+        if (presetItems[static_cast<size_t>(i)].folder == folder && presetItems[static_cast<size_t>(i)].name == name)
+            return i;
+    return -1;
+}
+
+void ShiftyEditor::showSelectedRow() {
+    // Scroll as little as possible to bring the highlighted row into the four shown.
+    const int maxFirst = std::max(0, static_cast<int>(presetItems.size()) - 4);
+    if (selectedPreset >= 0) {
+        if (selectedPreset < firstPreset) firstPreset = selectedPreset;
+        else if (selectedPreset >= firstPreset + 4) firstPreset = selectedPreset - 3;
+    }
+    firstPreset = juce::jlimit(0, maxFirst, firstPreset);
+}
+
+void ShiftyEditor::stepPreset(int direction) {
+    // The arrow keys browse the PRESETS list exactly as it is shown (tab, folder and search, in its order),
+    // on every page, wrapping at the ends, and load a row as a double-click does: one Undo step. From a
+    // sound that is not in the list (a RANDOM variation), they step from the highlighted row.
+    // Not while a preset is being saved: the save panel would save a different sound.
+    if (savingPreset || presetItems.empty() || direction == 0) return;
+    const int count = static_cast<int>(presetItems.size());
+    int anchor = indexOfLoadedPreset();
+    if (anchor < 0) anchor = selectedPreset;
+    selectedPreset = juce::isPositiveAndBelow(anchor, count) ? (anchor + (direction > 0 ? 1 : count - 1)) % count
+                                                             : (direction > 0 ? 0 : count - 1);
+    showSelectedRow();
+    loadSelectedPreset();
+}
+
+void ShiftyEditor::syncLoadedPreset() {
+    const auto folder = plugin.currentPresetFolder(), name = plugin.currentPresetName();
+    const auto key = folder + "/" + name;
+    if (key == loadedKey) return;
+    loadedKey = key;
+    loadedIsSaved = isSavedPreset(folder, name);
+    // The highlight follows whatever loaded the sound (arrows, the die, a double-click, UNDO, the host).
+    // A sound that is not in the list leaves it where it was, so the arrows go on from there.
+    if (const int index = indexOfLoadedPreset(); index >= 0) {
+        selectedPreset = index;
+        showSelectedRow();
+    }
+    updateFavoriteButton();
+}
+
+bool ShiftyEditor::isSavedPreset(const juce::String& folder, const juce::String& name) const {
+    if (name.isEmpty()) return false;
+    if (ShiftyProcessor::factoryPresetIndex(folder, name) >= 0) return true;
+    const auto file = juce::File::createLegalFileName(name) + ".shifty";
+    // Sessions from 0.4 name a factory (now Classic) or top-level user preset without a folder.
+    if (folder.isEmpty())
+        return ShiftyProcessor::factoryPresetIndex("Classic", name) >= 0
+            || plugin.userPresetDirectory().getChildFile(file).existsAsFile();
+    if (folder == "User") return plugin.userPresetDirectory().getChildFile(file).existsAsFile();
+    if (folder.startsWith("User/"))
+        return plugin.userPresetDirectory().getChildFile(folder.fromFirstOccurrenceOf("User/", false, false))
+                   .getChildFile(file).existsAsFile();
+    return false;
+}
+
+void ShiftyEditor::updateFavoriteButton() {
+    if (favoriteButton == nullptr) return;
+    const bool favorite = loadedIsSaved && isFavorite(plugin.currentPresetFolder(), plugin.currentPresetName());
+    favoriteButton->setEnabled(loadedIsSaved);
+    favoriteButton->setMouseCursor(loadedIsSaved ? juce::MouseCursor::PointingHandCursor : juce::MouseCursor::NormalCursor);
+    favoriteButton->setTooltip(!loadedIsSaved ? "Only saved presets can be favorites. Save this sound with SAVE AS on the PRESETS page, then star it."
+                               : favorite ? "Remove this preset from FAV" : "Add this preset to FAV");
 }
 
 void ShiftyEditor::loadRandomPreset() {
@@ -1796,7 +1982,7 @@ void ShiftyEditor::showShapeMenu() {
     for (int i = 0; i < 4; ++i)
         menu.addItem(i + 1, names[i], true, juce::roundToInt(valueOf("motionShape")) == i);
     menu.addSeparator();
-    menu.addItem(100, "Lock for randomization", true, plugin.isParameterLocked("motionShape"));
+    menu.addItem(100, "Lock (RANDOM and presets leave it alone)", true, plugin.isParameterLocked("motionShape"));
     menu.showMenuAsync(menuOptions("shape"),
         [safe = juce::Component::SafePointer<ShiftyEditor>(this)](int result) {
             if (safe == nullptr) return;
@@ -1813,7 +1999,7 @@ void ShiftyEditor::showRateMenu() {
     for (int i = 0; i < 5; ++i)
         menu.addItem(i + 1, names[i], true, juce::roundToInt(valueOf("motionRate")) == i);
     menu.addSeparator();
-    menu.addItem(100, "Lock for randomization", true, plugin.isParameterLocked("motionRate"));
+    menu.addItem(100, "Lock (RANDOM and presets leave it alone)", true, plugin.isParameterLocked("motionRate"));
     menu.showMenuAsync(menuOptions("rate"),
         [safe = juce::Component::SafePointer<ShiftyEditor>(this)](int result) {
             if (safe == nullptr) return;
@@ -1830,7 +2016,7 @@ void ShiftyEditor::showTargetMenu() {
     for (int i = 0; i < 3; ++i)
         menu.addItem(i + 1, names[i], true, juce::roundToInt(valueOf("motionTarget")) == i);
     menu.addSeparator();
-    menu.addItem(100, "Lock for randomization", true, plugin.isParameterLocked("motionTarget"));
+    menu.addItem(100, "Lock (RANDOM and presets leave it alone)", true, plugin.isParameterLocked("motionTarget"));
     menu.showMenuAsync(menuOptions("target"),
         [safe = juce::Component::SafePointer<ShiftyEditor>(this)](int result) {
             if (safe == nullptr) return;
@@ -1845,7 +2031,7 @@ void ShiftyEditor::showVowelMenu(const char* id) {
     for (int i = 0; i < 5; ++i)
         menu.addItem(i + 1, vowelName(i), true, juce::roundToInt(valueOf(id)) == i);
     menu.addSeparator();
-    menu.addItem(100, "Lock for randomization", true, plugin.isParameterLocked(id));
+    menu.addItem(100, "Lock (RANDOM and presets leave it alone)", true, plugin.isParameterLocked(id));
     menu.showMenuAsync(menuOptions(id),
         [safe = juce::Component::SafePointer<ShiftyEditor>(this), parameterId = juce::String(id)](int result) {
             if (safe == nullptr) return;
@@ -1924,7 +2110,7 @@ void ShiftyEditor::showParameterLockMenu(const juce::String& id, juce::Component
     juce::PopupMenu menu;
     if (auto* parameter = plugin.parameters().getParameter(id))
         menu.addSectionHeader(parameter->getName(80));
-    menu.addItem(1, "Lock for randomization", true, plugin.isParameterLocked(id));
+    menu.addItem(1, "Lock (RANDOM and presets leave it alone)", true, plugin.isParameterLocked(id));
     menu.addItem(2, "All randomization locks...");
     menu.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(target).withMousePosition(),
         [safe = juce::Component::SafePointer<ShiftyEditor>(this), id](int result) {
@@ -1938,7 +2124,7 @@ void ShiftyEditor::showParameterLockMenu(const juce::String& id, juce::Component
 void ShiftyEditor::showEngineLockMenu() {
     juce::PopupMenu menu;
     menu.addSectionHeader("Engine");
-    menu.addItem(1, "Lock for randomization", true, plugin.isParameterLocked(ShiftyProcessor::engineLockId));
+    menu.addItem(1, "Lock (RANDOM and presets leave it alone)", true, plugin.isParameterLocked(ShiftyProcessor::engineLockId));
     menu.addItem(2, "All randomization locks...");
     menu.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(this).withMousePosition(),
         [safe = juce::Component::SafePointer<ShiftyEditor>(this)](int result) {
@@ -1952,7 +2138,7 @@ void ShiftyEditor::showEngineLockMenu() {
 
 void ShiftyEditor::showLocksMenu() {
     juce::PopupMenu menu;
-    menu.addSectionHeader("Keep these values when using RANDOM");
+    menu.addSectionHeader("Keep these values through RANDOM and preset changes");
     auto ids = ShiftyProcessor::randomizableParameterIds();
     ids.insert(0, ShiftyProcessor::engineLockId);
     for (int i = 0; i < ids.size(); ++i)
@@ -1997,11 +2183,7 @@ void ShiftyEditor::mouseDown(const juce::MouseEvent& e) {
     }
     const auto engine = plugin.engineMode();
     if (page == Page::sound) {
-        if (p.x >= 462.0f && p.x <= 504.0f && p.y >= 200.0f && p.y <= 248.0f) {
-            toggleFavorite(plugin.currentPresetFolder(), plugin.currentPresetName());
-            repaint();
-            return;
-        }
+        // (The star beside the preset name is favoriteButton.)
         if (engineSelectorBounds.contains(p)) {
             if (engine == EngineMode::original) {
                 if (p.x >= engineSelectorBounds.getX() + 220.0f) plugin.useLatestSound();
@@ -2067,6 +2249,7 @@ void ShiftyEditor::mouseDown(const juce::MouseEvent& e) {
                     // The star column toggles a favorite.
                     const auto& item = presetItems[static_cast<size_t>(index)];
                     toggleFavorite(item.folder, item.name);
+                    updateFavoriteButton();
                 }
                 selectedPreset = index;
                 repaint();
@@ -2092,9 +2275,24 @@ void ShiftyEditor::mouseDoubleClick(const juce::MouseEvent& e) {
 void ShiftyEditor::mouseWheelMove(const juce::MouseEvent& e,
                                    const juce::MouseWheelDetails& wheel) {
     const auto p = designPoint(e.position);
-    if (page == Page::presets && p.y >= 300.0f && p.y <= 442.0f) {
+    if (page == Page::presets && !savingPreset && p.y >= 300.0f && p.y <= 442.0f) {
+        // Scroll by the wheel's own distance. Sideways swipes leave the list alone. A trackpad (smooth
+        // deltas, momentum included) moves the rows with the fingers: JUCE's macOS deltas are 0.5 / 256 per
+        // pixel. A wheel notch moves at least one row, more for a fast spin (14 rows per unit, as JUCE's
+        // own lists: three on Windows and Linux).
+        if (wheel.deltaY == 0.0f) return;
+        const float rowPixels = juce::jmax(1.0f, 35.0f * static_cast<float>(getHeight()) / editorHeight);
+        const float rows = wheel.isSmooth ? -wheel.deltaY * 512.0f / rowPixels
+                                          : (wheel.deltaY < 0.0f ? 1.0f : -1.0f)
+                                                * juce::jmax(1.0f, std::round(std::abs(wheel.deltaY) * 14.0f));
+        if (!wheel.isSmooth || (rows > 0.0f) != (wheelRows > 0.0f)) wheelRows = 0.0f;
+        wheelRows += rows;
         const int maxFirst = std::max(0, static_cast<int>(presetItems.size()) - 4);
-        firstPreset = juce::jlimit(0, maxFirst, firstPreset + (wheel.deltaY < 0 ? 1 : -1));
+        const int whole = static_cast<int>(wheelRows); // toward zero; the rest waits for more travel
+        firstPreset = juce::jlimit(0, maxFirst, firstPreset + whole);
+        wheelRows -= static_cast<float>(whole);
+        // Travel stored up against an end would delay the way back.
+        if ((firstPreset == 0 && wheelRows < 0.0f) || (firstPreset == maxFirst && wheelRows > 0.0f)) wheelRows = 0.0f;
         repaint();
     } else {
         juce::AudioProcessorEditor::mouseWheelMove(e, wheel);
@@ -2102,23 +2300,13 @@ void ShiftyEditor::mouseWheelMove(const juce::MouseEvent& e,
 }
 
 bool ShiftyEditor::keyPressed(const juce::KeyPress& key) {
-    if (page == Page::presets && !savingPreset) {
-        if (key == juce::KeyPress::upKey || key == juce::KeyPress::downKey) {
-            if (!presetItems.empty()) {
-                selectedPreset = juce::jlimit(0, static_cast<int>(presetItems.size()) - 1,
-                    selectedPreset + (key == juce::KeyPress::downKey ? 1 : -1));
-                firstPreset = juce::jlimit(0, std::max(0, static_cast<int>(presetItems.size()) - 4),
-                                          std::min(firstPreset, selectedPreset));
-                if (selectedPreset >= firstPreset + 4) firstPreset = selectedPreset - 3;
-                repaint();
-            }
-            return true;
-        }
-        if (key == juce::KeyPress::returnKey) { loadSelectedPreset(); return true; }
-    }
-    if (key.getModifiers().isCommandDown() && key.getKeyCode() == 'Z') {
-        if (key.getModifiers().isShiftDown()) plugin.redo();
-        else plugin.undo();
+    // The preset arrows are handled by hostKeys. Escape closes the save panel when it is open but its
+    // fields have let go of the keyboard; every other key (space, Return, Tab, letters, Cmd-Z and the other
+    // shortcuts) belongs to the host. The on-screen UNDO and REDO keys undo SHIFTY's own changes.
+    if (savingPreset && key == juce::KeyPress::escapeKey) {
+        savingPreset = false;
+        updatePage();
+        repaint();
         return true;
     }
     return false;

@@ -2,9 +2,13 @@
 #include "../Source/UI/ShiftyEditor.h"
 #include "FeatureTests.h"
 #include "RedesignTests.h"
+#include "HostKeysTests.h"
 #include "Compatibility.h"
+#include "VersionCompare.h"
 
 #include <juce_graphics/juce_graphics.h>
+#include <algorithm>
+#include <cstring>
 #include <iostream>
 #if JUCE_MAC
  #include <AudioToolbox/AudioToolbox.h>
@@ -41,8 +45,11 @@ bool checkInfoPage(shifty::ShiftyProcessor& processor, shifty::ShiftyEditor& edi
     if (!random) return false;
     auto* hit = editor.getComponentAt(editor.getLocalPoint(random, random->getLocalBounds().getCentre()));
     if (hit != page && !page->isParentOf(hit)) return false;
+    // INFO holds only the arrows, so presets can't change under it; Cmd-Z, space and Return are the host's.
     if (!page->keyPressed(juce::KeyPress(juce::KeyPress::downKey)) ||
-        !page->keyPressed(juce::KeyPress('z', juce::ModifierKeys::commandModifier, 0))) return false;
+        page->keyPressed(juce::KeyPress('z', juce::ModifierKeys::commandModifier, 0)) ||
+        page->keyPressed(juce::KeyPress(juce::KeyPress::spaceKey, {}, ' ')) ||
+        page->keyPressed(juce::KeyPress(juce::KeyPress::returnKey))) return false;
     if (!page->keyPressed(juce::KeyPress(juce::KeyPress::escapeKey)) || page->isVisible()) return false;
     info->onClick();
     close->onClick();
@@ -50,7 +57,7 @@ bool checkInfoPage(shifty::ShiftyProcessor& processor, shifty::ShiftyEditor& edi
     for (int index = 0; index < processor.getParameters().size(); ++index)
         if (std::bit_cast<std::uint32_t>(before[static_cast<size_t>(index)]) !=
             std::bit_cast<std::uint32_t>(processor.getParameters()[index]->getValue())) return false;
-    std::cout << "INFO page open, Escape, close, links, blocked underlying controls, bounds and parameter-preservation checks passed.\n";
+    std::cout << "INFO page open, arrows held, host keys passed on, Escape, close, links, blocked underlying controls, bounds and parameter-preservation checks passed.\n";
     return true;
 }
 
@@ -113,8 +120,9 @@ int checkVst3HostLatency(const juce::String& pluginPath) {
     }
     std::cout << "Hosted VST3 latency of a new instance (TALK) before prepare: " << newInstanceLatency << ".\n";
 
-    // The exported parameter list stays append-only: the 16 controls of 0.4.2
-    // in order, the 13 controls added in 0.5.0, then the VST3 wrapper's own host bypass.
+    // The exported parameter list stays append-only: the 16 controls of 0.4.2 in order, then the 13
+    // controls added in 0.5.0. Since 0.5.4 the host bypass is SHIFTY's own Bypass (index 14, flagged
+    // kIsBypass), so the wrapper no longer appends a "Bypass" of its own.
     const auto& parameters = hosted->getParameters();
     juce::StringArray names;
     for (auto* parameter : parameters) names.add(parameter->getName(64));
@@ -126,10 +134,140 @@ int checkVst3HostLatency(const juce::String& pluginPath) {
         "Sub Safe Frequency", "Output", "Motion Enabled", "Motion Shape", "Motion Rate", "Motion Depth",
         "Motion Sync", "Motion Free Rate", "Bypass", "Vowel Color",
         "Vowel Morph", "Voice", "Character", "Talk", "Envelope Amount", "Envelope Attack", "Envelope Release",
-        "Yoi Amount", "Yoi From", "Yoi To", "Yoi Time", "Yoi Shift", "Motion Target", "Bypass" };
-    const bool parameterListOk = names == expected && hostBypass != nullptr
-                              && hostBypass == parameters.getLast();
-    return latencyOk && newInstanceLatency == 0 && parameterListOk ? 0 : 1;
+        "Yoi Amount", "Yoi From", "Yoi To", "Yoi Time", "Yoi Shift", "Motion Target" };
+    const bool parameterListOk = names == expected && hostBypass != nullptr && parameters.size() > 14
+                              && hostBypass == parameters[14] && hostBypass->isAutomatable();
+
+    // The latency stays reported while bypassed: a session saved with BYPASS on, and the host's bypass
+    // switched on and off on a running instance.
+    bool bypassOk = false;
+    if (hostBypass != nullptr) {
+        shifty::ShiftyProcessor source;
+        source.setEngine(shifty::EngineMode::classic, false);
+        source.parameters().getParameter("bypass")->setValueNotifyingHost(1.0f);
+        juce::MemoryBlock pluginState;
+        source.getStateInformation(pluginState);
+        const auto stateBlock = hostedVst3State(pluginState);
+        hosted->setStateInformation(stateBlock.getData(), static_cast<int>(stateBlock.getSize()));
+        const bool restoredOn = hostBypass->getValue() >= 0.5f;
+        hosted->prepareToPlay(48000.0, 512);
+        const int bypassed = hosted->getLatencySamples();
+        hostBypass->setValueNotifyingHost(0.0f);
+        const int active = hosted->getLatencySamples();
+        hostBypass->setValueNotifyingHost(1.0f);
+        const int again = hosted->getLatencySamples();
+        hosted->releaseResources();
+        std::cout << "Hosted VST3, CLASSIC saved with BYPASS on: the host's bypass reads " << (restoredOn ? "on" : "off")
+                  << "; latency " << bypassed << " bypassed, " << active << " active, " << again << " bypassed again (48 kHz).\n";
+        bypassOk = restoredOn && bypassed == 2048 && active == 2048 && again == 2048;
+    }
+    return latencyOk && newInstanceLatency == 0 && parameterListOk && bypassOk ? 0 : 1;
+}
+
+/** The JUCE VST3 wrapper's component state, split: SHIFTY's own state, then
+    [int64 0][private data][int64 size]"JUCEPrivateData". The private data held the wrapper's own host
+    bypass until 0.5.4. */
+struct Vst3ComponentState {
+    juce::MemoryBlock plugin;
+    juce::ValueTree privateData;
+    bool privateSection = false;
+};
+
+Vst3ComponentState componentStateOf(juce::AudioPluginInstance& hosted) {
+    Vst3ComponentState result;
+    juce::MemoryBlock hostedState;
+    hosted.getStateInformation(hostedState);
+    const auto xml = juce::AudioProcessor::getXmlFromBinary(hostedState.getData(), static_cast<int>(hostedState.getSize()));
+    auto* component = xml != nullptr ? xml->getChildByName("IComponent") : nullptr;
+    juce::MemoryBlock chunk;
+    if (component == nullptr || !chunk.fromBase64Encoding(component->getAllSubText())) return result;
+    const auto* bytes = static_cast<const char*>(chunk.getData());
+    auto size = chunk.getSize();
+    const juce::String magic("JUCEPrivateData");
+    const auto magicSize = static_cast<size_t>(magic.length());
+    if (size >= magicSize + 2 * sizeof(juce::uint64)
+        && juce::String(juce::CharPointer_UTF8(bytes + size - magicSize), magicSize) == magic) {
+        juce::uint64 privateSize = 0;
+        std::memcpy(&privateSize, bytes + size - magicSize - sizeof(privateSize), sizeof(privateSize));
+        if (privateSize <= size - magicSize - 2 * sizeof(juce::uint64)) {
+            const auto privateStart = size - magicSize - sizeof(privateSize) - static_cast<size_t>(privateSize);
+            if (privateSize > 0) result.privateData = juce::ValueTree::readFromData(bytes + privateStart, static_cast<size_t>(privateSize));
+            size = privateStart - sizeof(juce::uint64);
+            result.privateSection = true;
+        }
+    }
+    result.plugin.append(bytes, size);
+    return result;
+}
+
+/** A 0.5.3 project opens in this build with its BYPASS, and SHIFTY's state bytes are unchanged. Both
+    VST3s are hosted in this process; nothing is installed. */
+int checkBypassState(const juce::String& oldPath, const juce::String& newPath) {
+    for (const auto& path : { oldPath, newPath })
+        if (!juce::File::isAbsolutePath(path) || !juce::File(path).exists()) {
+            std::cerr << "VST3 paths must be existing absolute paths.\n";
+            return 2;
+        }
+    juce::ScopedJuceInitialiser_GUI gui;
+    juce::VST3PluginFormat format;
+    const auto load = [&format](const juce::String& path) -> std::unique_ptr<juce::AudioPluginInstance> {
+        juce::OwnedArray<juce::PluginDescription> descriptions;
+        format.findAllTypesForFile(descriptions, path);
+        if (descriptions.isEmpty()) return nullptr;
+        juce::String error;
+        return format.createInstanceFromDescription(*descriptions[0], 48000.0, 512, error);
+    };
+    auto old = load(oldPath);
+    if (old == nullptr) { std::cerr << "Could not host the 0.5.3 VST3.\n"; return 1; }
+    bool ok = true;
+    {
+        auto fresh = load(newPath);
+        if (fresh == nullptr) { std::cerr << "Could not host the new VST3.\n"; return 1; }
+        const auto& before = old->getParameters();
+        const auto& now = fresh->getParameters();
+        const bool lists = before.size() == 30 && old->getBypassParameter() == before.getLast()
+                        && now.size() == 29 && fresh->getBypassParameter() != nullptr && fresh->getBypassParameter() == now[14];
+        std::cout << "VST3 parameters: 0.5.3 " << before.size() << ", host bypass the wrapper's own '"
+                  << (old->getBypassParameter() != nullptr ? old->getBypassParameter()->getName(32) : juce::String("none"))
+                  << "' at the end; this build " << now.size() << ", host bypass SHIFTY's '"
+                  << (fresh->getBypassParameter() != nullptr ? fresh->getBypassParameter()->getName(32) : juce::String("none"))
+                  << "' at index " << now.indexOf(fresh->getBypassParameter()) << ".\n";
+        ok = ok && lists;
+    }
+    for (const bool bypass : { false, true })
+        for (const bool hostBypass : { false, true }) {
+            shifty::ShiftyProcessor source;
+            source.loadFactoryPreset(3);
+            source.parameters().getParameter("bypass")->setValueNotifyingHost(bypass ? 1.0f : 0.0f);
+            juce::MemoryBlock pluginState;
+            source.getStateInformation(pluginState);
+            const auto stateBlock = hostedVst3State(pluginState);
+            old->setStateInformation(stateBlock.getData(), static_cast<int>(stateBlock.getSize()));
+            if (auto* wrapperBypass = old->getBypassParameter())
+                wrapperBypass->setValueNotifyingHost(hostBypass ? 1.0f : 0.0f); // the DAW's bypass, as 0.5.3 kept it
+            juce::MemoryBlock project; // a 0.5.3 project's plug-in state
+            old->getStateInformation(project);
+            const auto oldState = componentStateOf(*old);
+            auto fresh = load(newPath);
+            if (fresh == nullptr) return 1;
+            fresh->setStateInformation(project.getData(), static_cast<int>(project.getSize()));
+            auto* nowBypass = fresh->getBypassParameter();
+            const bool opensBypassed = nowBypass != nullptr && nowBypass->getValue() >= 0.5f;
+            const auto newState = componentStateOf(*fresh);
+            const bool sameBytes = oldState.plugin == pluginState && newState.plugin == pluginState;
+            const bool oldFlag = oldState.privateSection && static_cast<bool>(oldState.privateData.getProperty("Bypass", false)) == hostBypass;
+            const bool newEmpty = newState.privateSection && !newState.privateData.isValid();
+            std::cout << (opensBypassed == bypass && sameBytes && oldFlag && newEmpty ? "PASS " : "FAIL ")
+                      << "0.5.3 project, BYPASS " << (bypass ? "on " : "off") << ", DAW bypass " << (hostBypass ? "on " : "off")
+                      << ": opens with BYPASS " << (opensBypassed ? "on" : "off") << "; SHIFTY's state "
+                      << (sameBytes ? "byte-identical" : "DIFFERENT") << " (" << pluginState.getSize() << " bytes); JUCE private block "
+                      << oldState.privateData.toXmlString().replace("\n", " ").trim() << " -> "
+                      << (newState.privateData.isValid() ? newState.privateData.toXmlString().replace("\n", " ").trim() : juce::String("empty"))
+                      << (hostBypass && !bypass ? "  (the 0.5.3 wrapper's separate DAW bypass is not read: opens active)" : "") << "\n";
+            ok = ok && opensBypassed == bypass && sameBytes && oldFlag && newEmpty;
+        }
+    std::cout << (ok ? "Bypass state check passed.\n" : "Bypass state check FAILED.\n");
+    return ok ? 0 : 1;
 }
 
 #if JUCE_MAC
@@ -267,6 +405,77 @@ int checkAudioUnitInProcess(const juce::String& componentPath) {
         std::cout << "AU audio vs in-process SHIFTY (TALK, 1 s saw): max |difference| " << difference
                   << ", energy " << energy << (finite ? ", finite" : ", NOT FINITE") << ".\n";
         ok = ok && finite && energy > 1.0 && difference < 1.0e-5;
+    }
+
+    // Since 0.5.4 the host's bypass (kAudioUnitProperty_BypassEffect) is SHIFTY's own Bypass parameter:
+    // setting either sets the other, and the latency stays reported while bypassed.
+    {
+        auto* client = hosted->getAudioUnitClient();
+        AudioUnit au = client != nullptr ? client->getAudioUnitHandle() : nullptr;
+        AudioUnitParameterID bypassId = 0;
+        bool found = false;
+        UInt32 flags = 0;
+        UInt32 listSize = 0;
+        if (au != nullptr && AudioUnitGetPropertyInfo(au, kAudioUnitProperty_ParameterList, kAudioUnitScope_Global, 0, &listSize, nullptr) == noErr) {
+            std::vector<AudioUnitParameterID> list(listSize / sizeof(AudioUnitParameterID));
+            AudioUnitGetProperty(au, kAudioUnitProperty_ParameterList, kAudioUnitScope_Global, 0, list.data(), &listSize);
+            for (const auto id : list) {
+                AudioUnitParameterInfo info {};
+                UInt32 infoSize = sizeof(info);
+                if (AudioUnitGetProperty(au, kAudioUnitProperty_ParameterInfo, kAudioUnitScope_Global, id, &info, &infoSize) != noErr) continue;
+                juce::String name;
+                if ((info.flags & kAudioUnitParameterFlag_HasCFNameString) != 0 && info.cfNameString != nullptr) {
+                    name = juce::String::fromCFString(info.cfNameString);
+                    if ((info.flags & kAudioUnitParameterFlag_CFNameRelease) != 0) CFRelease(info.cfNameString);
+                }
+                if (name == "Bypass") { bypassId = id; flags = info.flags; found = true; }
+            }
+        }
+        const auto property = [au] {
+            UInt32 value = 0, size = sizeof(value);
+            AudioUnitGetProperty(au, kAudioUnitProperty_BypassEffect, kAudioUnitScope_Global, 0, &value, &size);
+            return value != 0;
+        };
+        const auto setProperty = [au](bool on) {
+            UInt32 value = on ? 1 : 0;
+            AudioUnitSetProperty(au, kAudioUnitProperty_BypassEffect, kAudioUnitScope_Global, 0, &value, sizeof(value));
+        };
+        const auto parameter = [au, bypassId] {
+            AudioUnitParameterValue value = 0;
+            AudioUnitGetParameter(au, bypassId, kAudioUnitScope_Global, 0, &value);
+            return value >= 0.5f;
+        };
+        const auto setParameter = [au, bypassId](bool on) { AudioUnitSetParameter(au, bypassId, kAudioUnitScope_Global, 0, on ? 1.0f : 0.0f, 0); };
+        bool oneSwitch = false;
+        int bypassedLatency = -1;
+        if (found) {
+            setProperty(true);
+            const bool hostSets = parameter();
+            setProperty(false);
+            const bool hostClears = !parameter();
+            setParameter(true);
+            const bool pillSets = property();
+            setParameter(false);
+            const bool pillClears = !property();
+            oneSwitch = hostSets && hostClears && pillSets && pillClears;
+            shifty::ShiftyProcessor source;
+            source.setEngine(shifty::EngineMode::classic, false);
+            juce::MemoryBlock pluginState;
+            source.getStateInformation(pluginState);
+            const auto state = auStateWith(hostedState, pluginState);
+            hosted->setStateInformation(state.getData(), static_cast<int>(state.getSize()));
+            setProperty(true);
+            hosted->prepareToPlay(48000.0, 512);
+            bypassedLatency = hosted->getLatencySamples();
+            hosted->releaseResources();
+            setProperty(false);
+        }
+        std::cout << "AU host bypass: " << (found ? "" : "no Bypass parameter; ")
+                  << (oneSwitch ? "kAudioUnitProperty_BypassEffect and SHIFTY's Bypass parameter are one switch"
+                                : "bypass property and Bypass parameter are NOT one switch")
+                  << " (parameter flags 0x" << juce::String::toHexString(static_cast<int>(flags))
+                  << "); CLASSIC latency while bypassed " << bypassedLatency << " samples at 48 kHz.\n";
+        ok = ok && found && oneSwitch && bypassedLatency == 2048;
     }
 
     // Editor opens at the default size.
@@ -428,6 +637,62 @@ private:
     bool menuOpen = false;
 };
 
+/** After a click on RANDOM only the editor holds the keyboard, so no focus ring is drawn round the key
+    (before 0.5.4 a ring stayed, and Return re-fired RANDOM). Compares the band where the ring was drawn,
+    2 to 4 design pixels outside the key, before and after a real click through the window. */
+bool checkNoFocusRingAfterRandom(const juce::File& directory, const juce::File& root) {
+    if (juce::Desktop::getInstance().getDisplays().getPrimaryDisplay() == nullptr) {
+        std::cout << "skip RANDOM focus-ring check (no display)\n";
+        return true;
+    }
+    shifty::ShiftyProcessor processor;
+    processor.setUserDataRootForTesting(root);
+    shifty::ShiftyEditor editor(processor);
+    const auto size = shifty::ShiftyEditor::sizeFor(1.0);
+    editor.setSize(size.x, size.y);
+    juce::Component holder;
+    holder.setSize(editor.getWidth(), editor.getHeight());
+    holder.addAndMakeVisible(editor);
+    holder.setTopLeftPosition(-6000, -6000);
+    holder.addToDesktop(juce::ComponentPeer::windowIsTemporary);
+    holder.setVisible(true);
+    shifty::tests::input::pump(600);
+    auto* random = dynamic_cast<juce::Button*>(findComponent(editor, "Randomize"));
+    bool ok = random != nullptr && holder.getPeer() != nullptr;
+    if (ok) {
+        constexpr float scale = 2.0f;
+        const auto before = editor.createComponentSnapshot(editor.getLocalBounds(), true, scale);
+        const auto name = processor.currentPresetName();
+        shifty::tests::input::click(editor, random->getBounds().getCentre());
+        shifty::tests::input::pump(100);
+        const auto after = editor.createComponentSnapshot(editor.getLocalBounds(), true, scale);
+        const float unit = scale * static_cast<float>(editor.getWidth()) / 1008.0f; // image pixels per design pixel
+        const auto key = random->getBounds().toFloat() * scale;
+        const auto outer = key.expanded(4.5f * unit).getSmallestIntegerContainer().getIntersection(after.getBounds());
+        const auto inner = key.expanded(1.5f * unit);
+        int worst = 0;
+        for (int y = outer.getY(); y < outer.getBottom(); ++y)
+            for (int x = outer.getX(); x < outer.getRight(); ++x) {
+                if (inner.contains(static_cast<float>(x) + 0.5f, static_cast<float>(y) + 0.5f)) continue;
+                const auto a = before.getPixelAt(x, y), b = after.getPixelAt(x, y);
+                worst = std::max({ worst, std::abs(a.getRed() - b.getRed()), std::abs(a.getGreen() - b.getGreen()),
+                                   std::abs(a.getBlue() - b.getBlue()) });
+            }
+        auto* focused = juce::Component::getCurrentlyFocusedComponent();
+        const bool clicked = processor.currentPresetName() == "Random Variation" && name != "Random Variation";
+        const bool written = writePng(after, directory.getChildFile("26-random-clicked.png"));
+        std::cout << (written ? "wrote " : "FAILED ") << directory.getChildFile("26-random-clicked.png").getFullPathName()
+                  << "; RANDOM " << (clicked ? "clicked" : "NOT clicked") << ", keyboard on "
+                  << (focused == &editor ? juce::String("the editor") : focused == nullptr ? juce::String("nothing") : "'" + focused->getName() + "'")
+                  << ", largest change in the ring band " << worst << "/255 (no ring: at most 24).\n";
+        ok = written && clicked && focused == &editor && !random->hasKeyboardFocus(true) && worst <= 24;
+    }
+    holder.removeFromDesktop();
+    holder.removeChildComponent(&editor);
+    std::cout << (ok ? "No focus ring after clicking RANDOM.\n" : "FAIL: focus ring check after clicking RANDOM.\n");
+    return ok;
+}
+
 int renderGallery(const juce::File& directory) {
     juce::ScopedJuceInitialiser_GUI gui;
     using shifty::EngineMode;
@@ -528,6 +793,7 @@ int renderGallery(const juce::File& directory) {
         ok = ok && written;
         processor.releaseResources();
     }
+    ok = checkNoFocusRingAfterRandom(directory, root) && ok;
     root.deleteRecursively();
     return ok ? 0 : 1;
 }
@@ -538,11 +804,34 @@ int main(int argc, char* argv[]) {
         juce::ScopedJuceInitialiser_GUI gui;
         const int original = shifty::tests::runFeatureTests();
         const int redesign = shifty::tests::runRedesignTests();
-        return original == 0 && redesign == 0 ? 0 : 1;
+        const int input = shifty::tests::runEditorInputTests();
+        const int keys = shifty::tests::runHostKeysTests();
+        return original == 0 && redesign == 0 && input == 0 && keys == 0 ? 0 : 1;
     }
+
+    // Host keys alone: the shared check (../shared/Tests/HostKeysTest.h) and SHIFTY's own, in an off-screen window.
+    if (argc == 2 && juce::String::fromUTF8(argv[1]) == "--host-keys") {
+        juce::ScopedJuceInitialiser_GUI gui;
+        return shifty::tests::runHostKeysTests();
+    }
+
+    if (argc == 4 && juce::String::fromUTF8(argv[1]) == "--bypass-state")
+        return checkBypassState(juce::String::fromUTF8(argv[2]), juce::String::fromUTF8(argv[3]));
 
     if (argc == 3 && juce::String::fromUTF8(argv[1]) == "--host-latency")
         return checkVst3HostLatency(juce::String::fromUTF8(argv[2]));
+
+    if (argc == 8 && juce::String::fromUTF8(argv[1]) == "--render-states") {
+        juce::ScopedJuceInitialiser_GUI gui;
+        return shifty::versioncompare::runRenderStates(juce::String::fromUTF8(argv[2]), juce::String::fromUTF8(argv[3]),
+            juce::File(juce::String::fromUTF8(argv[4])), juce::File(juce::String::fromUTF8(argv[5])),
+            juce::String::fromUTF8(argv[6]).getDoubleValue(), juce::File(juce::String::fromUTF8(argv[7])));
+    }
+
+    if (argc == 4 && juce::String::fromUTF8(argv[1]) == "--version-compare") {
+        juce::ScopedJuceInitialiser_GUI gui;
+        return shifty::versioncompare::runVersionCompare(juce::String::fromUTF8(argv[2]), juce::String::fromUTF8(argv[3]));
+    }
 
     if (argc == 4 && juce::String::fromUTF8(argv[1]) == "--compat") {
         juce::ScopedJuceInitialiser_GUI gui;
@@ -583,6 +872,8 @@ int main(int argc, char* argv[]) {
     if (argc != 2 && !motionOnSnapshot && !vowelOnSnapshot && !infoSnapshot) {
         std::cerr << "Usage: ShiftyEditorSnapshot /absolute/path/to/snapshot.png\n"
                   << "   or: ShiftyEditorSnapshot --feature-tests\n"
+                  << "   or: ShiftyEditorSnapshot --host-keys\n"
+                  << "   or: ShiftyEditorSnapshot --bypass-state /absolute/path/to/0.5.3/SHIFTY.vst3 /absolute/path/to/SHIFTY.vst3\n"
                   << "   or: ShiftyEditorSnapshot --motion-on /absolute/path/to/snapshot.png\n"
                   << "   or: ShiftyEditorSnapshot --vowel-on /absolute/path/to/snapshot.png\n"
                   << "   or: ShiftyEditorSnapshot --info /absolute/path/to/snapshot.png\n"

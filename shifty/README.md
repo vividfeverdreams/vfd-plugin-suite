@@ -1,12 +1,21 @@
-# SHIFTY 0.5.3
+# SHIFTY 0.5.4
 
 SHIFTY is a formant effect for bass. It changes the "mouth" of a sound (its resonances: bigger and darker, or smaller and brighter, or a different vowel) while the notes stay where they are. Put it after a bass synth or on an audio track. It accepts mono or stereo audio and makes no sound on its own.
 
 This build is a **VST3 and Audio Unit (AU) effect for Apple Silicon Macs running macOS 12 or later**.
 
+## What's new in 0.5.4
+
+- **Your DAW keeps its keys.** While SHIFTY is open, space (play/stop), Return, Tab, letters (Live's computer MIDI keyboard) and every shortcut, Cmd-Z and Shift-Cmd-Z included, go to your DAW, also after you click a knob or key. Only a text field you are typing in keeps the keyboard. SHIFTY's own **UNDO** and **REDO** keys still undo its changes. Clicks no longer leave focus outlines, and Return no longer repeats the last key you clicked.
+- **Arrow keys browse presets.** On any page, ← or ↑ loads the previous preset and → or ↓ the next, through the **PRESETS** list as it is filtered (tab, folder and search) and in its order, wrapping at the ends. The list's highlight follows. Each step is one UNDO step. With Shift, Cmd, Alt or Ctrl the arrows go to your DAW. Return no longer loads a row: double-click it, or use the arrows.
+- **Your DAW's bypass is SHIFTY's BYPASS.** They are one switch now, so the BYPASS key lights when you bypass SHIFTY in the DAW, and the other way round. Bypass passes the input at the reported latency, as before. VST3 hosts list 29 parameters: the extra "Bypass" the VST3 format used to add is gone. Projects open with their BYPASS setting.
+- **Typed values understand units and vowels.** Type `1 s`, `250ms` or `0.5 s` into a time, `AH` into the vowel, `1.2 kHz`, `-3 dB` or `50%`. Text that isn't a value changes nothing. Tooltips name controls in plain English.
+- **The preset list scrolls by the distance you scroll.** A trackpad moves it smoothly instead of racing to the end; a wheel notch moves one row (three on Windows and Linux). Sideways swipes leave it alone.
+- **Only saved presets can be favourites.** After RANDOM the star on SOUND is dimmed, and its tooltip says to save the sound first.
+
 ## What's new in 0.5.3
 
-- **RANDOM picks the engine too.** Each RANDOM can land on TALK, MOUTH or CLASSIC, so it no longer gets stuck on an engine that barely touches your sound (CLASSIC on a plain saw, for example). Your DAW is told the new latency at once, as with a preset, and UNDO brings back the previous engine. To keep the engine, right-click the TALK / MOUTH / CLASSIC selector and choose **Lock for randomization** (or use **LOCKS**); a padlock then shows beside the selector.
+- **RANDOM picks the engine too.** Each RANDOM can land on TALK, MOUTH or CLASSIC, so it no longer gets stuck on an engine that barely touches your sound (CLASSIC on a plain saw, for example). Your DAW is told the new latency at once, as with a preset, and UNDO brings back the previous engine. To keep the engine, right-click the TALK / MOUTH / CLASSIC selector and choose **Lock** (or use **LOCKS**); a padlock then shows beside the selector.
 - **VOWEL COLOR is no longer locked out of RANDOM.** Without it, CLASSIC has nothing to move on a plain synth, so RANDOM in CLASSIC turns it on three times in four. Projects whose locks you never changed get the new defaults; locks you chose yourself are kept.
 - **Random preset.** The die beside the **PRESETS** heading loads a random preset from the list as it is shown: tab, folder and search all count, so pick a folder first for a random sound from it. It never reloads the current preset and, from all folders, skips the 24 original 0.4.2 sounds (they barely change a plain synth; choose the **Classic** folder to roll among them). UNDO returns to the previous sound.
 
@@ -62,7 +71,7 @@ A plain sawtooth has no resonances of its own, so CLASSIC and MOUTH change it on
 | **MIX** | Dry/wet. 100% gives the clearest effect. | Same. | Same. |
 | **SUB SAFE** + frequency | Keeps everything below the frequency (60–200 Hz) untouched, through a phase-matched crossover. | Same. | Restores the original lows inside the engine, as in 0.4. |
 | **OUTPUT** | Final level, −24 to +6 dB. | Same. | Same. |
-| **BYPASS** | Passes the input, keeping the reported latency. | Same. | Same. |
+| **BYPASS** | Passes the input, keeping the reported latency. It is also your DAW's bypass. | Same. | Same. |
 
 On the **VOICE** page:
 
@@ -103,11 +112,11 @@ ENV and YOI need the latest engines. They do nothing on the original 0.4.2 sound
 
 ## Make quick variations
 
-**RANDOM** creates a new variation from every unlocked parameter. Its ranges favour useful sounds: SHIFT stays at least 2 st from zero, MIX stays between 70% and 100%, and so on. RANDOM also picks the engine (TALK, MOUTH or CLASSIC). **OUTPUT** and **BYPASS** start locked. Click a padlock beside a main knob, right-click any control (including the engine selector), or open **LOCKS** to choose what RANDOM may change. UNDO brings back the previous sound.
+**RANDOM** creates a new variation from every unlocked parameter. Its ranges favour useful sounds: SHIFT stays at least 2 st from zero, MIX stays between 70% and 100%, and so on. RANDOM also picks the engine (TALK, MOUTH or CLASSIC). **OUTPUT** and **BYPASS** start locked. Click a padlock beside a main knob, right-click any control (including the engine selector), or open **LOCKS** to choose what RANDOM may change. A locked control also keeps its value when you change presets (list, arrows or die), and a locked engine keeps its engine and latency; UNDO and reopening a project still restore everything exactly. UNDO brings back the previous sound.
 
 ## Presets
 
-**PRESETS** lists factory and user sounds. Use **FACTORY / USER / FAV** and the folder menu to filter, and the search box to find a name. Double-click a row (or select it and press Return) to load it. Click the star column, or the star on SOUND, to mark a favourite. Click the **die** beside the PRESETS heading to load a random preset from the list as filtered (it skips the original 0.4.2 sounds unless you are in the Classic folder).
+**PRESETS** lists factory and user sounds. Use **FACTORY / USER / FAV** and the folder menu to filter, and the search box to find a name. Double-click a row to load it, or use the arrow keys on any page: ← ↑ previous, → ↓ next, through the list as filtered. Click the star column, or the star on SOUND, to mark a favourite (save a RANDOM variation first). Click the **die** beside the PRESETS heading to load a random preset from the list as filtered (it skips the original 0.4.2 sounds unless you are in the Classic folder).
 
 | Folder | Sounds | What's in it |
 | --- | --- | --- |
@@ -157,7 +166,7 @@ cmake -S . -B build -DJUCE_SOURCE_DIR=/absolute/path/to/JUCE -DCMAKE_BUILD_TYPE=
 cmake --build build --target Shifty_VST3 Shifty_AU --parallel 4
 ```
 
-The plug-ins are `build/Shifty_artefacts/Release/VST3/SHIFTY.vst3` and `build/Shifty_artefacts/Release/AU/SHIFTY.component`. The AU identity is type `aufx`, subtype `Shf1`, manufacturer `Yoib`, bundle ID `com.yoiboi.shifty`. The build does not install anything. Pass version `0.5.1` to the installer build script.
+The plug-ins are `build/Shifty_artefacts/Release/VST3/SHIFTY.vst3` and `build/Shifty_artefacts/Release/AU/SHIFTY.component`. The AU identity is type `aufx`, subtype `Shf1`, manufacturer `Yoib`, bundle ID `com.yoiboi.shifty`. The build does not install anything. Pass version `0.5.4` to the installer build script.
 
 The editor's shell art, `Assets/DeviceShell-editor.png`, and its glow mask, `Assets/ShellGlow.png`, are baked from the generated device photo `Assets/DeviceShell-fullbleed.png`. To rebuild them (Python 3 with numpy and Pillow):
 
@@ -169,9 +178,11 @@ Test targets: `ShiftyDspTests`, `ShiftyImpactTests` and `ShiftyEditorSnapshot`:
 
 | Command | What it checks |
 | --- | --- |
-| `ShiftyEditorSnapshot --feature-tests` | Parameters, presets, undo, Motion, bypass, engines, ENV/YOI, folders, size. |
+| `ShiftyEditorSnapshot --feature-tests` | Parameters, presets, undo, Motion, bypass, engines, ENV/YOI, folders, size, typed values, the preset list's wheel and star, arrow browsing, and the host-keys run. |
+| `ShiftyEditorSnapshot --host-keys` | Host keys in an off-screen window: only the plain arrows (presets) and a field being typed in keep keys; space, Return, Tab, letters and Cmd-Z reach the host. Needs a display. |
+| `ShiftyEditorSnapshot --bypass-state <0.5.3 SHIFTY.vst3> <new SHIFTY.vst3>` | 0.5.3 projects open with their BYPASS, SHIFTY's state bytes are unchanged, and the host bypass is SHIFTY's own. |
 | `ShiftyEditorSnapshot --compat <0.4.2 SHIFTY.vst3> <new SHIFTY.vst3>` | Old projects render as before. |
 | `ShiftyEditorSnapshot --preset-audit` | Every factory preset on three test sounds. |
 | `ShiftyEditorSnapshot --host-latency <SHIFTY.vst3>` | Latency per engine and the parameter list, through the VST3. |
 | `ShiftyEditorSnapshot --au <SHIFTY.component>` | The AU from the build folder, without installing it. |
-| `ShiftyEditorSnapshot --gallery <folder>` | Renders every page and state as PNGs, including the glow at low and high SHIFT and bypassed. |
+| `ShiftyEditorSnapshot --gallery <folder>` | Renders every page and state as PNGs, including the glow at low and high SHIFT and bypassed, and checks that clicking RANDOM leaves no focus ring. |
