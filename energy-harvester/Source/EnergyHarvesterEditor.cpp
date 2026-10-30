@@ -16,7 +16,7 @@ constexpr int viewWidth=518,viewHeight=691;
 class HarvestButton final:public juce::Button {
 public:
     explicit HarvestButton(juce::Typeface::Ptr f):Button("HARVEST"),face(f) {
-        setClickingTogglesState(true);setWantsKeyboardFocus(true);setTitle("Harvest");
+        setClickingTogglesState(true);setWantsKeyboardFocus(false);setTitle("Harvest");
         setDescription("Launch the selected mode when switched on. Switch off to rearm.");setTooltip(getDescription());
         setMouseCursor(juce::MouseCursor::PointingHandCursor);
     }
@@ -41,7 +41,7 @@ private:juce::Typeface::Ptr face;
 class ScreenToggle final:public juce::Button {
 public:
     ScreenToggle(const juce::String& name,juce::Typeface::Ptr f,bool mode=false,float textHeight=9.5f):Button(name),face(f),isMode(mode),height(textHeight){
-        setClickingTogglesState(true);setWantsKeyboardFocus(true);setTitle(name);setMouseCursor(juce::MouseCursor::PointingHandCursor);}
+        setClickingTogglesState(true);setWantsKeyboardFocus(false);setTitle(name);setMouseCursor(juce::MouseCursor::PointingHandCursor);}
     juce::String label;   // shown text when it differs from the accessible name
     void paintButton(juce::Graphics& g,bool hover,bool) override {
         auto b=getLocalBounds().toFloat().reduced(1);const bool on=getToggleState();
@@ -217,7 +217,7 @@ void drawDie(juce::Graphics& g,juce::Rectangle<float> face,juce::Colour colour) 
 // Small flat text key used on the title plate's preset strip.
 class PlateKey final:public juce::Button {
 public:
-    PlateKey(const juce::String& name,juce::Typeface::Ptr f,juce::String text):Button(name),label(std::move(text)),face(f){setWantsKeyboardFocus(true);setTitle(name);setMouseCursor(juce::MouseCursor::PointingHandCursor);}
+    PlateKey(const juce::String& name,juce::Typeface::Ptr f,juce::String text):Button(name),label(std::move(text)),face(f){setWantsKeyboardFocus(false);setTitle(name);setMouseCursor(juce::MouseCursor::PointingHandCursor);}
     juce::String label;bool field=false,die=false;
     void paintButton(juce::Graphics& g,bool hover,bool down) override {
         auto b=getLocalBounds().toFloat().reduced(.5f);
@@ -327,7 +327,7 @@ public:
         const char* names[]{"PANNING","CHORUS","PHASER","FLANGER","WASHOUT"};const char* ids[]{"fxPan","fxChorus","fxPhaser","fxFlanger","fxWashout"};
         for(int i=0;i<5;++i){auto b=std::make_unique<ScreenToggle>(names[i],normal);b->setBounds(120+i*64,150,60,28);b->setExplicitFocusOrder(i+1);b->setTooltip(juce::String("Include ")+names[i]+" in the spin. FX Amount controls every selected effect.");addAndMakeVisible(*b);effectAttachments[size_t(i)]=std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(p.apvts,ids[i],*b);effectButtons[size_t(i)]=std::move(b);}
         // MODE page: the five gestures as display keys.
-        const char* modeLabels[]{"START","STOP","BRAKE","STOP>GO","REWIND"};
+        const char* modeLabels[]{"START","STOP","BRAKE","STOP>START","REWIND"};
         const char* modeTips[]{"Tape Start: rise from below speed to the original pitch.","Tape Stop: power down to silence; stays silent while HARVEST is on.",
             "Brake: a turntable brake with constant deceleration to a stop.","Stop > Start: stop over the first half, restart over the second.","Rewind: brake, spin backwards and snap back at the end."};
         std::vector<ScreenToggle*> modeRaw;
@@ -357,7 +357,7 @@ public:
         fx.setTooltip("Intensity of every selected screen effect. Zero keeps the basic tape gesture.");
         outputLook.face=normal;addAndMakeVisible(output);output.setName("OUTPUT");output.setTitle("Output Level");
         output.setSliderStyle(juce::Slider::RotaryHorizontalVerticalDrag);output.setTextBoxStyle(juce::Slider::TextBoxBelow,false,80,22);
-        output.setLookAndFeel(&outputLook);output.setBounds(115,598,88,90);output.setWantsKeyboardFocus(true);output.setExplicitFocusOrder(10);
+        output.setLookAndFeel(&outputLook);output.setBounds(115,598,88,90);output.setWantsKeyboardFocus(false);output.setExplicitFocusOrder(10);
         output.setRotaryParameters(juce::MathConstants<float>::pi*1.25f,juce::MathConstants<float>::pi*2.75f,true);
         output.setMouseDragSensitivity(220);output.setVelocityBasedMode(false);output.setVelocityModeParameters(1,1,0,false);
         outputAttachment=std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(p.apvts,"outputDb",output);
@@ -385,7 +385,7 @@ public:
     void configureSlider(juce::Slider& s,const char* name,int order) {
         s.setName(name);s.setTitle(name);s.setSliderStyle(juce::Slider::LinearHorizontal);
         s.setTextBoxStyle(juce::Slider::TextBoxRight,false,74,30);s.setLookAndFeel(&look);
-        s.setWantsKeyboardFocus(true);s.setExplicitFocusOrder(order);s.setVelocityBasedMode(false);
+        s.setWantsKeyboardFocus(false);s.setExplicitFocusOrder(order);s.setVelocityBasedMode(false);
         addAndMakeVisible(s);
     }
     // Deterministic frame for tests and screenshots: settle the lights for the current processor state, then
@@ -592,10 +592,21 @@ EnergyHarvesterEditor::EnergyHarvesterEditor(EnergyHarvesterProcessor& p):AudioP
     int scale=p.uiScale;const auto area=canvas->availableArea();
     if(!HarvestCanvas::fits(scale,area)){scale=EnergyHarvesterProcessor::uiScales.front();for(int v:EnergyHarvesterProcessor::uiScales)if(HarvestCanvas::fits(v,area))scale=v;}
     setSize(viewWidth*scale/100,viewHeight*scale/100);
+    restoringSize=false;
+    hostKeys.apply();
 }
 EnergyHarvesterEditor::~EnergyHarvesterEditor()=default;
 void EnergyHarvesterEditor::resized(){if(canvas){canvas->setBounds(0,0,560,720);
-    canvas->setTransform(juce::AffineTransform::translation(-viewport.getX(),-viewport.getY()).scaled(float(getWidth())/viewWidth));}}
+    canvas->setTransform(juce::AffineTransform::translation(-viewport.getX(),-viewport.getY()).scaled(float(getWidth())/viewWidth));
+    if(!restoringSize){
+        const double scale=100.0*getWidth()/viewWidth;
+        const auto& scales=EnergyHarvesterProcessor::uiScales;
+        const int nearest=*std::min_element(scales.begin(),scales.end(),[scale](int a,int b){return std::abs(a-scale)<std::abs(b-scale);});
+        if(canvas->processor.uiScale.exchange(nearest)!=nearest)
+            canvas->processor.updateHostDisplay(juce::AudioProcessor::ChangeDetails().withNonParameterStateChanged(true));
+    }
+}}
+void EnergyHarvesterEditor::stepPreset(int direction){canvas->stepPreset(direction);}
 void EnergyHarvesterEditor::previewTime(double t){canvas->preview(t);}
 void EnergyHarvesterEditor::stepAnimationForTesting(double seconds){canvas->step(seconds);}
 double EnergyHarvesterEditor::measureAnimationPaint(){return canvas->measureAnimationPaint();}

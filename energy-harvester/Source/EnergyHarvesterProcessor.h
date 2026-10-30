@@ -48,7 +48,7 @@ public:
     // off the message thread while the editor reads the label.
     std::pair<juce::String,juce::String> presetLabel() const { const juce::ScopedLock lock(presetLock); return {presetFolder,presetName}; }
     void setPresetLabel(const juce::String& folder,const juce::String& name) { const juce::ScopedLock lock(presetLock); presetFolder=folder; presetName=name; }
-    // Applies a complete preset on the message thread as host-visible, undoable gestures. HARVEST is never touched.
+    // Applies a preset as host-visible, undoable gestures. HARVEST and the project's Latest Sound are kept.
     void applyPreset(const std::map<juce::String,float>& values,const juce::String& folder,const juce::String& name);
     std::map<juce::String,float> currentValues() const;
 private:

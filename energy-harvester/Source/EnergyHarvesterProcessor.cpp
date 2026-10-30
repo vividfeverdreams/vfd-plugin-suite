@@ -275,9 +275,10 @@ std::map<juce::String,float> EnergyHarvesterProcessor::currentValues() const {
     return values;
 }
 void EnergyHarvesterProcessor::applyPreset(const std::map<juce::String,float>& values,const juce::String& folder,const juce::String& name) {
-    // Every control except HARVEST moves to the preset (missing ones to their defaults) as host-visible gestures,
-    // so the host can undo the whole change. HARVEST is a performance switch and is never touched by presets.
+    // HARVEST is a performance switch; Latest Sound belongs to the project, even if stored in a preset.
+    // Everything else moves to the preset (missing values to defaults) as the same host-visible gestures.
     for(size_t i=1;i<ids.size();++i) {
+        if(juce::StringRef(ids[i])==juce::StringRef("latestSound"))continue;
         auto* parameter=parameters_[i];
         const auto found=values.find(ids[i]);
         const float value=found!=values.end()&&std::isfinite(found->second)?found->second:defaults[i];

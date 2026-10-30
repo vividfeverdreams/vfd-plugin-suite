@@ -1,3 +1,10 @@
+# 0.4.4 — host keys, window size and project sound
+
+- EH-F1: plain Left/Up and Right/Down keys use the title plate's previous/next preset path, including user presets and wrap-around. Controls cannot take keyboard focus; other keys and modified arrows reach the host. Typing a value keeps the keyboard until a click elsewhere. OUTPUT's Shift-drag fine adjustment is unchanged.
+- EH-F2: dragging the window corner saves the nearest existing scale (90/100/125/150 %) with the project, restored when reopening.
+- EH-F3: loading any preset preserves the project's Latest Sound / original-sound choice, even if a preset stores a conflicting choice. All other preset values, including OUTPUT, still apply; HARVEST remains untouched. Saved project formats and parameter identities are unchanged.
+- EH-F4: the mode key now reads STOP>START, matching STOP > START on the LCD.
+
 # 0.4.3 — random preset
 
 - A die on the title plate's preset strip, between ▶ and SAVE, loads a random preset: any factory or user preset the browser lists, never the one already loaded. It loads exactly like a pick from the browser (one undoable change for the host, HARVEST untouched), and ◀ ▶ carry on from it.

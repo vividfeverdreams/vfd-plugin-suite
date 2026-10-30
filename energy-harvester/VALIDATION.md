@@ -1,3 +1,31 @@
+# ENERGY HARVESTER 0.4.4 / suite 1.6.2 handoff — 21 October 2026
+
+EH-F1–F4 are implemented. All targets built incrementally in the existing `build/`, using its existing `external/JUCE` (9.0.2), Command Line Tools and the supplied CMake. VST3 and AU report 0.4.4 and passed the build's ad hoc signature verification. No installation, DAW, speaker playback, system-wide scan, commit or branch change was performed. No shared or sibling plug-in files were edited.
+
+## Results obtained before the coordinator's GUI stop
+
+- `ctest --test-dir build --output-on-failure`: five reported passes out of six, with an important skip. EnergyDSP: **38 PASS** groups. EnergyHostState: **103 PASS**, including three resize checks and two preset-sound checks (all 56 factory presets, conflicting user values and absent sound-version values, in both sound versions). EnergyVst3Automation: **32 PASS**. EnergyCompat032: **5 PASS**, each 288,000/288,000 samples bit-identical to 0.3.2. EnergyHostKeys: **skipped, no display**, zero keyboard assertions executed. EnergyAuValidation: **4 PASS, 1 FAIL**, stopped because `AudioComponentRegister` returned null; no AU rendering checks executed in this run.
+- `build/EnergyHostTests_artefacts/Release/EnergyHostTests "$PWD/build/suite-1.6.2-gui-qa"`: **185 PASS**, exit 0. Off-screen screenshots and WAV fixtures were written under `build/` without playing audio. Inspected the ready and MODE-page PNGs; STOP>START fits its key.
+- `python3 shared/tools/check_text_literals.py` from the repository root: passed. `git diff --check -- energy-harvester`: passed.
+- **pluginval not run (sandbox)**: prior startup attempts (`--help` and strictness 5 on this VST3 only) aborted before validation, SIGABRT in HIServices `_RegisterApplication` / `NSApplication` startup. They produced no validation results.
+
+The coordinator subsequently instructed that no GUI-initialised program be launched from this sandbox, including host tests and snapshot apps. All launched processes had exited before that instruction; no further such runs were made. The host-keys checks and full AU validation remain unverified here. Obsidian refresh/save was not performed because the vault is outside the permitted write roots and this task restricts all edits to `energy-harvester/`; this dated handoff preserves the outcome locally.
+
+## Commands for Claude outside the sandbox
+
+Run from `work/energy-harvester/`. The full CTest run includes DSP, host state, host keys, VST3 automation, in-process AU and 0.3.2 compatibility. The other commands make the GUI follow-up explicit. The host-keys app uses the shared test header with the real processor/editor, a real click to enter OUTPUT, four safe control spots, INFO, the full factory/user bank and all 16 modified-arrow combinations.
+
+```sh
+ctest --test-dir build --output-on-failure
+build/EnergyHostTests_artefacts/Release/EnergyHostTests --host-keys
+build/EnergyHostTests_artefacts/Release/EnergyHostTests "$PWD/build/suite-1.6.2-gui-qa"
+build/EnergyVstAutomation_artefacts/Release/EnergyVstAutomation "$PWD/build/EnergyHarvester_artefacts/Release/VST3/ENERGY HARVESTER.vst3"
+build/EnergyAuValidation "$PWD/build/EnergyHarvester_artefacts/Release/AU/ENERGY HARVESTER.component"
+pluginval --strictness-level 5 --validate "$PWD/build/EnergyHarvester_artefacts/Release/VST3/ENERGY HARVESTER.vst3"
+```
+
+Evidence: `build/suite-1.6.2-build-final.log`, `build/suite-1.6.2-ctest.log`, `build/Testing/Temporary/LastTest.log`, `build/suite-1.6.2-gui-qa.log` and `build/suite-1.6.2-gui-qa/`. The empty pluginval log is not evidence of a pass. Earlier validation below is historical.
+
 # ENERGY HARVESTER 0.4.0 validation
 
 5 October 2026, Apple M1 Pro / macOS 14.5, Release arm64 VST3 and AU, built locally and ad hoc signed. Nothing was installed into the real plug-in folders or the real preset folder. Tests use a temporary preset folder, and pluginval ran with HOME pointed at a scratch folder.

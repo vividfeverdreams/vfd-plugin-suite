@@ -1,10 +1,10 @@
-# ENERGY HARVESTER 0.4.3
+# ENERGY HARVESTER 0.4.4
 
 A tape-gesture effect for bass music: tape starts, tape stops, turntable brakes, stop-and-restart stutters and rewinds. Each gesture can land exactly on the beat, and five screen effects can join it. Plasma-pink hardware interface, with a light show that follows the tape.
 
 Apple Silicon, macOS 12+, VST3 and Audio Unit (and VST3 on Windows, from the suite). Works on matching mono or stereo tracks. No MIDI is used. The only network access is the INFO page's suite update check (GitHub, at most once a day while the window is open; see the suite README).
 
-**New in 0.4.3:** a die on the preset strip loads a random preset. (0.4.2: tooltips stay fully inside the device and wrap between words, and INFO shows the suite version and offers updates.)
+**New in 0.4.4:** plain arrow keys browse presets while other keys reach your host; drag-resized windows remember their nearest size; preset loads keep the project's Latest Sound choice; the stop-and-restart mode is labelled STOP > START throughout. The preset strip's die still loads a random preset.
 
 ## Use
 
@@ -19,7 +19,7 @@ Insert ENERGY HARVESTER on a track and switch HARVEST on (or automate it) to lau
 - **START** rises from below speed to the original pitch. This is the original effect.
 - **STOP** powers the tape down to silence. It stays silent while HARVEST is on and returns to the dry signal when you switch it off.
 - **BRAKE** is a turntable brake: constant deceleration to a stop, brighter and louder than STOP.
-- **STOP>GO** stops over the first half of the length and restarts over the second.
+- **STOP>START** stops over the first half of the length and restarts over the second.
 - **REWIND** brakes through standstill into a backspin up to three times normal speed, then snaps back to the live signal at the end.
 
 The stop, brake and rewind gestures use a varispeed deck that plays back what the track has just played (up to 16 seconds).
@@ -47,18 +47,19 @@ A launch keeps the length, mode, engine, curve, depth and landing it started wit
 
 **Presets.** The strip on the title plate shows the current preset:
 - ◀ and ▶ step through all presets; clicking the name opens the browser.
+- Plain Left/Up and Right/Down keys follow the same previous/next order and wrap around: factory presets first, then user presets. Modified arrows reach the host.
 - The die beside ▶ loads a random preset, factory or user, never the one already loaded. It loads like any other pick, so the host can undo it.
 - There are 56 factory presets in 10 folders: Tape Starts, Tape Stops, Brakes, Rewinds, Power-Ups, Risers, Drops, Washouts, Lo-Fi and Grid-Locked. See PRESETS.md.
 - SAVE stores the current settings as a user preset in `~/Library/Application Support/ENERGY HARVESTER/Presets/<Folder>/`. Pick an existing folder or type a new one.
 - Saving never overwrites an existing file; a taken name gets a number.
-- Loading a preset never touches HARVEST, and the host can undo it.
+- Loading a preset keeps HARVEST and the project's Latest Sound choice, and the host can undo it. All other controls, including OUTPUT, follow the preset.
 
 **Holding, saving and recall.**
 - Saving or reopening a project with HARVEST on restores clean audio without launching. A STOP that was resting in silence comes back playing clean until you switch HARVEST off and on again.
 - Starting playback, seeking or wrapping a loop never manufactures a launch. Put an OFF point before an ON point when you want the gesture at the start of a bounce or loop.
 - Host bypass is separate from HARVEST. Bypass, transport changes and recalls during a gesture fade over 5 ms instead of clicking.
 
-**Other controls.** Right-click the shell for Reduced Motion and the size menu: 90 %, 100 %, 125 % or 150 %. Sizes that don't fit your display are greyed out. INFO opens the shared Vivid Fever Dreams credits; Escape closes it. Tab reaches the controls and Space activates the focused one. Every control has a tooltip.
+**Other controls.** Right-click the shell for Reduced Motion and the size menu: 90 %, 100 %, 125 % or 150 %. Dragging the window corner saves the nearest of these sizes with the project. Sizes that don't fit your display are greyed out. INFO opens the shared Vivid Fever Dreams credits; Escape closes it. Plain arrows browse presets while the window is focused. Space, Return, Tab, letters and shortcuts (including undo/redo) reach the host. Only a field being typed in or an open menu takes the keyboard; click elsewhere to leave a field. Every control has a tooltip.
 
 ## Projects from earlier versions: Latest Sound
 
@@ -96,7 +97,7 @@ The VST3 and AU appear in `energy-harvester/build/EnergyHarvester_artefacts/Rele
 | Program | What it does |
 |---|---|
 | `EnergyDspTests` | Engine and effect checks, including the 0.4.0 feature suite. |
-| `EnergyHostTests` | State, migration, presets, grid and editor checks. Given a folder, it also writes screenshots, animation frames and demo WAVs. `--render-presets <folder>` writes one WAV per factory preset. `--spin-frames <folder> [mode]` renders the editor at 30 fps through one gesture (mode 0–4). |
+| `EnergyHostTests` | State, migration, presets, grid and editor checks. `--host-keys` runs the shared host-keys checks on the processor's real editor, plus all four arrow directions, factory/user wrap-around and modified arrows (also registered as CTest `EnergyHostKeys`; needs a display). Given a folder, it also writes screenshots, animation frames and demo WAVs. `--render-presets <folder>` writes one WAV per factory preset. `--spin-frames <folder> [mode]` renders the editor at 30 fps through one gesture (mode 0–4). |
 | `EnergyVstAutomation` | Drives the built VST3 through its real wrapper. `--compat <0.3.2 bundle> <new bundle>` checks that a state saved by the shipped 0.3.2 plug-in renders the same. |
 | `EnergyAuValidation` | Registers the built AU in-process (nothing installed) and runs auval-style checks. |
 

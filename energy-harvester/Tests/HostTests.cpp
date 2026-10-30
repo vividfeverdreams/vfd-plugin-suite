@@ -14,6 +14,8 @@
 #include <map>
 #include <functional>
 
+int runEnergyHostKeys();
+
 static void check(bool ok,const char* message){if(!ok)throw std::runtime_error(message);std::cout<<"PASS "<<message<<'\n';}
 static void set(EnergyHarvesterProcessor& p,const char* id,float value){auto* v=p.apvts.getParameter(id);v->setValueNotifyingHost(v->convertTo0to1(value));}
 static juce::Component* named(juce::Component& p,const char* name){if(p.getName()==name)return &p;for(auto* c:p.getChildren())if(auto* f=named(*c,name))return f;return nullptr;}
@@ -146,6 +148,9 @@ int main(int argc,char** argv){try{
     if(argc>2&&juce::String(argv[1])=="--spin-frames")return spinFrames(juce::File(juce::String::fromUTF8(argv[2])),argc>3?juce::String(argv[3]).getIntValue():0);
     if(argc>2&&juce::String(argv[1])=="--render-presets"){juce::ScopedJuceInitialiser_GUI gui;Verdicts v;renderPresets(juce::File(juce::String::fromUTF8(argv[2])),v);scratchPresets.deleteRecursively();return v.failed?1:0;}
     juce::ScopedJuceInitialiser_GUI gui;EnergyHarvesterProcessor p;
+    if(argc>1&&juce::String(argv[1])=="--host-keys"){
+        const int failures=runEnergyHostKeys();scratchPresets.deleteRecursively();return failures?1:0;
+    }
     {bool original=true;const char* ids[]{"harvest","spinUpMs","fxAmount","fxPan","fxChorus","fxPhaser","fxFlanger","fxWashout","syncMode","syncDivision","outputDb"};
         for(int i=0;i<11;++i)original=original&&dynamic_cast<juce::AudioProcessorParameterWithID*>(p.getParameters()[i])->paramID==ids[i];
         check(p.getParameters().size()==23&&original,"23 controls: the original eleven keep their IDs and order, twelve appended");}
@@ -224,6 +229,30 @@ int main(int argc,char** argv){try{
         // Size: 150 % is new; old sizes keep loading; unknown sizes fall back to 100 %.
         {auto sized=tree(state);sized.setProperty("uiScale",150,nullptr);EnergyHarvesterProcessor big;load(big,sized);sized.setProperty("uiScale",175,nullptr);EnergyHarvesterProcessor odd;load(odd,sized);
             v.check(big.uiScale==150&&odd.uiScale==100,"size 150 % is saved and restored; unknown sizes fall back to 100 %");}
+        // EH-F2: a drag's dimensions are persisted using the existing discrete per-project scales.
+        {EnergyHarvesterProcessor q;bool nearest=true,reopens=true,recalls=true;
+            for(auto [percent,expected]:std::vector<std::pair<int,int>>{{94,90},{109,100},{118,125},{143,150}}){
+                {std::unique_ptr<juce::AudioProcessorEditor> editor(q.createEditor());editor->setSize(518*percent/100,691*percent/100);nearest=nearest&&q.uiScale==expected;}
+                {std::unique_ptr<juce::AudioProcessorEditor> editor(q.createEditor());
+                    // On a smaller display opening may be clamped, but must preserve the project's saved scale.
+                    reopens=reopens&&q.uiScale==expected&&editor->getWidth()<=518*expected/100;
+                    if(expected<=100)reopens=reopens&&editor->getWidth()==518*expected/100&&editor->getHeight()==691*expected/100;}
+                juce::MemoryBlock sized;q.getStateInformation(sized);EnergyHarvesterProcessor again;again.setStateInformation(sized.getData(),int(sized.getSize()));recalls=recalls&&again.uiScale==expected;
+            }
+            v.check(nearest,"EH-F2 drag resize stores the nearest 90/100/125/150 percent scale");
+            v.check(reopens,"EH-F2 reopening restores the saved scale, subject to display fit, without overwriting it");
+            v.check(recalls,"EH-F2 drag-resized scale survives project save and recall");}
+        // EH-F3: presets may carry an absent or conflicting Latest Sound value; it belongs to the project.
+        for(float latest:{0.f,1.f}){EnergyHarvesterProcessor q;set(q,"latestSound",latest);set(q,"harvest",1);bool kept=true,exact=true;
+            auto presets=energy::presets::factory();auto user=presets.front();user.factory=false;user.values=q.currentValues();
+            user.values["latestSound"]=1-latest;user.values["outputDb"]=7.3f;presets.push_back(user);
+            user.values.erase("latestSound");user.values["outputDb"]=-4.2f;presets.push_back(user);
+            for(const auto& preset:presets){q.applyPreset(preset.values,preset.folder,preset.name);
+                kept=kept&&rawOf(q,"latestSound")==latest&&rawOf(q,"harvest")==1;
+                for(int i=1;i<EnergyHarvesterProcessor::parameterCount-1;++i){const auto id=EnergyHarvesterProcessor::parameterId(i);const auto found=preset.values.find(id);
+                    const float expected=found==preset.values.end()?q.parameterDefault(i):found->second;
+                    exact=exact&&std::abs(rawOf(q,id)-q.apvts.getParameter(id)->getNormalisableRange().snapToLegalValue(expected))<.02f;}}
+            v.check(kept&&exact,"EH-F3 all 56 factory presets, conflicting user preset and missing-version preset preserve "+std::string(latest==0?"original":"Latest")+" Sound and HARVEST; all other controls including OUTPUT apply");}
         // Land On Grid: the spin ends exactly on the next beat, bar or two-bar line; no transport means TIME.
         for(auto [grid,ppq,expectedNext]:std::vector<std::tuple<int,double,double>>{{1,2.3,3},{2,2.5,4},{3,2.5,8},{2,5.0,8}}){
             EnergyHarvesterProcessor q;FakeHead head;head.playing=true;q.setPlayHead(&head);q.prepareToPlay(48000,512);set(q,"gridLand",float(grid));
@@ -285,9 +314,9 @@ int main(int argc,char** argv){try{
                 "every listed preset has its own label; a save under a taken name keeps its numbered name in the browser");
             EnergyHarvesterProcessor q;set(q,"harvest",1);EnergyHarvesterEditor editor(q);
             auto* dice=dynamic_cast<juce::Button*>(named(editor,"RANDOM PRESET"));auto* nextKey=named(editor,"NEXT PRESET");auto* saveKey=named(editor,"SAVE PRESET");auto* field=named(editor,"PRESET");
-            v.check(dice&&nextKey&&saveKey&&field&&dice->getTitle()=="RANDOM PRESET"&&dice->getTooltip().isNotEmpty()&&dice->getWantsKeyboardFocus()
+            v.check(dice&&nextKey&&saveKey&&field&&dice->getTitle()=="RANDOM PRESET"&&dice->getTooltip().isNotEmpty()&&!dice->getWantsKeyboardFocus()
                 &&dice->getY()==nextKey->getY()&&dice->getHeight()==nextKey->getHeight()&&dice->getWidth()==nextKey->getWidth()&&field->getRight()<nextKey->getX()&&nextKey->getRight()<dice->getX()&&dice->getRight()<saveKey->getX(),
-                "the die is a focusable, titled key with a tooltip, sized like the arrows, between > and SAVE on the title plate");
+                "the die is a non-focusable, titled key with a tooltip, sized like the arrows, between > and SAVE on the title plate");
             // Host-side view of each click: gestures (the host's undo) and a session change, as for any preset load.
             struct Counts{int begins=0,ends=0,values=0,sessions=0;};
             struct Events final:juce::AudioProcessorListener{Counts n;
