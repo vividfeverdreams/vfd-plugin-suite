@@ -2,7 +2,7 @@
 
 A reverb thrower for mid-basses and left-field bass music by **YOI-BOI**. The giant **THROW** knob adds a separate, fully wet reverb layer over the original dry bass. You can also throw with the **THROW!** key, with MIDI notes, or let **Auto-catch** throw the end of every phrase for you.
 
-Version **0.2.2** · **VST3** and **Audio Unit** · **Apple Silicon** · **macOS 12 or later**
+Version **0.2.3** · **VST3** and **Audio Unit** · **Apple Silicon** · **macOS 12 or later**
 
 ## Your existing projects are safe
 
@@ -97,7 +97,8 @@ The menu has 11 folders of factory rooms, the **0.1.5 rooms (original sound)** f
 
 - **Factory folders:** Small, Medium, Large, Huge, Creative, Synced Throws, Freeze Pads, Shimmer, Swells, Sidechain Pumps and Send FX.
 - **Loading a room** changes only the sound: size, decay, pre-delay and sync, filters, diffusion, motion, width, grit, duck, shimmer, swell, and the sound version. It never changes THROW, Output, Bypass, the trigger settings, Freeze, Safe, Send, Return or the duck source, so your THROW automation keeps running while you audition rooms.
-- **Choosing the current room again** reverts your edits to it. The arrows step through the current folder bank (or the 0.1.5 rooms).
+- **Choosing the current room again** reverts your edits to it. The on-screen arrows and plain keyboard arrows step through the 90 factory rooms, then user presets in menu order, with wrap-around (or just the 50 0.1.5 rooms while one is loaded). Left/Up go back; Right/Down go forward. Unreadable user presets are skipped.
+- **Host keys:** clicking controls leaves Space, Return, Tab, letters and shortcuts (including Cmd-Z and modified arrows) with your DAW. Only a text field being edited or an open menu takes the keyboard. Clicking elsewhere releases a value field.
 - **The dice** (left of the arrows, 0.2.2) loads a random preset: a different room from the factory folders or your user presets. On a 0.1.5 room it picks another 0.1.5 room, like the arrows. It loads exactly as the menu does, so THROW, Output and the rest stay where you set them.
 - **SAVE** saves the current room as a user preset in a folder you choose or create, in `~/Library/Application Support/THROW-UP/Presets/<Folder>/`. THROW-UP never overwrites or edits an existing preset file; saving a name that already exists makes "Name 2".
 - **A / B** keeps two versions of your settings (all except THROW, Output, Bypass and THROW!) so you can compare them. The first switch to B copies A. Both are saved with the project.
@@ -113,6 +114,7 @@ The installer writes only THROW-UP bundles to your user plug-in folders and need
 
 ## Version history
 
+- **0.2.3:** keyboard arrows browse the same bank as the on-screen arrows; other keys reach the DAW. THROW! releases when the editor hides or closes. Project saves safely snapshot preset/A/B metadata from another thread. Existing sound, parameters and state format are unchanged.
 - **0.2.2:** the dice key loads a random preset.
 - **0.2.1:** the Output knob and the INFO page update check.
 - **0.2.0:** everything above.

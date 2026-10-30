@@ -46,14 +46,14 @@ public:
     static void setUserPresetRootForTesting(const juce::File& root);
     juce::File saveUserPreset(const juce::String& folder, const juce::String& name);
     bool loadUserPreset(const juce::File& file);
-    juce::String getUserPresetName() const { return userPresetName; }
+    juce::String getUserPresetName() const;
 
     // A/B compare of every setting except THROW, Output, Bypass and the THROW! key.
-    int getActiveSlot() const { return activeSlot; }
+    int getActiveSlot() const;
     void selectSlot(int slot);
 
     // Editor size (1.0 = 660 x 855), saved with the project; 0 = not chosen yet.
-    float getEditorScale() const { return editorScale; }
+    float getEditorScale() const;
     void setEditorScale(float scale);
 
     float getTriggerLevel() const { return triggerLevel.load(std::memory_order_relaxed); }
@@ -97,7 +97,10 @@ private:
     std::atomic<int> pendingRoom { -1 }, appliedRoom { -1 };
     std::atomic<float> triggerLevel { 0.0f };
     std::atomic<double> hostTempo { 120.0 };
-    // Message-thread state.
+    // Metadata is written by UI/state operations and snapshotted by host save
+    // threads. Never acquired by processBlock/readSettings/handleMidi. Do not
+    // hold it across APVTS calls, file I/O, serialization or host callbacks.
+    mutable juce::CriticalSection metadataLock;
     juce::String userPresetName;
     std::array<juce::ValueTree, 2> slots;
     int activeSlot = 0;

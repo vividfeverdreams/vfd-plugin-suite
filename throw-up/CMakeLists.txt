@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.22)
-project(ThrowUp VERSION 0.2.2 LANGUAGES C CXX)
+project(ThrowUp VERSION 0.2.3 LANGUAGES C CXX)
 if(APPLE)
   enable_language(OBJCXX)
   set(CMAKE_OSX_DEPLOYMENT_TARGET "12.0" CACHE STRING "Minimum macOS version")
@@ -30,7 +30,7 @@ juce_add_plugin(ThrowUp
   AU_MAIN_TYPE kAudioUnitType_MusicEffect
   EDITOR_WANTS_KEYBOARD_FOCUS TRUE NEEDS_CURL TRUE COPY_PLUGIN_AFTER_BUILD FALSE)
 target_sources(ThrowUp PRIVATE Source/ThrowUpProcessor.cpp Source/ThrowUpEditor.cpp Source/ReverbEngine.cpp Source/Presets.cpp)
-target_include_directories(ThrowUp PUBLIC Source PRIVATE ../shared)
+target_include_directories(ThrowUp PUBLIC Source ../shared)
 target_link_libraries(ThrowUp PRIVATE ThrowUpAssets juce::juce_audio_utils juce::juce_dsp
   juce::juce_recommended_config_flags juce::juce_recommended_warning_flags)
 # Linux: https for the INFO page's update check goes through libcurl, loaded only when used.
@@ -80,7 +80,7 @@ if(THROW_UP_BUILD_TESTS)
   # Hosts the built VST3 and AU in-process (the AU is registered for this process
   # only, from the build folder) and the read-only 0.1.5 payload for compatibility.
   target_compile_definitions(ThrowUpHostTests PRIVATE JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0
-    JUCE_PLUGINHOST_VST3=1 JUCE_PLUGINHOST_AU=1)
+    JUCE_PLUGINHOST_VST3=1 JUCE_PLUGINHOST_AU=1 JUCE_MODAL_LOOPS_PERMITTED=1)
   if(APPLE)
     target_link_libraries(ThrowUpHostTests PRIVATE "-framework AudioUnit" "-framework CoreAudioKit")
   endif()

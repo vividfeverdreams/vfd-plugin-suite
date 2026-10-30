@@ -226,7 +226,7 @@ public:
     KeyButton (const juce::String& name, juce::Typeface::Ptr face) : juce::Button (name), typeface (face)
     {
         setMouseCursor (juce::MouseCursor::PointingHandCursor);
-        setWantsKeyboardFocus (true);
+        setWantsKeyboardFocus (false);
     }
     std::function<bool()> ledLit;          // overrides the toggle state for the LED
     std::function<void (bool)> onPress;     // momentary keys: called on press and release
@@ -264,11 +264,27 @@ public:
     void mouseUp (const juce::MouseEvent& e) override
     {
         juce::Button::mouseUp (e);
+        releasePress();
+    }
+    void releasePress()
+    {
         if (onPress && pressedNow) { pressedNow = false; onPress (false); repaint(); }
     }
 private:
     juce::Typeface::Ptr typeface;
     bool pressedNow = false;
+};
+
+// Component::visibilityChanged alone does not report a hidden host parent.
+class ThrowUpEditor::VisibilityWatcher final : private juce::ComponentMovementWatcher
+{
+public:
+    explicit VisibilityWatcher (ThrowUpEditor& e) : ComponentMovementWatcher (&e), editor (e) {}
+private:
+    void componentMovedOrResized (bool, bool) override {}
+    void componentPeerChanged() override { editor.visibilityChanged(); }
+    void componentVisibilityChanged() override { editor.visibilityChanged(); }
+    ThrowUpEditor& editor;
 };
 
 struct ThrowUpEditor::Control
@@ -308,8 +324,10 @@ struct ThrowUpEditor::Control
                 slider.mouseUp (event.getEventRelativeTo (&slider));
                 // A box-style value (Output) opens text entry on a plain click,
                 // once it is clear the click is not the start of a double-click.
-                if (resetOnDoubleClick && ! event.mouseWasDraggedSinceMouseDown())
+                if (resetOnDoubleClick && ! event.mouseWasDraggedSinceMouseDown()) {
+                    clickCounterAtRelease = juce::Desktop::getInstance().getMouseButtonClickCounter();
                     startTimer (juce::MouseEvent::getDoubleClickTimeout());
+                }
             }
             else if (! resetOnDoubleClick) juce::Label::mouseUp (event);
             forwarding = false;
@@ -321,10 +339,13 @@ struct ThrowUpEditor::Control
         }
         void timerCallback() override {
             stopTimer();
-            showEditor();
+            // A second click elsewhere during the double-click delay cancels
+            // the pending edit instead of letting it take focus afterwards.
+            if (clickCounterAtRelease == juce::Desktop::getInstance().getMouseButtonClickCounter()) showEditor();
         }
         juce::Slider& slider;
         bool forwarding = false;
+        int clickCounterAtRelease = 0;
         // When the value label covers the whole control, double-click resets
         // like a knob and a single click types a value.
         bool resetOnDoubleClick = false;
@@ -401,14 +422,16 @@ ThrowUpEditor::ThrowUpEditor (ThrowUpProcessor& p)
     presets->beforePopup = [this] { rebuildPresetMenu(); };
     presets->onChange = [this] {
         const int id = presets->getSelectedId();
-        if (id > 0 && id <= pluginProcessor.getNumPrograms()) pluginProcessor.loadFactoryPreset (id - 1);
+        if (id > 0 && id <= pluginProcessor.getNumPrograms()) selectFactoryPreset (id - 1);
+        // User entries load through their item action (also on re-selection).
+        // Don't load them twice through ComboBox's separate async notification.
         updatePresetDisplay(); repaint();
     };
     addAndMakeVisible (*presets);
     rebuildPresetMenu();
     previous.setName ("Previous preset"); next.setName ("Next preset"); bypass.setName ("Bypass");
-    previous.setTooltip ("Previous factory preset. THROW and Output stay where you set them.");
-    next.setTooltip ("Next factory preset. THROW and Output stay where you set them.");
+    previous.setTooltip ("Previous preset in this bank. THROW and Output stay where you set them.");
+    next.setTooltip ("Next preset in this bank. THROW and Output stay where you set them.");
     previous.onClick = [this] { stepPreset (-1); };
     next.onClick = [this] { stepPreset (1); };
     // The dice key, first in the arrows' cluster. Its face is drawn as a die, so the
@@ -516,11 +539,14 @@ ThrowUpEditor::ThrowUpEditor (ThrowUpProcessor& p)
     showPage (Page::room);
     updateKeys();
     startTimerHz (24);
+    visibilityWatcher = std::make_unique<VisibilityWatcher> (*this);
+    hostKeys.apply();
 }
 
 ThrowUpEditor::~ThrowUpEditor()
 {
     stopTimer();
+    throwKey->releasePress();
     if (dialog != nullptr) {
         // The dialog uses this editor's look-and-feel: detach and close it first.
         dialog->setLookAndFeel (nullptr);
@@ -530,6 +556,11 @@ ThrowUpEditor::~ThrowUpEditor()
     keyAttachments.clear();
     controls.clear();
     setLookAndFeel (nullptr);
+}
+
+void ThrowUpEditor::visibilityChanged()
+{
+    if (! isShowing() && throwKey != nullptr) throwKey->releasePress();
 }
 
 juce::String ThrowUpEditor::valueText (const juce::String& id, double value) const
@@ -1100,22 +1131,45 @@ void ThrowUpEditor::resized()
 
 void ThrowUpEditor::stepPreset (int direction)
 {
-    // Arrows step through the current bank; the 0.1.5 rooms step among themselves.
+    // Both the physical keys and keyboard use the dice bank, in menu order.
+    const auto userName = pluginProcessor.getUserPresetName();
     const int current = pluginProcessor.getCurrentProgram();
-    const int start = current >= throwup::legacyPresetStart() ? throwup::legacyPresetStart() : 0;
-    const int count = current >= throwup::legacyPresetStart() ? throwup::legacyPresetCount : throwup::legacyPresetStart();
-    selectFactoryPreset (start + (current - start + direction + count) % count);
+    if (userName.isEmpty() && current >= throwup::legacyPresetStart()) {
+        selectFactoryPreset (throwup::legacyPresetStart()
+            + (current - throwup::legacyPresetStart() + direction + throwup::legacyPresetCount) % throwup::legacyPresetCount);
+        return;
+    }
+    std::vector<juce::File> files;
+    for (const auto& folder : findUserPresets())
+        for (const auto& file : folder.files) files.push_back (file);
+    const int factoryCount = throwup::legacyPresetStart();
+    const int count = factoryCount + (int) files.size();
+    int position = userName.isEmpty() ? current : -1;
+    for (int i = 0; userName.isNotEmpty() && i < (int) files.size(); ++i)
+        if (userPresetNameOf (files[(size_t) i]) == userName) {
+            if (position < 0) position = factoryCount + i; // project recalls retain the name
+            if (files[(size_t) i] == browsedUserPreset) { position = factoryCount + i; break; }
+        }
+    // Unreadable user files are skipped, just as with the dice.
+    if (position < 0) position = direction > 0 ? count - 1 : 0;
+    for (int attempt = 0; attempt < count; ++attempt) {
+        position = (position + direction + count) % count;
+        if (position < factoryCount) { selectFactoryPreset (position); return; }
+        if (selectUserPreset (files[(size_t) (position - factoryCount)])) return;
+    }
 }
 
 void ThrowUpEditor::selectFactoryPreset (int index)
 {
     pluginProcessor.loadFactoryPreset (index);
+    browsedUserPreset = juce::File();
     updatePresetDisplay(); repaint();
 }
 
 bool ThrowUpEditor::selectUserPreset (const juce::File& file)
 {
     const bool loaded = pluginProcessor.loadUserPreset (file);
+    if (loaded) browsedUserPreset = file;
     updatePresetDisplay(); repaint();
     return loaded;
 }
@@ -1154,7 +1208,8 @@ void ThrowUpEditor::updatePresetDisplay()
     const auto userName = pluginProcessor.getUserPresetName();
     const int shown = userName.isNotEmpty() ? -2 : current;
     // User presets share one key, so compare their names too (dice or A/B from one user preset to another).
-    if (visiblePreset != shown || (userName.isNotEmpty() && presets->getText() != userName)) {
+    if (visiblePreset != shown || (userName.isNotEmpty() ? presets->getText() != userName
+                                                       : presets->getSelectedId() != current + 1)) {
         visiblePreset = shown;
         if (userName.isNotEmpty()) presets->setText (userName, juce::dontSendNotification);
         else presets->setSelectedId (current + 1, juce::dontSendNotification);

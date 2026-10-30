@@ -359,10 +359,13 @@ void ThrowUpProcessor::loadFactoryPreset(int index)
     // those parameters so an automated THROW is never treated as a user edit.
     for (int i = 0; i < roomIds.size(); ++i)
         applyParameter(roomIds[i], values[static_cast<size_t>(i)]);
-    const auto previousProgram = currentProgram.exchange(index);
-    const bool wasUser = userPresetName.isNotEmpty();
-    userPresetName.clear();
-    if (previousProgram != index || wasUser) {
+    bool metadataChanged;
+    {
+        const juce::ScopedLock lock(metadataLock);
+        metadataChanged = currentProgram.exchange(index) != index || userPresetName.isNotEmpty();
+        userPresetName.clear();
+    }
+    if (metadataChanged) {
         // JUCE's VST3 programChanged notification generates a Program gesture and
         // kParamValuesChanged for the entire plugin. A room preset must not tell
         // the DAW to replace THROW automation. Save the changed preset metadata
@@ -418,7 +421,10 @@ juce::File ThrowUpProcessor::saveUserPreset(const juce::String& folder, const ju
         child->setAttribute("value", static_cast<double>(apvts.getRawParameterValue(id)->load()));
     }
     if (!xml.writeTo(file)) return {};
-    userPresetName = name.trim();
+    {
+        const juce::ScopedLock lock(metadataLock);
+        userPresetName = name.trim();
+    }
     updateHostDisplay(juce::AudioProcessorListener::ChangeDetails().withNonParameterStateChanged(true));
     return file;
 }
@@ -440,7 +446,10 @@ bool ThrowUpProcessor::loadUserPreset(const juce::File& file)
     }
     if (!sawVersion && xml->getIntAttribute("schemaVersion", 0) >= presetSchemaVersion)
         applyParameter("soundVersion", 1.0f);
-    userPresetName = xml->getStringAttribute("name", file.getFileNameWithoutExtension());
+    {
+        const juce::ScopedLock lock(metadataLock);
+        userPresetName = xml->getStringAttribute("name", file.getFileNameWithoutExtension());
+    }
     updateHostDisplay(juce::AudioProcessorListener::ChangeDetails().withNonParameterStateChanged(true));
     return true;
 }
@@ -456,7 +465,7 @@ juce::ValueTree ThrowUpProcessor::captureSlot() const
         slot.setProperty(id, ranged->convertFrom0to1(ranged->getValue()), nullptr);
     }
     slot.setProperty("program", currentProgram.load(), nullptr);
-    slot.setProperty("userPreset", userPresetName, nullptr);
+    slot.setProperty("userPreset", getUserPresetName(), nullptr);
     return slot;
 }
 
@@ -468,43 +477,87 @@ void ThrowUpProcessor::applySlot(const juce::ValueTree& slot)
         const auto value = static_cast<float>(slot.getProperty(name));
         if (std::isfinite(value)) applyParameter(name, value);
     }
-    currentProgram.store(juce::jlimit(0, getNumPrograms() - 1, static_cast<int>(slot.getProperty("program", 0))));
-    userPresetName = slot.getProperty("userPreset").toString();
+    {
+        const juce::ScopedLock lock(metadataLock);
+        currentProgram.store(juce::jlimit(0, getNumPrograms() - 1, static_cast<int>(slot.getProperty("program", 0))));
+        userPresetName = slot.getProperty("userPreset").toString();
+    }
 }
 
 void ThrowUpProcessor::selectSlot(int slot)
 {
     slot = juce::jlimit(0, 1, slot);
-    if (slot == activeSlot) return;
-    slots[static_cast<size_t>(activeSlot)] = captureSlot();
-    if (!slots[static_cast<size_t>(slot)].isValid())
-        slots[static_cast<size_t>(slot)] = slots[static_cast<size_t>(activeSlot)].createCopy();
-    activeSlot = slot;
-    applySlot(slots[static_cast<size_t>(slot)]);
+    if (slot == getActiveSlot()) return;
+    const auto captured = captureSlot();
+    juce::ValueTree selected;
+    {
+        const juce::ScopedLock lock(metadataLock);
+        slots[static_cast<size_t>(activeSlot)] = captured;
+        if (!slots[static_cast<size_t>(slot)].isValid())
+            slots[static_cast<size_t>(slot)] = captured.createCopy();
+        activeSlot = slot;
+        selected = slots[static_cast<size_t>(slot)].createCopy();
+    }
+    applySlot(selected);
     updateHostDisplay(juce::AudioProcessorListener::ChangeDetails().withNonParameterStateChanged(true));
 }
 
 void ThrowUpProcessor::setEditorScale(float scale)
 {
     scale = juce::jlimit(0.8f, 1.5f, scale);
-    if (std::abs(scale - editorScale) < 0.001f) return;
-    editorScale = scale;
+    {
+        const juce::ScopedLock lock(metadataLock);
+        if (std::abs(scale - editorScale) < 0.001f) return;
+        editorScale = scale;
+    }
     updateHostDisplay(juce::AudioProcessorListener::ChangeDetails().withNonParameterStateChanged(true));
+}
+
+juce::String ThrowUpProcessor::getUserPresetName() const
+{
+    const juce::ScopedLock lock(metadataLock);
+    return userPresetName;
+}
+
+int ThrowUpProcessor::getActiveSlot() const
+{
+    const juce::ScopedLock lock(metadataLock);
+    return activeSlot;
+}
+
+float ThrowUpProcessor::getEditorScale() const
+{
+    const juce::ScopedLock lock(metadataLock);
+    return editorScale;
 }
 
 void ThrowUpProcessor::getStateInformation(juce::MemoryBlock& data)
 {
+    // Take independent copies before touching APVTS, which has its own lock.
+    // XML work and host callbacks never run under the metadata lock.
+    juce::String savedName;
+    std::array<juce::ValueTree, 2> savedSlots;
+    int savedProgram, savedActiveSlot;
+    float savedScale;
+    {
+        const juce::ScopedLock lock(metadataLock);
+        savedProgram = currentProgram.load();
+        savedName = userPresetName;
+        savedScale = editorScale;
+        savedActiveSlot = activeSlot;
+        for (size_t i = 0; i < slots.size(); ++i) savedSlots[i] = slots[i].createCopy();
+    }
     auto state = apvts.copyState();
-    state.setProperty("factoryProgram", currentProgram.load(), nullptr);
+    state.setProperty("factoryProgram", savedProgram, nullptr);
     state.setProperty("schemaVersion", presetSchemaVersion, nullptr);
-    if (editorScale > 0.0f) state.setProperty("editorScale", editorScale, nullptr);
-    if (userPresetName.isNotEmpty()) state.setProperty("userPreset", userPresetName, nullptr);
+    if (savedScale > 0.0f) state.setProperty("editorScale", savedScale, nullptr);
+    if (savedName.isNotEmpty()) state.setProperty("userPreset", savedName, nullptr);
     // A/B slots live in root properties, not child nodes, so 0.1.5 (which rejects
     // unknown children) can still open a project saved with this version.
-    state.setProperty("activeSlot", activeSlot, nullptr);
-    for (size_t i = 0; i < slots.size(); ++i)
-        if (i != static_cast<size_t>(activeSlot) && slots[i].isValid())
-            state.setProperty(i == 0 ? "slotA" : "slotB", slots[i].toXmlString(juce::XmlElement::TextFormat().singleLine()), nullptr);
+    state.setProperty("activeSlot", savedActiveSlot, nullptr);
+    for (size_t i = 0; i < savedSlots.size(); ++i)
+        if (i != static_cast<size_t>(savedActiveSlot) && savedSlots[i].isValid())
+            state.setProperty(i == 0 ? "slotA" : "slotB", savedSlots[i].toXmlString(juce::XmlElement::TextFormat().singleLine()), nullptr);
     if (auto xml = state.createXml()) copyXmlToBinary(*xml, data);
 }
 
@@ -544,14 +597,18 @@ void ThrowUpProcessor::setStateInformation(const void* data, int size)
         version.setProperty("value", 0.0f, nullptr);
         program = throwup::legacyPresetStart() + juce::jlimit(0, throwup::legacyPresetCount - 1, program);
     }
-    currentProgram.store(juce::jlimit(0, getNumPrograms() - 1, program));
-    userPresetName = loaded.getProperty("userPreset").toString();
-    editorScale = loaded.hasProperty("editorScale") ? juce::jlimit(0.8f, 1.5f, static_cast<float>(loaded.getProperty("editorScale"))) : 0.0f;
-    activeSlot = juce::jlimit(0, 1, static_cast<int>(loaded.getProperty("activeSlot", 0)));
-    for (size_t i = 0; i < slots.size(); ++i) {
-        slots[i] = {};
+    std::array<juce::ValueTree, 2> restoredSlots;
+    for (size_t i = 0; i < restoredSlots.size(); ++i) {
         if (auto slotXml = juce::parseXML(loaded.getProperty(i == 0 ? "slotA" : "slotB").toString()))
-            slots[i] = juce::ValueTree::fromXml(*slotXml);
+            restoredSlots[i] = juce::ValueTree::fromXml(*slotXml);
+    }
+    {
+        const juce::ScopedLock lock(metadataLock);
+        currentProgram.store(juce::jlimit(0, getNumPrograms() - 1, program));
+        userPresetName = loaded.getProperty("userPreset").toString();
+        editorScale = loaded.hasProperty("editorScale") ? juce::jlimit(0.8f, 1.5f, static_cast<float>(loaded.getProperty("editorScale"))) : 0.0f;
+        activeSlot = juce::jlimit(0, 1, static_cast<int>(loaded.getProperty("activeSlot", 0)));
+        slots = std::move(restoredSlots);
     }
     apvts.replaceState(state);
     // State restoration is requested by the host. The format wrapper refreshes

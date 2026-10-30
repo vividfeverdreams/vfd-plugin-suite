@@ -1,5 +1,6 @@
 #pragma once
 #include "ThrowUpProcessor.h"
+#include "VfdHostKeys.h"
 #include <juce_gui_extra/juce_gui_extra.h>
 #include <array>
 #include <memory>
@@ -15,6 +16,9 @@ public:
     void paint (juce::Graphics&) override;
     void resized() override;
     void mouseDown (const juce::MouseEvent&) override;
+    void visibilityChanged() override;
+    std::unique_ptr<juce::ComponentTraverser> createKeyboardFocusTraverser() override
+    { return vfd::HostKeys::createTraverser(); }
 
     // Pages of the top display: room tone, THROW trigger, space effects, mix.
     enum class Page { room = 0, trigger, space, mix };
@@ -43,6 +47,7 @@ private:
     class Skin;
     class PresetBox;
     class KeyButton;
+    class VisibilityWatcher;
     void timerCallback() override;
     void addControl (const char* id, const char* title, const char* tooltip,
                      juce::Rectangle<float> hit, juce::Rectangle<float> value,
@@ -91,5 +96,9 @@ private:
     juce::Component::SafePointer<juce::AlertWindow> dialog; // closed with the editor
     void showDialog (juce::AlertWindow*, std::function<void (int)> onResult);
     bool sizeReady = false;
+    juce::File browsedUserPreset;
+    std::unique_ptr<VisibilityWatcher> visibilityWatcher;
+    // Constructed after the controls, destroyed before them.
+    vfd::HostKeys hostKeys { *this, [this] (int step) { stepPreset (step); } };
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (ThrowUpEditor)
 };

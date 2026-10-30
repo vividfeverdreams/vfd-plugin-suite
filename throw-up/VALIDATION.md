@@ -1,6 +1,41 @@
-# THROW-UP 0.2.0 verification
+# THROW-UP 0.2.3 verification
 
 Native Apple Silicon VST3 and Audio Unit for macOS 12 or later, built with JUCE 9.0.2. Locally ad hoc signed, not Apple-notarized. Nothing was installed into `~/Library` or `/Library` while testing, and the tests never touch the real user-presets folder.
+
+## 0.2.3: host keys, momentary release and project saves (2026-10-21)
+
+- **TU-F1:** the shared `vfd::HostKeys` manages focus. Plain Left/Up load the previous preset; Right/Down load the next. The keyboard and on-screen arrows share `stepPreset`, the same room-loading functions, wrap-around and host gestures. The current bank is 90 factory rooms followed by user files in menu order (sorted folders/files, then loose files). Unreadable files are skipped. A factory 0.1.5 room stays within its 50-room bank. Same-named user files remain distinct while browsing; after project recall the existing saved name locates the first matching user file. Modified arrows and all other host keys pass through. Output text entry releases on an outside click, and a pending edit is cancelled by a click elsewhere before its double-click delay expires. The preset display is restored to the loaded room if an unsolicited ComboBox ID changes it.
+- **TU-F2:** closing or hiding a held THROW! ends the gesture and sets its parameter to zero. A movement/visibility watcher also covers a hidden or detached host parent. A late mouse-up cannot release the gesture twice. Existing project values are not reset when an idle editor closes.
+- **TU-F3:** a metadata lock protects the preset name, A/B trees, active slot and saved size. Saves take independent copies, then use APVTS and serialize outside that lock. Parameter callbacks and host notifications also run outside it. The audio path never takes the lock. Parameter IDs/order/count, DSP, schema and serialized field names/order are unchanged.
+
+New tests are part of the normal host run (THROW! lifetime, user-arrow order/display and concurrent saves). The required shared GUI test and extra keyboard checks run with `--host-keys`; `--state-saves` runs just the concurrent-save regression without creating an editor. The GUI target includes `../shared` and defines `JUCE_MODAL_LOOPS_PERMITTED=1`.
+
+```sh
+build/ThrowUpHostTests_artefacts/Release/ThrowUpHostTests --host-keys
+build/ThrowUpHostTests_artefacts/Release/ThrowUpHostTests --state-saves
+build/ThrowUpHostTests_artefacts/Release/ThrowUpHostTests "$PWD/build/validation-0.2.3/screenshots" "$PWD/build/ThrowUp_artefacts/Release/VST3/THROW-UP.vst3"
+build/ThrowUpVstPresetAutomation_artefacts/Release/ThrowUpVstPresetAutomation "$PWD/build/ThrowUp_artefacts/Release/VST3/THROW-UP.vst3"
+build/ThrowUpHostTests_artefacts/Release/ThrowUpHostTests --au "$PWD/build/ThrowUp_artefacts/Release/AU/THROW-UP.component"
+```
+
+The shared GUI check covers keyboard focus, host transport/shortcuts, INFO and Output entry. Extra checks cover every arrow and modifier, keyboard/on-screen state and gesture equality, popup dismissal, Output-to-knob focus release, deferred text-entry cancellation and hiding a host parent. The save stress uses two background readers (1,000 saves each) while 300 UI iterations change names, A/B, size and restored state; every XML payload is checked and a settled state must round-trip byte-for-byte.
+
+Current run logs are in `build/validation-0.2.3/`:
+
+- Incremental Release build: **all CMake targets passed**, including VST3, AU and every test target, using the existing build directory and cached JUCE checkout. Both built bundles report **0.2.3** and pass `codesign --verify --deep --strict`.
+- CTest: **2/2 passed** (`ThrowUpDsp`, 30.34 s; `ThrowUpWetLevels`, 71.77 s). The audit passes **150/150 legacy + 270/270 latest = 420/420** preset/source pairs. DSP verifies 140 presets and zero real-time allocations.
+- Before the GUI restriction: packaged VST3 preset automation **passed 140 menu + 140 previous + 140 next + 140 random + 140 host Program selections**, and **2,800 automated blocks**; maximum audio error **0**. Installer self-test **75/75 passed**, with isolated temporary writes.
+- `python3 shared/tools/check_text_literals.py` from the repository root: **passed**. `git diff --check -- throw-up`: **passed**.
+- **GUI verification pending with Claude outside the sandbox:** normal `ThrowUpHostTests` (including the new lifetime/order/save regressions), `--host-keys`, `--state-saves`, in-process `--au`, and the released-0.1.5 compatibility run. The VST3 automation command above also initializes JUCE GUI and can be repeated outside the sandbox. No 0.2.3 host-keys or concurrent-save runtime pass is claimed here.
+- **pluginval not run (sandbox).** Earlier launch attempts aborted in HIServices `_RegisterApplication` before validation; after the coordinator's instruction, no further GUI-initializing programs were launched. Claude must run strictness 5 outside the sandbox:
+
+```sh
+THROW_UP_PRESET_DIR="$PWD/build/validation-0.2.3/pluginval-presets" pluginval --strictness-level 5 --validate "$PWD/build/ThrowUp_artefacts/Release/VST3/THROW-UP.vst3"
+```
+
+The 0.1.5 compatibility command remains documented below; it needs the released 0.1.5 payload path. No plug-in was installed, no DAW or audio playback was started, and no system-wide scan was run. The latest folder-only scope also prevented vault sync or memory writes; this dated validation section is the local handoff.
+
+The results below predate 0.2.3 and are retained as historical compatibility evidence.
 
 ## 0.2.2: the dice key (random preset)
 

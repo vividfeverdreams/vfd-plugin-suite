@@ -2,6 +2,7 @@
 #include "ThrowUpEditor.h"
 #include "Presets.h"
 #include "PresetAutomationTests.h"
+#include "Tests/HostKeysTest.h"
 #include <juce_audio_utils/juce_audio_utils.h>
 #include <iostream>
 #include <set>
@@ -14,6 +15,7 @@
 #include <atomic>
 #include <cstdlib>
 #include <new>
+#include <thread>
 
 // Counts heap allocations made while `countAllocations` is set, so the audio
 // path (processBlock, including MIDI throws and note rooms) can be proven allocation-free.
@@ -92,6 +94,197 @@ bool pumpTimersUntil(const std::function<bool()>& done, int milliseconds)
         if (done()) return true;
     }
     return done();
+}
+
+int runHostKeysTests()
+{
+    ThrowUpProcessor processor;
+    std::unique_ptr<juce::AudioProcessorEditor> editor(processor.createEditor());
+    auto* presets = dynamic_cast<juce::ComboBox*>(findNamed(*editor, "Factory presets"));
+    auto* output = dynamic_cast<juce::Label*>(findNamed(*editor, "OUTPUT value"));
+    check(presets != nullptr && output != nullptr, "host-keys probe finds the real preset display and Output field");
+    vfd::test::HostKeysProbe probe;
+    probe.currentPreset = [presets] { return presets->getText(); };
+    probe.blankSpot = { 20, editor->getHeight() / 2 };
+    probe.openTextField = [output] {
+        // The Output box's real single-click path, including its double-click delay.
+        juce::Component& box = *output;
+        box.mouseDown(mouseEvent(box, 1));
+        box.mouseUp(mouseEvent(box, 1));
+        juce::MessageManager::getInstance()->runDispatchLoopUntil(juce::MouseEvent::getDoubleClickTimeout() + 100);
+        return output->getCurrentTextEditor();
+    };
+    for (const auto* name : { "THROW", "SIZE", "FREEZE" }) {
+        auto* control = findNamed(*editor, name);
+        check(control != nullptr, "host-keys probe finds a safe control to click");
+        probe.controlSpots.push_back(editor->getLocalPoint(control, control->getLocalBounds().getCentre()));
+    }
+    const int failures = vfd::test::runHostKeys(*editor, probe, std::cout);
+    if (failures != 0 || juce::Desktop::getInstance().getDisplays().getPrimaryDisplay() == nullptr) return failures;
+
+    juce::Component holder;
+    holder.setSize(editor->getWidth(), editor->getHeight());
+    holder.addAndMakeVisible(*editor);
+    holder.setTopLeftPosition(-6000, -6000);
+    holder.addToDesktop(juce::ComponentPeer::windowIsTemporary);
+    holder.setVisible(true);
+    juce::MessageManager::getInstance()->runDispatchLoopUntil(100);
+    auto* peer = holder.getPeer();
+    check(peer != nullptr, "extended host-keys window opens");
+    const auto click = [&](juce::Component& target) {
+        const auto at = holder.getLocalPoint(&target, target.getLocalBounds().getCentre()).toFloat();
+        const auto time = juce::Time::currentTimeMillis();
+        peer->handleMouseEvent(juce::MouseInputSource::InputSourceType::mouse, at,
+            juce::ModifierKeys::leftButtonModifier, juce::MouseInputSource::defaultPressure,
+            juce::MouseInputSource::defaultOrientation, time);
+        peer->handleMouseEvent(juce::MouseInputSource::InputSourceType::mouse, at, {},
+            juce::MouseInputSource::defaultPressure, juce::MouseInputSource::defaultOrientation, time + 30);
+        juce::MessageManager::getInstance()->runDispatchLoopUntil(30);
+    };
+    probe.openTextField();
+    click(*findNamed(*editor, "SIZE"));
+    juce::MessageManager::getInstance()->runDispatchLoopUntil(60);
+    check(!output->isBeingEdited() && juce::Component::getCurrentlyFocusedComponent() == editor.get(),
+          "clicking a knob releases the Output text field");
+    // Space the next click beyond JUCE's double-click window, then click away
+    // before Output's deferred single-click edit opens.
+    juce::MessageManager::getInstance()->runDispatchLoopUntil(juce::MouseEvent::getDoubleClickTimeout() + 30);
+    click(*output);
+    click(*findNamed(*editor, "SIZE"));
+    juce::MessageManager::getInstance()->runDispatchLoopUntil(juce::MouseEvent::getDoubleClickTimeout() + 100);
+    check(!output->isBeingEdited() && juce::Component::getCurrentlyFocusedComponent() == editor.get(),
+          "clicking away during Output's edit delay prevents a late focus grab");
+    throwup::tests::PresetHostObserver host(processor);
+    for (const auto& [code, direction] : std::array<std::pair<int, int>, 4> {{
+            { juce::KeyPress::leftKey, -1 }, { juce::KeyPress::upKey, -1 },
+            { juce::KeyPress::rightKey, 1 }, { juce::KeyPress::downKey, 1 } }}) {
+        processor.loadFactoryPreset(direction < 0 ? 0 : throwup::legacyPresetStart() - 1);
+        juce::MemoryBlock before, keyboard, physical;
+        processor.getStateInformation(before);
+        editor->grabKeyboardFocus();
+        host.clear();
+        check(peer->handleKeyPress(juce::KeyPress(code)), "a plain arrow is kept for preset browsing");
+        processor.getStateInformation(keyboard);
+        const auto begins = host.begins, ends = host.ends, changes = host.changes;
+        const int metadata = host.metadata;
+        processor.setStateInformation(before.getData(), (int) before.getSize());
+        auto* button = dynamic_cast<juce::Button*>(findNamed(*editor, direction < 0 ? "Previous preset" : "Next preset"));
+        host.clear();
+        button->onClick();
+        processor.getStateInformation(physical);
+        check(keyboard == physical && host.begins == begins && host.ends == ends && host.changes == changes
+              && host.metadata == metadata && metadata == 1 && host.program == 0 && host.parameterInfo == 0,
+              "keyboard and on-screen arrows have identical state, wrap-around and host gestures");
+    }
+    editor->grabKeyboardFocus();
+    const int before = processor.getCurrentProgram();
+    for (const auto modifier : { juce::ModifierKeys::shiftModifier, juce::ModifierKeys::commandModifier,
+                                 juce::ModifierKeys::altModifier, juce::ModifierKeys::ctrlModifier })
+        for (const int code : { juce::KeyPress::leftKey, juce::KeyPress::upKey, juce::KeyPress::rightKey, juce::KeyPress::downKey })
+            check(!peer->handleKeyPress(juce::KeyPress(code, juce::ModifierKeys(modifier), 0))
+                      && processor.getCurrentProgram() == before,
+                  "modified arrow reaches the host without loading a preset");
+    check(!peer->handleKeyPress(juce::KeyPress(juce::KeyPress::escapeKey)), "Escape reaches the host with nothing to cancel");
+    presets->showPopup();
+    juce::MessageManager::getInstance()->runDispatchLoopUntil(60);
+    juce::PopupMenu::dismissAllActiveMenus();
+    juce::MessageManager::getInstance()->runDispatchLoopUntil(100);
+    check(!presets->hasKeyboardFocus(true) && !peer->handleKeyPress(juce::KeyPress(juce::KeyPress::returnKey))
+              && !peer->handleKeyPress(juce::KeyPress(juce::KeyPress::spaceKey, {}, ' ')),
+          "closing the real preset popup leaves Return and space with the host");
+
+    // Hiding an ancestor of the editor must release a held momentary key too.
+    auto* key = findNamed(*editor, "THROW!");
+    key->mouseDown(mouseEvent(*key, 1));
+    holder.setVisible(false);
+    check(juce::exactlyEqual(get(processor, "throwKey"), 0.0f), "hiding the host window releases a held THROW!");
+    holder.removeFromDesktop();
+    holder.removeChildComponent(editor.get());
+    return 0;
+}
+
+void runHandsOffRegressionTests()
+{
+    {
+        ThrowUpProcessor p;
+        throwup::tests::PresetHostObserver host(p);
+        const int index = p.apvts.getParameter("throwKey")->getParameterIndex();
+        auto editor = std::make_unique<ThrowUpEditor>(p);
+        editor->setVisible(true);
+        auto* key = findNamed(*editor, "THROW!");
+        check(key != nullptr, "momentary THROW! key exists");
+        key->mouseDown(mouseEvent(*key, 1));
+        check(juce::exactlyEqual(get(p, "throwKey"), 1.0f), "mouse-down holds THROW!");
+        editor->setVisible(false);
+        check(juce::exactlyEqual(get(p, "throwKey"), 0.0f) && host.begins[(size_t) index] == 1 && host.ends[(size_t) index] == 1,
+              "hiding a held THROW! releases it with a balanced gesture");
+        key->mouseUp(mouseEvent(*key, 1));
+        check(host.ends[(size_t) index] == 1, "late mouse-up after hiding does not end the gesture twice");
+        editor->setVisible(true);
+        key->mouseDown(mouseEvent(*key, 1));
+        editor.reset();
+        check(juce::exactlyEqual(get(p, "throwKey"), 0.0f) && host.begins[(size_t) index] == 2 && host.ends[(size_t) index] == 2,
+              "closing a held THROW! releases it with a balanced gesture");
+        juce::MemoryBlock state;
+        p.getStateInformation(state);
+        ThrowUpProcessor recalled;
+        recalled.setStateInformation(state.getData(), (int) state.getSize());
+        check(juce::exactlyEqual(get(recalled, "throwKey"), 0.0f), "a project saved after closing the editor does not retain a held THROW!");
+    }
+}
+
+void runConcurrentSaveTests()
+{
+    {
+        ThrowUpProcessor p;
+        const auto file = p.saveUserPreset("Save stress", "Concurrent Room");
+        check(file.existsAsFile(), "concurrent-save fixture is isolated from real user presets");
+        p.selectSlot(1);
+        p.setEditorScale(1.25f);
+        juce::MemoryBlock original;
+        p.getStateInformation(original);
+        std::atomic<int> saves { 0 }, invalid { 0 };
+        std::atomic<bool> start { false };
+        const auto save = [&] {
+            while (!start.load()) std::this_thread::yield();
+            for (int n = 0; n < 1000; ++n) {
+                juce::MemoryBlock data;
+                p.getStateInformation(data);
+                auto xml = juce::AudioProcessor::getXmlFromBinary(data.getData(), (int) data.getSize());
+                bool ok = xml != nullptr && xml->hasTagName("THROW_UP_STATE")
+                          && xml->getNumChildElements() == ThrowUpProcessor::parameterCount
+                          && xml->getIntAttribute("schemaVersion") == 2
+                          && xml->getIntAttribute("activeSlot") >= 0 && xml->getIntAttribute("activeSlot") <= 1;
+                if (xml != nullptr) {
+                    for (auto* child : xml->getChildIterator())
+                        ok = ok && child->hasTagName("PARAM") && std::isfinite(child->getDoubleAttribute("value"));
+                    for (const auto* name : { "slotA", "slotB" })
+                        if (xml->hasAttribute(name)) {
+                            auto slot = juce::parseXML(xml->getStringAttribute(name));
+                            ok = ok && slot != nullptr && slot->hasTagName("SLOT");
+                        }
+                }
+                if (!ok) ++invalid;
+                ++saves;
+            }
+        };
+        std::thread first(save), second(save);
+        start.store(true);
+        for (int n = 0; n < 300; ++n) {
+            p.loadFactoryPreset(n % p.getNumPrograms());
+            p.loadUserPreset(file);
+            p.selectSlot(n % 2);
+            p.setEditorScale(n % 2 ? .9f : 1.25f);
+            if (n % 10 == 0) p.setStateInformation(original.getData(), (int) original.getSize());
+        }
+        first.join(); second.join();
+        check(saves == 2000 && invalid == 0, "2000 concurrent project saves parse while preset names, A/B, size and state change");
+        p.setStateInformation(original.getData(), (int) original.getSize());
+        juce::MemoryBlock roundTrip;
+        p.getStateInformation(roundTrip);
+        check(original == roundTrip, "metadata synchronization keeps the project state byte-identical on round trip");
+        file.getParentDirectory().deleteRecursively();
+    }
 }
 
 void runFixRegressionTests(const juce::File* folder)
@@ -339,6 +532,38 @@ void runFeatureHostTests(const juce::File* folder)
         const auto loose = p.saveUserPreset("", "Loose Room");
         root.getChildFile("Broken.throwup").replaceWithText("not a preset");
         check(dice != nullptr && loose.getParentDirectory() == root, "random preset key and a loose user preset exist");
+        auto* next = dynamic_cast<juce::Button*>(findNamed(editor, "Next preset"));
+        auto* previous = dynamic_cast<juce::Button*>(findNamed(editor, "Previous preset"));
+        check(next != nullptr && previous != nullptr, "both on-screen preset arrows exist");
+        p.loadFactoryPreset(throwup::legacyPresetStart() - 1);
+        next->onClick();
+        // Menu order sorts by file name: "Wide Thing 2.throwup" (size 70) comes before "Wide Thing.throwup" (44.4).
+        check(p.getUserPresetName() == "Wide Thing" && std::abs(get(p, "size") - 70) < .05f && menu->getText() == "Wide Thing",
+              "next from the last factory room loads the first user file in menu order");
+        next->onClick();
+        check(p.getUserPresetName() == "Wide Thing" && std::abs(get(p, "size") - 44.4f) < .05f,
+              "next visits a second user file even when both load under the same name");
+        next->onClick();
+        check(p.getUserPresetName() == "Loose Room" && menu->getText() == "Loose Room",
+              "next skips an unreadable user file and reaches the loose user preset");
+        next->onClick();
+        check(p.getUserPresetName().isEmpty() && p.getCurrentProgram() == 0 && menu->getSelectedId() == 1,
+              "next from the last user preset wraps to the first factory room");
+        previous->onClick();
+        check(p.getUserPresetName() == "Loose Room", "previous from the first factory room wraps to the last user preset");
+        previous->onClick();
+        check(p.getUserPresetName() == "Wide Thing" && std::abs(get(p, "size") - 44.4f) < .05f,
+              "previous skips an unreadable file and reaches the second same-named user file");
+        previous->onClick();
+        check(p.getUserPresetName() == "Wide Thing" && std::abs(get(p, "size") - 70) < .05f,
+              "previous visits the first same-named user file");
+        previous->onClick();
+        check(p.getUserPresetName().isEmpty() && p.getCurrentProgram() == throwup::legacyPresetStart() - 1,
+              "previous from the first user file returns to the last factory room");
+        editor.rebuildPresetMenu();
+        menu->setSelectedId(1000, juce::sendNotificationSync);
+        check(menu->getSelectedId() == p.getCurrentProgram() + 1,
+              "an unsolicited ComboBox user ID cannot leave its display naming an unloaded room");
         p.loadUserPreset(first);
         std::set<std::string> userPicks;
         int factoryPicks = 0;
@@ -785,8 +1010,8 @@ void checkInfoPage(ThrowUpEditor& editor, ThrowUpProcessor& processor, const juc
     for (auto* parameter : processor.getParameters()) parameters.push_back(parameter->getValue());
     button->onClick();
     check(overlay->isVisible() && overlay->getBounds() == editor.getLocalBounds(), "INFO opens full-editor credits page");
-    check(overlay->keyPressed(juce::KeyPress(juce::KeyPress::spaceKey)) && overlay->isVisible(),
-          "credits page consumes unrelated keys without activating underlying controls");
+    check(!overlay->keyPressed(juce::KeyPress(juce::KeyPress::spaceKey)) && overlay->isVisible(),
+          "credits page lets space reach the host while staying open");
     const auto countLinks = [](const auto& self, juce::Component& parent) -> int {
         int count = dynamic_cast<juce::HyperlinkButton*>(&parent) != nullptr ? 1 : 0;
         for (auto* child : parent.getChildren()) count += self(self, *child);
@@ -862,7 +1087,21 @@ int main(int argc, char** argv)
         // Tests never read or write the real user presets folder.
         const auto presetRoot = temporaryPresetRoot();
         ThrowUpProcessor::setUserPresetRootForTesting(presetRoot);
+        if (argc == 2 && juce::String(argv[1]) == "--state-saves") {
+            runConcurrentSaveTests();
+            ThrowUpProcessor::setUserPresetRootForTesting({});
+            presetRoot.deleteRecursively();
+            return 0;
+        }
+        if (argc == 2 && juce::String(argv[1]) == "--host-keys") {
+            const int failures = runHostKeysTests();
+            ThrowUpProcessor::setUserPresetRootForTesting({});
+            presetRoot.deleteRecursively();
+            return failures == 0 ? 0 : 1;
+        }
         throwup::tests::runPresetAutomationRegressionTests();
+        runHandsOffRegressionTests();
+        runConcurrentSaveTests();
         {
             const juce::File folder(argc >= 2 ? juce::String::fromUTF8(argv[1]) : juce::String());
             if (argc >= 2) folder.createDirectory();

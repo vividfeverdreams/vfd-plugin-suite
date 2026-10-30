@@ -157,7 +157,8 @@ inline void runPresetAutomationRegressionTests()
     for (auto* component : editor.getChildren())
         if (component->getName() == "Random preset") dice = dynamic_cast<juce::Button*>(component);
     requireAutomation(dice != nullptr && dice->getTitle() == "Random preset" && dice->getTooltip().startsWith("Random preset")
-                      && dice->getWantsKeyboardFocus(), "random preset key missing, unnamed or not focusable");
+                      && ! dice->getWantsKeyboardFocus(), // suite host-keys rule: keys never take the keyboard
+                      "random preset key missing, unnamed, or able to take the keyboard");
     for (const int bankStart : { 0, legacyPresetStart() }) {
         const bool legacyBank = bankStart > 0;
         const int bankSize = legacyBank ? legacyPresetCount : legacyPresetStart();
