@@ -11,7 +11,7 @@
     "Safer project saves in hosts that save from a background thread."
   ],
   "BACK-SCRATCH": [
-    "Your DAW keeps its keys, Cmd-Z included. The arrow keys browse presets like the screen's arrows, into the selected slot. Escape only cancels something that's open.",
+    "Your DAW keeps its keys, Cmd-Z included. The arrow keys browse presets like the screen's arrows, into the selected slot. Escape only cancels what's open.",
     "Long status messages wrap instead of squeezing.",
     "The plug-in's BYPASS and your DAW's bypass are now one switch.",
     "A locked phrase keeps its length and timing when you change presets too; each preset's pattern fits that length."

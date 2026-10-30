@@ -13,6 +13,7 @@
 Run from anywhere; paths are relative to the repo root. Standard library only.
 """
 import argparse
+import json
 import plistlib
 import re
 import sys
@@ -96,8 +97,14 @@ def check(release, bundles):
                 if built != want:
                     problems.append(f"{plist.parent.parent.relative_to(ROOT)} is {built}, CMakeLists.txt says {want} (stale build?)")
 
+    whats_new = ROOT / f"vfd-suite-installer/whats-new-{version}.json" if version else None
+    if whats_new is not None and whats_new.exists():
+        # The Mac installer refuses anything else, and only finds out at release time.
+        for plugin, lines in json.loads(whats_new.read_text(encoding="utf-8")).items():
+            if not 1 <= len(lines) <= 6 or any(not line.strip() or len(line) > 160 for line in lines):
+                problems.append(f"whats-new-{version}.json: {plugin} needs 1 to 6 non-empty lines of at most 160 characters")
     if release and version:
-        if not (ROOT / f"vfd-suite-installer/whats-new-{version}.json").exists():
+        if whats_new is None or not whats_new.exists():
             problems.append(f"vfd-suite-installer/whats-new-{version}.json is missing")
         if f"SUITE {version} " not in read("vfd-suite-installer/START HERE.txt"):
             problems.append(f"vfd-suite-installer/START HERE.txt is not written for SUITE {version}")
