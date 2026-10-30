@@ -48,7 +48,7 @@ jobs:
       - name: Build tools and JUCE's Linux dependencies
         run: |
           apt-get update -qq
-          apt-get install -y -qq --no-install-recommends git ca-certificates curl unzip xvfb xauth perl \
+          apt-get install -y -qq --no-install-recommends git ca-certificates curl unzip xvfb xauth perl openbox \
             cmake ninja-build g++ pkg-config libasound2-dev libcurl4-openssl-dev libfontconfig1-dev \
             libfreetype-dev libx11-dev libxcomposite-dev libxcursor-dev libxext-dev libxi-dev libxinerama-dev \
             libxrandr-dev libxrender-dev > /dev/null
@@ -66,7 +66,9 @@ jobs:
           cmake -S shared/Tests -B shared-tests-build -G Ninja -DCMAKE_BUILD_TYPE=Release
           cmake --build shared-tests-build
           exe="$(find shared-tests-build -type f -name VfdUpdateTests -perm -u+x | head -1)"
-          HOME="$RUNNER_TEMP/home" xvfb-run -a "$exe"
+          # A bare Xvfb has no window manager, so the _NET_WM_* atoms JUCE looks up "only if they exist" are
+          # missing and its first real window dies on BadAtom (X_ChangeProperty, atom 0). Openbox defines them.
+          HOME="$RUNNER_TEMP/home" xvfb-run -a sh -c 'openbox --sm-disable >/dev/null 2>&1 & sleep 2; exec "$0"' "$exe"
 
   plugin:
     name: ${{ matrix.bundle }}
