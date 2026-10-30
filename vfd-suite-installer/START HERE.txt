@@ -1,17 +1,19 @@
-VIVID FEVER DREAMS SUITE 1.6.1 - BETA INSTALL
+VIVID FEVER DREAMS SUITE 1.6.2 - BETA INSTALL
 
-Includes YOI-BOI 0.2.3, THROW-UP 0.2.2, BACK-SCRATCH 0.11.2,
-SHIFTY 0.5.3, ENERGY HARVESTER 0.4.3, and STUTTER-STEP 0.4.1.
+Includes YOI-BOI 0.2.4, THROW-UP 0.2.3, BACK-SCRATCH 0.11.3,
+SHIFTY 0.5.4, ENERGY HARVESTER 0.4.4, and STUTTER-STEP 0.4.3.
 
-NEW IN 1.6.1
-Random presets: every plug-in has a die or shuffle key next to its
-preset name that loads a random saved preset, never the one already
-loaded.
-SHIFTY: RANDOM now switches the engine and Vowel Color too.
-Right-click the engine selector to lock it.
-Linux: the suite now also runs on 64-bit Linux (VST3), as a separate
-download. Thanks to Rolandjg for building the Linux version.
-Already on 1.6.0? Open any plug-in's INFO page and click INSTALL.
+NEW IN 1.6.2
+Hands off the keyboard: while you tweak a plug-in, space, Return,
+Tab, letters and Cmd-Z all go to your DAW. The arrow keys browse
+presets in every plug-in.
+New in STUTTER-STEP: drag the DRAG key onto a MIDI track to drop the
+groove as a MIDI clip.
+Locked controls now stay put when you change presets, not just on
+RANDOM.
+Plus fixes in each plug-in: see What's new in the installer.
+Already on 1.6.0 or 1.6.1? Open any plug-in's INFO page and click
+INSTALL.
 Every plug-in comes as a VST3 and as an Audio Unit (AU) on the Mac,
 signed with the developer's Apple Developer ID and notarized by Apple.
 The suite also runs on Windows and Linux (VST3), as separate downloads.

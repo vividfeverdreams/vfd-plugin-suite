@@ -1,20 +1,25 @@
 #!/bin/bash
-# A Mac suite release, Developer ID signed and notarized, from the current local builds.
+# A Mac suite release, Developer ID signed and notarized. Rebuilds every plug-in from its one build folder
+# first, then checks that each bundle carries its CMake version, so a stale build can't ship.
 #
 # Usage: release-mac.sh VERSION [IDENTITY] [NOTARY-PROFILE]
-#   VERSION   suite version; needs whats-new-VERSION.json and START HERE.txt (edit both first)
+#   VERSION   suite version; run `scripts/suite_versions.py bump VERSION` and edit whats-new-VERSION.json
+#             and START HERE.txt first
 #   IDENTITY  Developer ID Application certificate, name or SHA-1 (default: Daniel Hopin's)
 #   PROFILE   notarytool keychain profile (default: VFD-NOTARY)
+#   CMAKE     environment variable: the cmake to build with (default: cmake on PATH)
 # Writes ../../outputs/Vivid-Fever-Dreams-Suite-vVERSION{,-Beta-Install,-Beta-Install.zip,-Beta-Install.sha256,-signed-plugins}.
 set -euo pipefail
-[[ $# -ge 1 ]] || { sed -n '2,8p' "$0" >&2; exit 1; }
+[[ $# -ge 1 ]] || { sed -n '2,11p' "$0" >&2; exit 1; }
 V="$1"
 ID="${2:-379A73366527F07653D6774A0FAD6FDAB1B891FC}"     # Developer ID Application: Daniel Hopin (LZXM44W38L)
 PROFILE="${3:-VFD-NOTARY}"
 W="$(cd "$(dirname "$0")/.." && pwd -P)"; O="$(cd "$W/.." && pwd -P)/outputs"
-[[ -f "$W/vfd-suite-installer/whats-new-$V.json" ]] || { echo "Missing whats-new-$V.json" >&2; exit 1; }
-grep -q "SUITE $V " "$W/vfd-suite-installer/START HERE.txt" || { echo "START HERE.txt is not for $V" >&2; exit 1; }
-grep -q "VFD_SUITE_VERSION \"$V\"" "$W/shared/VfdSuiteVersion.h" || { echo "shared/VfdSuiteVersion.h is not $V (the INFO page's update check compares it with GitHub)" >&2; exit 1; }
+VERSIONS="$W/vfd-suite-installer/scripts/suite_versions.py"
+grep -q "VFD_SUITE_VERSION \"$V\"" "$W/shared/VfdSuiteVersion.h" || { echo "shared/VfdSuiteVersion.h is not $V: run scripts/suite_versions.py bump $V" >&2; exit 1; }
+python3 "$VERSIONS" check --release || { echo "Versions disagree (see FAIL lines above)." >&2; exit 1; }
+CMAKE="${CMAKE:-$(command -v cmake || true)}"
+[[ -x "$CMAKE" ]] || { echo "No cmake at $CMAKE (set CMAKE=...)" >&2; exit 1; }
 xcrun notarytool history --keychain-profile "$PROFILE" >/dev/null || { echo "No notary profile $PROFILE" >&2; exit 1; }
 for old in "Vivid-Fever-Dreams-Suite-v$V" "Vivid-Fever-Dreams-Suite-v$V-Beta-Install" \
            "Vivid-Fever-Dreams-Suite-v$V-Beta-Install.zip" "Vivid-Fever-Dreams-Suite-v$V-Beta-Install.sha256" \
@@ -23,12 +28,16 @@ for old in "Vivid-Fever-Dreams-Suite-v$V" "Vivid-Fever-Dreams-Suite-v$V-Beta-Ins
 done
 
 bundles=()
-for p in "yoi-boi/build/YoiBoi_artefacts|YOI-BOI" "throw-up/build/ThrowUp_artefacts|THROW-UP" \
-         "back-scratch/build/BackScratch_artefacts|BACK-SCRATCH" "shifty/build-v041/Shifty_artefacts|SHIFTY" \
-         "energy-harvester/build/EnergyHarvester_artefacts|ENERGY HARVESTER" "stutter-step/build/StutterStep_artefacts|STUTTER-STEP"; do
-    d="$W/${p%%|*}/Release"; n="${p##*|}"
+for p in "yoi-boi|YoiBoi|YOI-BOI" "throw-up|ThrowUp|THROW-UP" "back-scratch|BackScratch|BACK-SCRATCH" \
+         "shifty|Shifty|SHIFTY" "energy-harvester|EnergyHarvester|ENERGY HARVESTER" "stutter-step|StutterStep|STUTTER-STEP"; do
+    IFS='|' read -r folder target n <<< "$p"
+    echo "STEP building $n ($folder/build)"
+    "$CMAKE" --build "$W/$folder/build" --config Release --target "${target}_VST3" "${target}_AU" -- -j8 >/dev/null \
+        || { echo "Building $n failed; rerun the command above without >/dev/null to see why." >&2; exit 1; }
+    d="$W/$folder/build/${target}_artefacts/Release"
     bundles+=("$d/VST3/$n.vst3" "$d/AU/$n.component")
 done
+python3 "$VERSIONS" check --release --bundles || { echo "A built bundle doesn't carry its CMake version." >&2; exit 1; }
 
 SIGNED="$O/Vivid-Fever-Dreams-Suite-v$V-signed-plugins"
 echo "STEP signing and notarizing ${#bundles[@]} plug-in bundles"

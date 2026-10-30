@@ -1,0 +1,38 @@
+{
+  "YOI-BOI": [
+    "Your DAW keeps its keys: space, Return, Tab, letters and Cmd-Z reach it while you tweak. The arrow keys browse the Library view you're on.",
+    "The search box lets go of the keyboard after Return or a click elsewhere. Space no longer clicks the vowel path.",
+    "The vowel path shows that it can be clicked to shape it. Bounces render at your project's sample rate.",
+    "Locked controls stay put when you change presets (LOAD, arrows or the die). LENGTH and SUB start locked; click a padlock to let presets set them."
+  ],
+  "THROW-UP": [
+    "Your DAW keeps its keys. The arrow keys step through presets, factory and yours, with the preset box always naming the one you hear.",
+    "THROW! can no longer stick on when the window closes mid-hold.",
+    "Safer project saves in hosts that save from a background thread."
+  ],
+  "BACK-SCRATCH": [
+    "Your DAW keeps its keys, Cmd-Z included. The arrow keys browse presets like the screen's arrows, into the selected slot. Escape only cancels something that's open.",
+    "Long status messages wrap instead of squeezing.",
+    "The plug-in's BYPASS and your DAW's bypass are now one switch.",
+    "A locked phrase keeps its length and timing when you change presets too; each preset's pattern fits that length."
+  ],
+  "SHIFTY": [
+    "Your DAW keeps its keys, Cmd-Z included. The arrow keys browse the PRESETS list, as filtered, from any page.",
+    "Typed values understand units (\"1 s\", \"2 kHz\") and vowel names. Tooltips use plain names.",
+    "The preset list scrolls smoothly with a trackpad. The star is off for sounds that aren't saved yet.",
+    "The plug-in's BYPASS and your DAW's bypass are now one switch.",
+    "Locked controls, and a locked engine, stay put when you change presets. OUTPUT and BYPASS start locked; unlock them to let presets set them."
+  ],
+  "ENERGY HARVESTER": [
+    "Your DAW keeps its keys. The arrow keys browse presets; they no longer nudge a fader you clicked.",
+    "A window resized by dragging its corner keeps its size. Loading a preset keeps your project's sound setting.",
+    "The STOP>START mode has one name everywhere."
+  ],
+  "STUTTER-STEP": [
+    "New DRAG MIDI key: drag it onto a MIDI track to drop the groove as a MIDI clip, swing and ghosts included.",
+    "Your DAW keeps its keys: Return can't re-roll NEW GROOVE and Tab reaches your DAW. The arrow keys browse grooves, factory then USER.",
+    "The TIME knob shows long LOCK echoes correctly.",
+    "A groove name you're typing survives clicking into your DAW.",
+    "Hosts show the groove you're hearing. Changing SUB SAFE no longer clicks."
+  ]
+}

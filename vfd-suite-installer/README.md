@@ -89,7 +89,9 @@ bash build-installer.sh \
      bash build-installer.sh /absolute/path/signed-plugins/YOI-BOI.vst3 … /absolute/path/new-release-directory 1.5.0 /absolute/path/whats-new.json
    ```
 
-`release-mac.sh VERSION` runs both steps on the local builds, then packages the Beta-Install folder (with `START HERE.txt`), its ZIP and checksum, and checks the result as a downloaded copy. Edit `whats-new-VERSION.json` and `START HERE.txt` first. Plug-ins are signed with the hardened runtime and a secure timestamp. A notarized, stapled installer needs neither Open Anyway nor `Prepare VFD Beta.command`.
+Before a release, run `python3 scripts/suite_versions.py bump VERSION`. It writes the suite version everywhere it lives (`shared/VfdSuiteVersion.h`, both workflows, the Windows `.iss`, the installer app's fallback) and copies each plug-in's CMake version into `SuiteCatalog` and the `.iss` components. Then edit `whats-new-VERSION.json` and `START HERE.txt`. `suite_versions.py check` (also run by CI) reports any copy that disagrees.
+
+`release-mac.sh VERSION` rebuilds each plug-in's VST3 and AU in its one build folder (`<plug-in>/build`), refuses if any bundle doesn't carry its CMake version, runs both steps, then packages the Beta-Install folder (with `START HERE.txt`), its ZIP and checksum, and checks the result as a downloaded copy. Edit `whats-new-VERSION.json` and `START HERE.txt` first. Plug-ins are signed with the hardened runtime and a secure timestamp. A notarized, stapled installer needs neither Open Anyway nor `Prepare VFD Beta.command`.
 
 `whats-new.json` is a JSON object keyed by plug-in name; each value is one to six short lines (at most 160 characters each), for example `{"YOI-BOI": ["Now also an Audio Unit for Logic Pro and GarageBand."], …}`. Every suite plug-in needs an entry.
 

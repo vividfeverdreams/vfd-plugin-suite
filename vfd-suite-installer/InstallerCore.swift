@@ -145,17 +145,17 @@ struct ItemKey: Hashable, Codable, Comparable {
 enum SuiteCatalog {
     static let installerIdentifier = "xyz.vividfeverdreams.suite.installer"
     static let plugins = [
-        PluginDefinition(name: "YOI-BOI", bundleIdentifier: "com.yoiboi.synth", version: "0.2.3",
+        PluginDefinition(name: "YOI-BOI", bundleIdentifier: "com.yoiboi.synth", version: "0.2.4",
                          audioUnit: AudioUnitIdentity(type: "aumu", subtype: "YB01", manufacturer: "YBoi")),
-        PluginDefinition(name: "THROW-UP", bundleIdentifier: "com.yoiboi.throwup", version: "0.2.2",
+        PluginDefinition(name: "THROW-UP", bundleIdentifier: "com.yoiboi.throwup", version: "0.2.3",
                          audioUnit: AudioUnitIdentity(type: "aumf", subtype: "Thr1", manufacturer: "Yoib")), // MIDI-controlled effect: Logic sends MIDI throws only to aumf
-        PluginDefinition(name: "BACK-SCRATCH", bundleIdentifier: "com.yoiboi.backscratch", version: "0.11.2",
+        PluginDefinition(name: "BACK-SCRATCH", bundleIdentifier: "com.yoiboi.backscratch", version: "0.11.3",
                          audioUnit: AudioUnitIdentity(type: "aufx", subtype: "Bsc1", manufacturer: "Yoib")),
-        PluginDefinition(name: "SHIFTY", bundleIdentifier: "com.yoiboi.shifty", version: "0.5.3",
+        PluginDefinition(name: "SHIFTY", bundleIdentifier: "com.yoiboi.shifty", version: "0.5.4",
                          audioUnit: AudioUnitIdentity(type: "aufx", subtype: "Shf1", manufacturer: "Yoib")),
-        PluginDefinition(name: "ENERGY HARVESTER", bundleIdentifier: "com.yoiboi.energyharvester", version: "0.4.3",
+        PluginDefinition(name: "ENERGY HARVESTER", bundleIdentifier: "com.yoiboi.energyharvester", version: "0.4.4",
                          audioUnit: AudioUnitIdentity(type: "aufx", subtype: "Enh1", manufacturer: "Yoib")),
-        PluginDefinition(name: "STUTTER-STEP", bundleIdentifier: "com.yoiboi.stutterstep", version: "0.4.1",
+        PluginDefinition(name: "STUTTER-STEP", bundleIdentifier: "com.yoiboi.stutterstep", version: "0.4.3",
                          audioUnit: AudioUnitIdentity(type: "aufx", subtype: "Stp1", manufacturer: "Yoib"))
     ]
     /// Canonical order: each plug-in's VST3, then its AU.
