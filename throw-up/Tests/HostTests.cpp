@@ -161,6 +161,9 @@ int runHostKeysTests()
         processor.loadFactoryPreset(direction < 0 ? 0 : throwup::legacyPresetStart() - 1);
         juce::MemoryBlock before, keyboard, physical;
         processor.getStateInformation(before);
+        // Both paths start from the same restored state (a restore hands the host
+        // the restored room's Program number, which the state records).
+        processor.setStateInformation(before.getData(), (int) before.getSize());
         editor->grabKeyboardFocus();
         host.clear();
         check(peer->handleKeyPress(juce::KeyPress(code)), "a plain arrow is kept for preset browsing");

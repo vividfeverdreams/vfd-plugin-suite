@@ -237,6 +237,40 @@ inline void runPresetAutomationRegressionTests()
     requireAutomation(host.program == 0 && host.metadata == 0 && host.parameterInfo == 0 && host.latency == 0,
                       "project restore echoed an unnecessary global host update");
     std::cout << "PASS full session recall restores saved THROW without emitting user gestures or program refresh\n";
+
+    // Ableton Live's Duplicate restores the copied state, then sends back the
+    // Program number it held for the original, which lags behind a room picked
+    // on the device. That number must not replace the restored room.
+    {
+        ThrowUpProcessor original;
+        original.setCurrentProgram(9);  // the host picked room 9,
+        original.loadFactoryPreset(31); // then the device's own menu picked 31
+        juce::MemoryBlock copied;
+        original.getStateInformation(copied);
+        ThrowUpProcessor copy;
+        copy.setStateInformation(copied.getData(), static_cast<int>(copied.getSize()));
+        copy.setCurrentProgram(9);
+        copy.setCurrentProgram(9);
+        requireAutomation(copy.getCurrentProgram() == 31, "a duplicate took the host's lagging Program number");
+        copy.setCurrentProgram(12);
+        requireAutomation(copy.getCurrentProgram() == 12, "host Program selection stopped working after a restore");
+        copy.setCurrentProgram(9);
+        requireAutomation(copy.getCurrentProgram() == 9, "host could not choose the lagging number on purpose");
+
+        // Saved before 0.2.4: no host Program number; those hosts still held the first room.
+        auto xml = juce::AudioProcessor::getXmlFromBinary(copied.getData(), static_cast<int>(copied.getSize()));
+        requireAutomation(xml != nullptr && xml->getIntAttribute("hostProgram", -1) == 9, "state does not record the host's Program number");
+        xml->removeAttribute("hostProgram");
+        juce::MemoryBlock older;
+        juce::AudioProcessor::copyXmlToBinary(*xml, older);
+        ThrowUpProcessor fromOlder;
+        fromOlder.setStateInformation(older.getData(), static_cast<int>(older.getSize()));
+        fromOlder.setCurrentProgram(0);
+        requireAutomation(fromOlder.getCurrentProgram() == 31, "a duplicate of an older state took the first room");
+        fromOlder.setCurrentProgram(5);
+        requireAutomation(fromOlder.getCurrentProgram() == 5, "host Program selection stopped working after an older restore");
+    }
+    std::cout << "PASS duplicates ignore the host's lagging Program number (states before 0.2.4 too); host selection still works\n";
 }
 
 } // namespace throwup::tests

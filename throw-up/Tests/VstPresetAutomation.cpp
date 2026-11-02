@@ -302,6 +302,132 @@ void test(Bundle& bundle, Host& host)
     std::cout << "PASS no THROW/Program edits or global parameter-cache invalidation during preset selection\n";
     std::cout << "PASS manual THROW drag still records normal VST3 automation gestures\n";
 }
+
+// One device as a host creates it: component and controller, connected.
+struct Instance {
+    Instance(Bundle& bundle, Host& host)
+    {
+        for (int32 i = 0; i < bundle.factory->countClasses(); ++i) {
+            PClassInfo info {}; bundle.factory->getClassInfo(i, &info);
+            if (std::strcmp(info.category, kVstAudioEffectClass) == 0)
+                require(bundle.factory->createInstance(info.cid, IComponent::iid, reinterpret_cast<void**>(&component)) == kResultOk,
+                        "packaged VST3 component created");
+        }
+        require(component != nullptr, "one audio component found");
+        TUID controllerId {};
+        require(component->initialize(static_cast<IHostApplication*>(&host)) == kResultOk
+                && component->getControllerClassId(controllerId) == kResultOk, "VST3 component initialized");
+        require(bundle.factory->createInstance(controllerId, IEditController::iid, reinterpret_cast<void**>(&controller)) == kResultOk,
+                "packaged VST3 controller created");
+        controller->initialize(static_cast<IHostApplication*>(&host));
+        controller->setComponentHandler(&host);
+        a = query<IConnectionPoint>(component);
+        b = query<IConnectionPoint>(controller);
+        require(a->connect(b) == kResultOk && b->connect(a) == kResultOk, "component/controller connected");
+        concrete = query<juce::JuceVST3EditController>(controller);
+        actual = concrete->getPluginInstance();
+        require(actual != nullptr, "matching JUCE wrapper exposes the loaded processor");
+        for (int32 i = 0; i < controller->getParameterCount(); ++i) {
+            ParameterInfo info {}; controller->getParameterInfo(i, info);
+            if ((info.flags & ParameterInfo::kIsProgramChange) != 0) programId = info.id;
+            ids.push_back(info.id);
+        }
+        // A host hands a new device's state to its controller, so the values it
+        // reads back are the ones playing.
+        Steinberg::MemoryStream state;
+        require(component->getState(&state) == kResultOk, "new device saves its state");
+        state.seek(0, IBStream::kIBSeekSet, nullptr);
+        require(controller->setComponentState(&state) == kResultOk, "controller follows the new device");
+    }
+    ~Instance()
+    {
+        a->disconnect(b); b->disconnect(a); a->release(); b->release();
+        controller->setComponentHandler(nullptr); controller->terminate(); component->terminate();
+        concrete->release(); controller->release(); component->release();
+    }
+    // What the host holds for every parameter: the values the controller reported.
+    std::vector<std::pair<ParamID, ParamValue>> hostValues() const
+    {
+        std::vector<std::pair<ParamID, ParamValue>> values;
+        for (const auto id : ids) values.emplace_back(id, controller->getParamNormalized(id));
+        return values;
+    }
+    void restore(Steinberg::MemoryStream& state)
+    {
+        state.seek(0, IBStream::kIBSeekSet, nullptr);
+        require(component->setState(&state) == kResultOk, "component restores the state");
+        state.seek(0, IBStream::kIBSeekSet, nullptr);
+        require(controller->setComponentState(&state) == kResultOk, "controller follows the restored state");
+    }
+    // Ableton Live's Duplicate: restore the original's state, then send back every
+    // value the host held for the original, its Program number included.
+    void duplicateFrom(Instance& original)
+    {
+        Steinberg::MemoryStream state;
+        require(original.component->getState(&state) == kResultOk, "original saves its state");
+        const auto held = original.hostValues();
+        restore(state);
+        for (const auto& [id, value] : held) controller->setParamNormalized(id, value);
+    }
+    double programValue(int program) const { return static_cast<double>(program) / (actual->getNumPrograms() - 1); }
+    IComponent* component = nullptr;
+    IEditController* controller = nullptr;
+    IConnectionPoint* a = nullptr;
+    IConnectionPoint* b = nullptr;
+    juce::JuceVST3EditController* concrete = nullptr;
+    juce::AudioProcessor* actual = nullptr;
+    std::vector<ParamID> ids;
+    ParamID programId = 0;
+};
+
+void requireSameSound(const juce::AudioProcessor& copy, const juce::AudioProcessor& original, const char* message)
+{
+    for (int i = 0; i < original.getParameters().size(); ++i)
+        require(std::abs(copy.getParameters()[i]->getValue() - original.getParameters()[i]->getValue()) < .0000001, message);
+}
+
+// The room is picked on the device itself, which never tells the host, so the
+// host's Program number still says the first room. A duplicated device must
+// keep the original's room, and so must a duplicate of that duplicate.
+void testDuplicate(Bundle& bundle, Host& host)
+{
+    constexpr int room = 47;
+    Instance original(bundle, host);
+    {
+        std::unique_ptr<juce::AudioProcessorEditor> editor(original.actual->createEditorAndMakeActive());
+        auto* menu = dynamic_cast<juce::ComboBox*>(named(*editor, "Factory presets"));
+        require(menu != nullptr, "preset menu accessible");
+        menu->setSelectedId(room + 1, juce::sendNotificationSync);
+    }
+    require(original.actual->getCurrentProgram() == room, "menu loads the room");
+
+    require(original.controller->getParamNormalized(original.programId) == 0.0,
+            "the host's Program number lags behind a room picked on the device");
+
+    Instance copy(bundle, host);
+    copy.duplicateFrom(original);
+    require(copy.actual->getCurrentProgram() == room, "a duplicated device keeps the original's room");
+    requireSameSound(*copy.actual, *original.actual, "a duplicated device sounds like the original");
+
+    Instance copyOfCopy(bundle, host);
+    copyOfCopy.duplicateFrom(copy);
+    require(copyOfCopy.actual->getCurrentProgram() == room, "a duplicate of a duplicate keeps the room");
+    requireSameSound(*copyOfCopy.actual, *original.actual, "a duplicate of a duplicate sounds like the original");
+
+    // Reopening the project: the host restores the state and reads the values back.
+    Instance reopened(bundle, host);
+    Steinberg::MemoryStream saved;
+    require(copy.component->getState(&saved) == kResultOk, "duplicate saves its state");
+    reopened.restore(saved);
+    require(reopened.actual->getCurrentProgram() == room, "a reopened duplicate keeps its room");
+
+    // The host's own Program selection still works on the duplicate, the first room included.
+    copy.controller->setParamNormalized(copy.programId, copy.programValue(12));
+    require(copy.actual->getCurrentProgram() == 12, "host Program selection loads on a duplicate");
+    copy.controller->setParamNormalized(copy.programId, 0.0);
+    require(copy.actual->getCurrentProgram() == 0, "host can still choose the first room");
+    std::cout << "PASS duplicated devices (and duplicates of those) keep a room picked on the device; reopen and host Program selection still work\n";
+}
 } // namespace
 
 int main(int argc, char** argv)
@@ -316,6 +442,7 @@ int main(int argc, char** argv)
         Host host;
         Bundle bundle(juce::File(juce::String::fromUTF8(argv[1])));
         test(bundle, host);
+        testDuplicate(bundle, host);
         return 0;
     } catch (const std::exception& error) {
         std::cerr << "FAIL " << error.what() << '\n'; return 1;

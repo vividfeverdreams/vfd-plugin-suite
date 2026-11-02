@@ -1,4 +1,18 @@
-# THROW-UP 0.2.3 verification
+# THROW-UP 0.2.4 verification
+
+## 0.2.4: a duplicated track keeps its room (2026-11-01)
+
+User: "when I duplicate a track, the automation duplicates onto the new track, which is good, but the preset also goes back to the default preset."
+
+- **Cause.** Since 0.1.3 a room picked on the device (menu, arrows, dice, MIDI note) tells the host only about the room controls, never the VST3 "Program" parameter, so THROW automation is never replaced. The host's Program number therefore lags behind. Ableton Live's Duplicate restores the copied state and then sends back every value it holds for the original, Program included; JUCE's controller turns that into `setCurrentProgram`, which loaded the stale room. Evidence in the user's sets: dozens of THROW-UPs whose saved room differs from Live's stored Program (mostly 0); in `vibe vibing` (backup 2026-10-22 18:27) track 20 plays room 47 with Live's Program at 0, and its two duplicates play room 0. Reopening a project is not affected (Live reads the values back after the restore).
+- **Fix.** The shared `vfd::HostProgram` (`shared/VfdHostProgram.h`, also used by BACK-SCRATCH 0.11.4). The state records the host's Program number in a new root attribute `hostProgram` (additive: older versions ignore it, 0.1.5 still opens it). After a restore, that lagging number is ignored for 15 seconds; any other host Program pick loads as before, and the lagging number loads after the window. States saved before 0.2.4 have no record, so 0 (the first room, where those hosts stayed) is assumed. No parameter, ID, sound or other state field changed.
+- **Tests (all pass).**
+  - `ThrowUpVstPresetAutomation` (the packaged VST3) adds a duplicate test that does what Live does: a new device's state goes to its controller, a room is picked in the editor's menu, the original's state is restored into a new device, then every value the host holds (Program 0) is sent to it. The copy, and a duplicate of that copy, keep room 47 and every control; a reopened duplicate keeps it; host Program picks (12, then 0) still load. The released 0.2.3 fails this test ("a duplicated device keeps the original's room"). All earlier checks still pass (140 menu/previous/next/random/host Program selections, 2,800 automated blocks, audio error 0).
+  - In-process (`ThrowUpHostTests`): the lagging number is ignored twice after a restore, another pick and then the lagging number load, and a state without `hostProgram` ignores a 0. Normal host run, `--state-saves` and `--au` pass; ctest 2/2.
+  - `--host-keys`: 35 checks pass. The arrow-equality check now restores the same state before both the keyboard and the on-screen path (a restore hands the host the restored room's number, which the state records). Its first run on the fresh binary failed three window-focus checks; two reruns passed (the known first-launch flake).
+  - pluginval strictness 5: SUCCESS. Both bundles report 0.2.4 and pass `codesign --verify --deep --strict`.
+- Not tested: a real Ableton Live duplicate (the test reproduces Live's calls; Live was open with the user's project).
+
 
 Native Apple Silicon VST3 and Audio Unit for macOS 12 or later, built with JUCE 9.0.2. Locally ad hoc signed, not Apple-notarized. Nothing was installed into `~/Library` or `/Library` while testing, and the tests never touch the real user-presets folder.
 

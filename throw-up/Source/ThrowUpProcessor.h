@@ -1,6 +1,7 @@
 #pragma once
 #include <juce_audio_utils/juce_audio_utils.h>
 #include "ReverbEngine.h"
+#include "VfdHostProgram.h"
 #include <array>
 #include <atomic>
 
@@ -24,7 +25,8 @@ public:
     bool hasEditor() const override { return true; }
     int getNumPrograms() override;
     int getCurrentProgram() override { return currentProgram.load(); }
-    void setCurrentProgram(int i) override { loadFactoryPreset(i); }
+    // Host program selection (VST3 Program parameter, AU factory presets).
+    void setCurrentProgram(int i) override;
     const juce::String getProgramName(int) override;
     void changeProgramName(int, const juce::String&) override {}
     void getStateInformation(juce::MemoryBlock&) override;
@@ -105,5 +107,8 @@ private:
     std::array<juce::ValueTree, 2> slots;
     int activeSlot = 0;
     float editorScale = 0.0f;
+    // Room presets don't tell the host (see loadFactoryPreset), so its Program
+    // number lags behind; a duplicated device must not load that number.
+    vfd::HostProgram hostProgram;
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(ThrowUpProcessor)
 };

@@ -374,6 +374,15 @@ void ThrowUpProcessor::loadFactoryPreset(int index)
     }
 }
 
+void ThrowUpProcessor::setCurrentProgram(int index)
+{
+    // Live duplicates a track by restoring the copied state, then sending the
+    // Program number it held for the original, which lags behind the room the
+    // original played. Loading it would swap the copy back to that old room.
+    if (index >= 0 && index < getNumPrograms() && hostProgram.accept(index))
+        loadFactoryPreset(index);
+}
+
 SoundVersion ThrowUpProcessor::getSoundVersion() const
 {
     return THROWUP_CHOICE("soundVersion") == 0 ? SoundVersion::v015 : SoundVersion::latest;
@@ -538,6 +547,7 @@ void ThrowUpProcessor::getStateInformation(juce::MemoryBlock& data)
     juce::String savedName;
     std::array<juce::ValueTree, 2> savedSlots;
     int savedProgram, savedActiveSlot;
+    const int savedHostProgram = hostProgram.saved();
     float savedScale;
     {
         const juce::ScopedLock lock(metadataLock);
@@ -549,6 +559,7 @@ void ThrowUpProcessor::getStateInformation(juce::MemoryBlock& data)
     }
     auto state = apvts.copyState();
     state.setProperty("factoryProgram", savedProgram, nullptr);
+    state.setProperty("hostProgram", savedHostProgram, nullptr);
     state.setProperty("schemaVersion", presetSchemaVersion, nullptr);
     if (savedScale > 0.0f) state.setProperty("editorScale", savedScale, nullptr);
     if (savedName.isNotEmpty()) state.setProperty("userPreset", savedName, nullptr);
@@ -602,9 +613,15 @@ void ThrowUpProcessor::setStateInformation(const void* data, int size)
         if (auto slotXml = juce::parseXML(loaded.getProperty(i == 0 ? "slotA" : "slotB").toString()))
             restoredSlots[i] = juce::ValueTree::fromXml(*slotXml);
     }
+    program = juce::jlimit(0, getNumPrograms() - 1, program);
+    // The host's Program number when this was saved. States from before 0.2.4
+    // don't record it; those versions never told the host about a room, so it
+    // most likely still held the first one.
+    const int savedHostProgram = static_cast<int>(loaded.getProperty("hostProgram", 0));
+    hostProgram.restored(program, savedHostProgram >= 0 && savedHostProgram < getNumPrograms() ? savedHostProgram : -1);
     {
         const juce::ScopedLock lock(metadataLock);
-        currentProgram.store(juce::jlimit(0, getNumPrograms() - 1, program));
+        currentProgram.store(program);
         userPresetName = loaded.getProperty("userPreset").toString();
         editorScale = loaded.hasProperty("editorScale") ? juce::jlimit(0.8f, 1.5f, static_cast<float>(loaded.getProperty("editorScale"))) : 0.0f;
         activeSlot = juce::jlimit(0, 1, static_cast<int>(loaded.getProperty("activeSlot", 0)));
