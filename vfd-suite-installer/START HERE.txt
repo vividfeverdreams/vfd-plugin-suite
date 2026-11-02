@@ -1,19 +1,21 @@
-VIVID FEVER DREAMS SUITE 1.6.2 - BETA INSTALL
+VIVID FEVER DREAMS SUITE 1.6.3 - BETA INSTALL
 
-Includes YOI-BOI 0.2.4, THROW-UP 0.2.3, BACK-SCRATCH 0.11.3,
+Includes YOI-BOI 0.2.4, THROW-UP 0.2.4, BACK-SCRATCH 0.11.4,
 SHIFTY 0.5.4, ENERGY HARVESTER 0.4.4, and STUTTER-STEP 0.4.3.
 
-NEW IN 1.6.2
-Hands off the keyboard: while you tweak a plug-in, space, Return,
-Tab, letters and Cmd-Z all go to your DAW. The arrow keys browse
-presets in every plug-in.
-New in STUTTER-STEP: drag the DRAG key onto a MIDI track to drop the
-groove as a MIDI clip.
-Locked controls now stay put when you change presets, not just on
-RANDOM.
-Plus fixes in each plug-in: see What's new in the installer.
-Already on 1.6.0 or 1.6.1? Open any plug-in's INFO page and click
-INSTALL.
+NEW IN 1.6.3
+THROW-UP and BACK-SCRATCH: duplicating a track keeps the preset you
+picked instead of going back to the default.
+BACK-SCRATCH: the screen shows your changes while the device is
+switched off.
+Linux: preset menus and submenus now work in Bitwig and other hosts
+that run plug-ins in their own process. Thanks to RufusIbiza for
+finding and fixing it.
+Also new since 1.6.1: your DAW keeps its keys while you tweak, the
+arrow keys browse presets, STUTTER-STEP's DRAG MIDI key, and locked
+controls stay put when you change presets.
+Already on 1.6.0, 1.6.1 or 1.6.2? Open any plug-in's INFO page and
+click INSTALL.
 Every plug-in comes as a VST3 and as an Audio Unit (AU) on the Mac,
 signed with the developer's Apple Developer ID and notarized by Apple.
 The suite also runs on Windows and Linux (VST3), as separate downloads.
