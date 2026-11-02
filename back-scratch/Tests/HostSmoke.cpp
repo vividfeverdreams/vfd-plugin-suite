@@ -75,6 +75,40 @@ int main(int argc, char* argv[])
             runTimingStateTests();
             return 0;
         }
+        // Screens for the switched-off display (VALIDATION.md 0.11.4): the
+        // device plays one pattern, then Live stops calling it and another is
+        // picked on the device.
+        if (argc == 3 && juce::String(argv[1]) == "--switched-off-shots") {
+            const juce::File folder(juce::String::fromUTF8(argv[2]));
+            folder.createDirectory();
+            backScratch::processorTests::Head head;
+            backScratch::BackScratchProcessor processor;
+            processor.setPlayHead(&head);
+            processor.prepareToPlay(48000, 512);
+            processor.selectFactoryPreset(5);
+            juce::MidiBuffer midi;
+            for (int block = 0; block < 200; ++block) {
+                juce::AudioBuffer<float> audio(2, 512);
+                for (int i = 0; i < 512; ++i)
+                    for (int channel = 0; channel < 2; ++channel)
+                        audio.setSample(channel, i, backScratch::processorTests::testSound(block * 512 + i, channel));
+                head.beat = block * 512 * head.bpm / (60.0 * 48000);
+                processor.processBlock(audio, midi);
+            }
+            backScratch::BackScratchEditor editor(processor);
+            editor.setVisible(true);
+            const auto save = [&](const char* name) {
+                const auto snapshot = editor.createComponentSnapshot(editor.getLocalBounds());
+                juce::FileOutputStream output(folder.getChildFile(name));
+                output.setPosition(0); output.truncate();
+                return snapshot.isValid() && output.openedOk() && juce::PNGImageFormat().writeImageToStream(snapshot, output);
+            };
+            bool saved = save("1-on.png");
+            processor.selectFactoryPreset(30);
+            juce::Thread::sleep(static_cast<int>(backScratch::BackScratchProcessor::audioIdleMs) + 150);
+            saved = save("2-off-picked.png") && saved;
+            return saved ? 0 : 1;
+        }
         // Keys through the editor window's peer only (shared/Tests/HostKeysTest.h).
         if (argc == 2 && juce::String(argv[1]) == "--host-keys")
             return backScratch::hostKeysRun::run() == 0 ? 0 : 1;

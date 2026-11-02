@@ -2,6 +2,7 @@
 
 #include "AutomationBridge.h"
 #include "BackScratchProcessor.h"
+#include "PatternEditing.h"
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -419,6 +420,75 @@ inline void checkLoopBoundaryRounding()
                 "numeric rounding at a host loop boundary must not reset audio history");
 }
 
+// Live stops calling a device that is switched off. Whatever changes while it
+// is off (preset, a new scratch, a drawn edit, engage) must reach the screen
+// at once, not when the device comes back on.
+inline void checkSwitchedOffDevice()
+{
+    constexpr double rate = 48000.0;
+    constexpr int blockSize = 512;
+    Head head; head.bpm = 140.0;
+    BackScratchProcessor processor;
+    processor.setPlayHead(&head);
+    processor.prepareToPlay(rate, blockSize);
+    processor.selectFactoryPreset(5);
+    juce::MidiBuffer midi;
+    int frame = 0;
+    const auto play = [&](int blocks) {
+        for (int block = 0; block < blocks; ++block) {
+            juce::AudioBuffer<float> audio(2, blockSize);
+            for (int sample = 0; sample < blockSize; ++sample)
+                for (int channel = 0; channel < 2; ++channel)
+                    audio.setSample(channel, sample, source(frame + sample, rate, channel));
+            head.beat = frame * head.bpm / (60.0 * rate);
+            processor.processBlock(audio, midi);
+            frame += blockSize;
+        }
+    };
+    play(200);
+    const auto on = processor.displayState();
+    require(on.playing && on.factoryIndex == 5 && processor.isTransportPlaying()
+                && processor.outputPeak(0) > 0.0f && processor.isAudiblyEngaged(),
+            "a running device shows its audible frame");
+
+    // Switched off: no callbacks from here on.
+    processor.selectFactoryPreset(9);
+    juce::Thread::sleep(static_cast<int>(BackScratchProcessor::audioIdleMs) + 150);
+    auto off = processor.displayState();
+    require(!processor.audioRunning() && !off.playing && off.factoryIndex == 9,
+            "a preset picked while the device is off shows on screen");
+    comparePattern(processor.currentPattern(), off.pattern);
+    require(!processor.isTransportPlaying() && processor.outputPeak(0) == 0.0f && processor.outputPeak(1) == 0.0f,
+            "a switched-off device shows no transport or level");
+
+    processor.randomizePattern();
+    off = processor.displayState();
+    require(off.generated && off.seed == processor.generationSeed(), "a new scratch made while off shows on screen");
+    comparePattern(processor.currentPattern(), off.pattern);
+
+    auto edited = processor.currentPattern();
+    require(erasePatternGridCells(edited, 4, 4), "the eraser changes the generated pattern");
+    require(processor.beginPatternEdit() && processor.previewPatternEdit(edited) && processor.commitPatternEdit(),
+            "a pattern edit commits while the device is off");
+    off = processor.displayState();
+    require(off.edited, "the edit shows as edited");
+    comparePattern(edited, off.pattern);
+
+    processor.setEngaged(false);
+    require(!processor.displayState().engaged && !processor.isAudiblyEngaged(), "disengaging while off shows on screen");
+    processor.setEngaged(true);
+
+    // Back on: the screen follows the audio again, and catches up with the
+    // changes once they are heard.
+    play(1);
+    require(processor.audioRunning() && processor.isTransportPlaying() && processor.displayState().playing,
+            "switching the device back on returns to the audible frame");
+    play(200);
+    const auto back = processor.displayState();
+    require(back.playing && back.edited && back.generated, "the audible frame carries the changes made while off");
+    comparePattern(edited, back.pattern);
+}
+
 } // namespace backScratch::playbackAlignmentTests
 
 inline void runPlaybackAlignmentTests()
@@ -431,5 +501,6 @@ inline void runPlaybackAlignmentTests()
         backScratch::playbackAlignmentTests::checkHostLoop(blockSize);
     backScratch::playbackAlignmentTests::checkHostLoop(257, true);
     backScratch::playbackAlignmentTests::checkLoopBoundaryRounding();
+    backScratch::playbackAlignmentTests::checkSwitchedOffDevice();
     std::cout << "BACK-SCRATCH audible display, shifted/modulated automation, tempo and seek alignment tests passed\n";
 }

@@ -8,6 +8,7 @@
 #include "EditedPatternStore.h"
 #include "AutomationBridge.h"
 #include "PresetBank.h"
+#include "VfdHostProgram.h"
 #include <optional>
 
 namespace backScratch {
@@ -39,7 +40,8 @@ public:
     double getTailLengthSeconds() const override;
     int getNumPrograms() override { return factoryPresetCount; }
     int getCurrentProgram() override { return selectedFactoryPreset(); }
-    void setCurrentProgram(int i) override { selectFactoryPreset(i); }
+    // Host program selection (VST3 Program parameter, AU factory presets).
+    void setCurrentProgram(int i) override;
     const juce::String getProgramName(int i) override;
     void changeProgramName(int, const juce::String&) override {}
     void getStateInformation(juce::MemoryBlock&) override;
@@ -93,7 +95,7 @@ public:
     void clearSlot(int slot);
     int slotChainChoice() const noexcept;
     bool isEngaged() const noexcept;                // the parameter
-    bool isAudiblyEngaged() const noexcept { return audibleEngaged.load(); }
+    bool isAudiblyEngaged() const noexcept { return audioRunning() ? audibleEngaged.load() : isEngaged(); }
     void setEngaged(bool);
     void setChoice(const char* id, int value) { writeParameterGesture(id, static_cast<float>(value)); }
     void setValue(const char* id, float value) { writeParameterGesture(id, value); }
@@ -146,9 +148,15 @@ public:
         bool cycleActive = true, engaged = true;
     };
     DisplayState displayState() const noexcept;
-    bool isTransportPlaying() const noexcept { return playingDisplay.load(); }
+    // True while the host keeps calling processBlock. Live stops calling a
+    // device that is switched off (some hosts also pause idle tracks), which
+    // would leave the last audible frame on screen; the display then follows
+    // the controls, as it does with the transport stopped.
+    bool audioRunning() const noexcept;
+    static constexpr juce::uint32 audioIdleMs = 500;
+    bool isTransportPlaying() const noexcept { return playingDisplay.load() && audioRunning(); }
     double currentTempoBpm() const noexcept { return tempoDisplay.load(); }
-    float outputPeak(int channel) const noexcept { return peaks[static_cast<size_t>(std::clamp(channel, 0, 1))].load(); }
+    float outputPeak(int channel) const noexcept { return audioRunning() ? peaks[static_cast<size_t>(std::clamp(channel, 0, 1))].load() : 0.0f; }
     void setHostParameter(const char* id, float actual);
     // Sample-accurate host automation for this instance (see AutomationBridge.h).
     backScratchBridge::Queue& automationQueue() noexcept { return automationEvents; }
@@ -255,10 +263,16 @@ private:
     std::atomic<bool> audibleEngaged { true }, audibleCycleActive { true };
     std::atomic<int> audibleSlot { 0 };
     std::array<std::atomic<float>, 2> peaks { 0.0f, 0.0f };
+    // Wall-clock time of the last audio callback and that callback's length.
+    std::atomic<juce::uint32> lastCallbackMs { 0 }, callbackSpanMs { 0 };
     std::atomic<int> historyModeSetting { 0 };
     std::atomic<float> editorScaleSetting { 0.0f };
     std::atomic<bool> gridSnap { false };
     std::atomic<int> bankSelection { -1 };
+    // Patterns picked on the device don't tell the host (no program-change
+    // refresh), so its Program number lags behind; a duplicated device must not
+    // load that number.
+    vfd::HostProgram hostProgram;
     juce::CriticalSection historyLock;
     mutable juce::CriticalSection nameLock;
     juce::String savedName;

@@ -436,6 +436,13 @@ ScratchPattern BackScratchProcessor::currentPattern() const noexcept
     return result;
 }
 
+bool BackScratchProcessor::audioRunning() const noexcept
+{
+    const auto last = lastCallbackMs.load();
+    const auto elapsed = static_cast<std::int32_t>(juce::Time::getMillisecondCounter() - last);
+    return elapsed <= static_cast<std::int32_t>(std::max(audioIdleMs, 4 * callbackSpanMs.load()));
+}
+
 BackScratchProcessor::DisplayState BackScratchProcessor::displayState() const noexcept
 {
     DisplayState result;
@@ -443,7 +450,7 @@ BackScratchProcessor::DisplayState BackScratchProcessor::displayState() const no
     double beat = 0.0;
     int slot = EditedPatternStore::None;
     bool coherent = false;
-    if (displayReady.load() && playingDisplay.load()) {
+    if (displayReady.load() && playingDisplay.load() && audioRunning()) {
         // Bounded: if the audio thread is mid-publication or has no snapshot,
         // fall back to the current controls instead of spinning the UI thread.
         for (int attempt = 0; attempt < 64 && !coherent; ++attempt) {
@@ -554,6 +561,14 @@ void BackScratchProcessor::writeParameterGesture(const char* id, float actual)
 }
 
 void BackScratchProcessor::setKeepSub(bool keep) { writeParameterGesture("keepSub", keep ? 1.0f : 0.0f); }
+void BackScratchProcessor::setCurrentProgram(int index)
+{
+    // Live duplicates a track by restoring the copied state, then sending the
+    // Program number it held for the original, which lags behind the pattern
+    // the original played. Loading it would reset the copy's pattern.
+    if (hostProgram.accept(index)) selectFactoryPreset(index);
+}
+
 void BackScratchProcessor::selectFactoryPreset(int index)
 {
     const ParameterGroup group(*this);
@@ -863,6 +878,8 @@ void BackScratchProcessor::processBlock(juce::AudioBuffer<float>& audio, juce::M
     tempoDisplay.store(bpm);
     playingDisplay.store(playing);
     peaks[0].store(peakL); peaks[1].store(peakR);
+    callbackSpanMs.store(static_cast<juce::uint32>(std::ceil(1000.0 * count / rate)));
+    lastCallbackMs.store(juce::Time::getMillisecondCounter());
     automationEvents.clear();
     freeBeat = expectedBeat = endBeat;
     previousStep = step;
@@ -896,6 +913,7 @@ void BackScratchProcessor::getStateInformation(juce::MemoryBlock& result)
         snapshot.getChildWithProperty("id", "motionVersion").getProperty("value", 2.0f))), nullptr);
     snapshot.setProperty("historyMode", historyModeSetting.load(), nullptr);
     snapshot.setProperty("editorScale", static_cast<double>(editorScaleSetting.load()), nullptr);
+    snapshot.setProperty("hostProgram", hostProgram.saved(), nullptr);
     {
         const juce::ScopedLock lock(nameLock);
         snapshot.setProperty("savedName", savedName, nullptr);
@@ -1084,6 +1102,13 @@ void BackScratchProcessor::setStateInformation(const void* data, int size)
         if (loaded.getChild(i).hasType("EDITED_PATTERN") || loaded.getChild(i).hasType("SLOT")) loaded.removeChild(i, nullptr);
     clearEditHistory();
     state.replaceState(loaded);
+    // The host's Program number when this was saved. States from before 0.11.4
+    // don't record it; those versions never told the host about a pattern, so
+    // it most likely still held the first one.
+    const int restoredFactory = std::clamp(juce::roundToInt(static_cast<float>(
+        loaded.getChildWithProperty("id", "factory").getProperty("value", 0.0f))), 0, factoryPresetCount - 1);
+    const int savedHostProgram = static_cast<int>(loaded.getProperty("hostProgram", 0));
+    hostProgram.restored(restoredFactory, savedHostProgram >= 0 && savedHostProgram < factoryPresetCount ? savedHostProgram : -1);
     historyModeSetting.store(history == 16 || history == 32 || history == 64 || history == 128 ? history : 0);
     editorScaleSetting.store(validEditorScale(scale));
     {

@@ -182,5 +182,44 @@ inline void runProcessorTests()
     check(restored.parameters().getRawParameterValue("bypass")->load() == 1, "old captured-wheel projects open dry");
     restored.selectFactoryPreset(1);
     check(restored.parameters().getRawParameterValue("bypass")->load() == 0, "choosing new pattern enables live engine");
+
+    // Ableton Live's Duplicate restores the copied state, then sends back the
+    // Program number it held for the original, which lags behind a pattern
+    // picked on the device. That number must not reset the copy's pattern.
+    for (const bool generated : {false, true}) {
+        BackScratchProcessor original;
+        original.setCurrentProgram(9);    // the host picked pattern 9,
+        original.selectFactoryPreset(25); // then the device picked 25
+        if (generated) original.randomizePattern();
+        check(original.selectedFactoryPreset() != 9 && original.isGenerated() == generated, "duplicate test starts away from the host's pick");
+        juce::MemoryBlock copied;
+        original.getStateInformation(copied);
+        const auto samePattern = [&original](const BackScratchProcessor& copy) {
+            return copy.selectedFactoryPreset() == original.selectedFactoryPreset() && copy.isGenerated() == original.isGenerated()
+                && copy.generationSeed() == original.generationSeed() && copy.phraseDurationChoice() == original.phraseDurationChoice();
+        };
+        BackScratchProcessor copy;
+        copy.setStateInformation(copied.getData(), static_cast<int>(copied.getSize()));
+        copy.setCurrentProgram(9);
+        copy.setCurrentProgram(9);
+        check(samePattern(copy), "a duplicate took the host's lagging Program number");
+        copy.setCurrentProgram(12);
+        check(copy.selectedFactoryPreset() == 12 && !copy.isGenerated(), "host Program selection stopped working after a restore");
+        copy.setCurrentProgram(9);
+        check(copy.selectedFactoryPreset() == 9, "host could not choose the lagging number on purpose");
+
+        // Saved before 0.11.4: no host Program number; those hosts still held the first pattern.
+        auto xml = juce::AudioProcessor::getXmlFromBinary(copied.getData(), static_cast<int>(copied.getSize()));
+        check(xml != nullptr && xml->getIntAttribute("hostProgram", -1) == 9, "state does not record the host's Program number");
+        xml->removeAttribute("hostProgram");
+        juce::MemoryBlock older;
+        juce::AudioProcessor::copyXmlToBinary(*xml, older);
+        BackScratchProcessor fromOlder;
+        fromOlder.setStateInformation(older.getData(), static_cast<int>(older.getSize()));
+        fromOlder.setCurrentProgram(0);
+        check(samePattern(fromOlder), "a duplicate of an older state took the first pattern");
+        fromOlder.setCurrentProgram(5);
+        check(fromOlder.selectedFactoryPreset() == 5, "host Program selection stopped working after an older restore");
+    }
     std::cout << "BACK-SCRATCH live processor, automation, preset and transport tests passed\n";
 }

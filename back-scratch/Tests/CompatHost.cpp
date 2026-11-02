@@ -6,6 +6,7 @@
 //   BackScratchCompatHost --au <new BACK-SCRATCH.component> <new BACK-SCRATCH.vst3>
 //   BackScratchCompatHost --bypass-save  <0.11.2 BACK-SCRATCH.vst3> <folder>
 //   BackScratchCompatHost --bypass-check <new BACK-SCRATCH.vst3>    <folder>
+//   BackScratchCompatHost --duplicate <BACK-SCRATCH.vst3>
 #include <juce_audio_processors/juce_audio_processors.h>
 #include <juce_gui_basics/juce_gui_basics.h>
 #include <array>
@@ -331,6 +332,39 @@ inline void check(const juce::String& newPath, const juce::File& directory)
 }
 } // namespace backScratch::bypassCheck
 
+// Ableton Live's Duplicate: the copy restores the original's state, then the
+// host sends back the Program number it held for the original. A pattern picked
+// on the device never told the host, so that number still says the first one.
+namespace backScratch::duplicateCheck {
+using compatibilityTests::require;
+
+inline void run(const juce::String& path)
+{
+    auto original = compatibilityTests::load(path);
+    const int patterns = original->getNumPrograms();
+    require(patterns > 30, "the VST3 lists its factory patterns as host programs");
+    const auto patternValue = [patterns](int index) { return static_cast<float>(index) / static_cast<float>(patterns - 1); };
+    compatibilityTests::set(*original, "Scratch Pattern", patternValue(25));
+    const float picked = compatibilityTests::parameter(*original, "Scratch Pattern").getValue();
+    require(std::abs(picked - patternValue(25)) < 1.0e-6f, "the original plays pattern 26");
+    juce::MemoryBlock state;
+    original->getStateInformation(state);
+
+    auto copy = compatibilityTests::load(path);
+    copy->setStateInformation(state.getData(), static_cast<int>(state.getSize()));
+    copy->setCurrentProgram(0);
+    const float kept = compatibilityTests::parameter(*copy, "Scratch Pattern").getValue();
+    std::cout << "duplicate: original pattern " << juce::roundToInt(picked * (patterns - 1)) << ", copy after the host's Program 0: "
+              << juce::roundToInt(kept * (patterns - 1)) << '\n';
+    require(std::abs(kept - picked) < 1.0e-6f, "a duplicated device keeps the original's pattern");
+
+    copy->setCurrentProgram(12);
+    require(std::abs(compatibilityTests::parameter(*copy, "Scratch Pattern").getValue() - patternValue(12)) < 1.0e-6f,
+            "host Program selection still loads a pattern on the duplicate");
+    std::cout << "BACK-SCRATCH duplicate check passed\n";
+}
+} // namespace backScratch::duplicateCheck
+
 int main(int argc, char* argv[])
 {
     try {
@@ -349,6 +383,10 @@ int main(int argc, char* argv[])
             return 0;
         }
 #endif
+        if (argc == 3 && juce::String(argv[1]) == "--duplicate") {
+            backScratch::duplicateCheck::run(juce::String::fromUTF8(argv[2]));
+            return 0;
+        }
         if (argc == 4 && juce::String(argv[1]) == "--save") {
             backScratch::compatibilityTests::saveWithPayload(juce::String::fromUTF8(argv[2]), juce::File(juce::String::fromUTF8(argv[3])));
             return 0;
@@ -358,7 +396,7 @@ int main(int argc, char* argv[])
             return 0;
         }
         std::cerr << "usage: --save <0.10.2 vst3> <folder> | --check <new vst3> <folder> | --au <new component> <new vst3>"
-                     " | --bypass-save <0.11.2 vst3> <folder> | --bypass-check <new vst3> <folder>\n";
+                     " | --bypass-save <0.11.2 vst3> <folder> | --bypass-check <new vst3> <folder> | --duplicate <vst3>\n";
         return 2;
     } catch (const std::exception& e) {
         std::cerr << "FAIL: " << e.what() << '\n';

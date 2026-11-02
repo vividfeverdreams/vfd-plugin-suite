@@ -1,5 +1,22 @@
 # BACK-SCRATCH 0.11.0 validation
 
+## 0.11.4: a duplicated track keeps its pattern (2026-11-01)
+
+Same cause as THROW-UP 0.2.4: a pattern picked on the device moves the Scratch Pattern control but never the host's VST3 "Program" number, and Ableton Live's Duplicate sends that lagging number back after restoring the copy, which reset the copy to that factory pattern (edits and generated patterns included). The user's sets have BACK-SCRATCH devices on patterns 25, 29, 35 with Live's Program at 0. Fix: the shared `vfd::HostProgram` (`shared/VfdHostProgram.h`); the state gains a root attribute `hostProgram` (additive), and after a restore that lagging number is ignored for 15 seconds. No parameter, sound or other state field changed.
+
+- `BackScratchCompatHost --duplicate <VST3>` (new; JUCE's VST3 host sends a program change through the controller like Live): the copy of a device on pattern 26 keeps it after the host's Program 0, and a host pick of pattern 13 still loads. The released 0.11.3 fails ("copy after the host's Program 0: 0").
+- In-process (`BackScratchHostSmoke`, processor tests): for a factory pattern and a generated one, the lagging number is ignored twice, another pick and then the lagging number load, and a state without `hostProgram` ignores a 0.
+- `BackScratchTests`, `BackScratchHostSmoke` (all suites), `--host-keys` (ALL PASSED), `BackScratchCompatHost --au` (state recall difference 0), pluginval strictness 5 `--skip-gui-tests`: all pass. Both bundles report 0.11.4 and pass `codesign --verify --deep --strict`.
+
+
+### Also in 0.11.4: the screen follows changes while the device is switched off (2026-11-02)
+
+User report: "if the plugin is off, the screen doesn't show any changes made until the plugin turns on again." While the transport plays, the graph shows the frame the audio thread last rendered (so it never runs ahead of the sound). Live stops calling a device that is switched off, so that frame stayed on screen: a preset, new scratch, drawn edit or engage made while off didn't show, and the meters and SYNC stayed lit. Fix: every audio callback stamps the time; once no callback has come for 500 ms (or four callback lengths, if longer), `audioRunning()` is false and the display follows the controls, as with the transport stopped (no playhead, meters dark, READY). The next callback returns it to the audible frame. No sound, parameter or state change.
+
+- `checkSwitchedOffDevice` (in `runPlaybackAlignmentTests`): plays Switchblade, stops the callbacks, then a preset, a new scratch, an eraser edit and disengage made while off all show at once, and meters and transport go quiet. On again, it shows the audible frame, which then carries the edit. With the old display it fails ("a preset picked while the device is off shows on screen").
+- `BackScratchHostSmoke --switched-off-shots <folder>` renders the editor playing and then switched off with another preset picked (before/after picture: `outputs/Suite-1.6.2-dev-build/BACK-SCRATCH switched off - before vs after.png`).
+- `BackScratchTests`, `BackScratchHostSmoke` (all suites, host keys ALL PASSED), `BackScratchCompatHost --au` (difference 0) and `--duplicate` (keeps 25), pluginval strictness 5 `--skip-gui-tests` SUCCESS, `codesign --verify --deep --strict` on both bundles.
+
 ## 0.11.3 (suite 1.6.2): keys, bypass and status text
 
 Checked on Apple Silicon macOS, 21 October 2026, with the Release build from this source; nothing installed, HOME pointed at a scratch folder.

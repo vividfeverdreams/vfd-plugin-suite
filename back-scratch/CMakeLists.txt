@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.22)
-project(BackScratch VERSION 0.11.3 LANGUAGES C CXX)
+project(BackScratch VERSION 0.11.4 LANGUAGES C CXX)
 
 if (APPLE)
     enable_language(OBJCXX)
