@@ -24,7 +24,7 @@ env:
   SUITE_VERSION: "1.6.2" # keep equal to shared/VfdSuiteVersion.h
   JUCE_TAG: "9.0.2"
   PLUGINVAL_VERSION: "v1.0.4"
-  BUILD_RECIPE: "1"
+  BUILD_RECIPE: "2"
   DEBIAN_FRONTEND: noninteractive
 
 jobs:
@@ -114,6 +114,9 @@ jobs:
             cp "$patched" "${{ matrix.folder }}/external/JUCE/modules/juce_audio_plugin_client/"
             echo "Applied $patched"
           fi
+          # Every plug-in: popup menus and submenus stay open in out-of-process hosts such as Bitwig (issue #2).
+          cp -R "patches/juce-$JUCE_TAG/linux/modules/." "${{ matrix.folder }}/external/JUCE/modules/"
+          echo "Applied patches/juce-$JUCE_TAG/linux"
 
       - name: Build
         if: steps.cache.outputs.cache-hit != 'true'

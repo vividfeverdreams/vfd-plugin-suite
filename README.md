@@ -31,7 +31,7 @@ Free, ready-to-install builds for **Mac** (VST3 + Audio Unit, Apple Silicon, mac
 
 ## JUCE
 
-JUCE is not in the repo. Put a JUCE 9.0.2 checkout at `<plug-in>/external/JUCE`. BACK-SCRATCH and ENERGY HARVESTER replace one JUCE file with their copy in `patches/juce-9.0.2/` (see the README there).
+JUCE is not in the repo. Put a JUCE 9.0.2 checkout at `<plug-in>/external/JUCE`. BACK-SCRATCH and ENERGY HARVESTER replace one JUCE file with their copy in `patches/juce-9.0.2/`, and Linux builds of every plug-in also copy `patches/juce-9.0.2/linux/modules/` over JUCE's `modules/` (popup menus in out-of-process hosts such as Bitwig). See the README there.
 
 ## Building on Linux
 
@@ -46,9 +46,10 @@ sudo dnf install cmake ninja-build gcc-c++ pkgconf alsa-lib-devel libcurl-devel 
   libX11-devel libXcomposite-devel libXcursor-devel libXext-devel libXi-devel libXinerama-devel libXrandr-devel libXrender-devel
 ```
 
-Then, with JUCE in place as above (for example SHIFTY):
+Then, with JUCE in place as above, copy in the Linux patch and build (for example SHIFTY):
 
 ```sh
+cp -R patches/juce-9.0.2/linux/modules/. shifty/external/JUCE/modules/
 cmake -S shifty -B shifty/build -G Ninja -DCMAKE_BUILD_TYPE=Release -DSHIFTY_BUILD_TESTS=OFF
 cmake --build shifty/build --target Shifty_VST3
 cp -R shifty/build/Shifty_artefacts/Release/VST3/SHIFTY.vst3 ~/.vst3/

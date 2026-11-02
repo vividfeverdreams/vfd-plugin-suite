@@ -1,0 +1,25 @@
+--- JUCE-9.0.2/modules/juce_gui_basics/detail/juce_WindowingHelpers.h
++++ JUCE-9.0.2+linux/modules/juce_gui_basics/detail/juce_WindowingHelpers.h
+@@ -44,6 +44,11 @@
+     #if JUCE_WINDOWS
+      static bool isEmbeddedInForegroundProcess (Component* c);
+      static bool isWindowOnCurrentVirtualDesktop (void*);
++    #elif JUCE_LINUX || JUCE_BSD
++     // Out-of-process hosts (Bitwig's plug-in host) keep the X11 focus in the DAW's process, so a
++     // plug-in's view counts as embedded in the foreground process.
++     static bool isEmbeddedInForegroundProcess (Component* c) { return c != nullptr; }
++     static bool isWindowOnCurrentVirtualDesktop (void*) { return true; }
+     #else
+      static bool isEmbeddedInForegroundProcess (Component*) { return false; }
+      static bool isWindowOnCurrentVirtualDesktop (void*) { return true; }
+--- JUCE-9.0.2/modules/juce_gui_basics/menus/juce_PopupMenu.cpp
++++ JUCE-9.0.2+linux/modules/juce_gui_basics/menus/juce_PopupMenu.cpp
+@@ -1568,7 +1568,7 @@
+ 
+         const auto reallyContained = window.reallyContains (localMousePos, true);
+ 
+-        if (! window.doesAnyJuceCompHaveFocus() && ! reallyContained)
++        if (! window.doesAnyJuceCompHaveFocus() && ! isOverAny)
+         {
+             if (timeNow > window.lastFocusedTime + 10)
+             {
