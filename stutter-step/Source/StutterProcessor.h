@@ -42,6 +42,9 @@ public:
     stutter::Pattern getPattern() const noexcept;
     void setPattern (const stutter::Pattern&);
     void setCell (int index, stutter::Cell); // marks the groove as edited
+    // Nudge: moves the whole groove by steps (positive = later), wrapping; each step keeps its gate, ghost, tie
+    // and slap send together. Marks the groove as edited, like any other edit.
+    void nudge (int steps);
 
     // ---- groove identity and editor preferences (message thread) ----
     struct GrooveInfo
@@ -57,12 +60,14 @@ public:
     std::atomic<bool> lockSwing { false };
     std::atomic<int> rollFrom { -1 };               // -1 = all families
     std::atomic<float> editorScale { 0.0f };        // 0 = never chosen
+    std::atomic<int> editLayer { 0 };               // what the step lane edits: 0 = GATE, 1 = SLAP sends
 
     void loadFactory (int index);
     void rollNewGroove();
 
     // ---- user grooves: one file each in the USER folder, holding the pattern and the settings a factory
-    // groove sets (swing, length, rate, smooth, depth and the slap's lock, time, feedback, tone, mix, gaps, wide).
+    // groove sets (swing, length, rate, timing, smooth, depth and the slap's lock, time, feedback, tone, mix, gaps,
+    // wide). Files from before 0.5.0 have no timing (straight) and full sends.
     static constexpr const char* grooveExtension = ".ssgroove";
     // STUTTER_STEP_PRESET_ROOT overrides it (tests); otherwise $HOME/Library/Application Support/STUTTER-STEP/
     // Presets on macOS, %APPDATA%\STUTTER-STEP\Presets on Windows and ~/.config/STUTTER-STEP/Presets on Linux.
@@ -90,7 +95,7 @@ public:
     {
         stutter::Pattern pattern;
         double swing, length, smoothMs, depth, bpm, slapTimeMs, feedback, tone, mix;
-        int rate;
+        int rate, timing;
         bool slapOn, slapLock, gaps, wide, bypassed;
         double stepSeconds() const noexcept;
         double slapSeconds() const noexcept;
@@ -98,6 +103,8 @@ public:
     Snapshot snapshot() const;
     // RATE: 0 = 1/4, 1 = 1/8, 2 = 1/16, 3 = 1/32 (the 16 steps span 4 bars down to half a bar).
     static double rateBeats (int rate) noexcept { return rate == 0 ? 1.0 : rate == 1 ? 0.5 : rate == 3 ? 0.125 : 0.25; }
+    // One step in beats: RATE times TIMING (straight x 1, dotted x 1.5, triplet x 2/3). Straight is RATE exactly.
+    static double stepBeats (int rate, int timing) noexcept { return rateBeats (rate) * stutter::timingFactor (timing); }
     // LOCK's echo time is capped inside the 1 s delay lines, WIDE's 14 ms included.
     static constexpr double maxLockSeconds = 0.95;
     static float toneHz (double tone01) noexcept { return (float) (500.0 * std::pow (24.0, tone01)); }
@@ -125,7 +132,7 @@ private:
    #pragma clang diagnostic ignored "-Wfloat-equal"
     struct BuildKey
     {
-        std::uint32_t version = 0; float swing = -1, length = -1, smooth = -1, depth = -1; int rate = -1;
+        std::uint32_t version = 0; float swing = -1, length = -1, smooth = -1, depth = -1; int rate = -1, timing = -1;
         double bpm = -1; bool slapOn = false, gaps = false, bypass = false;
         bool operator== (const BuildKey&) const = default;
     } built;
@@ -135,8 +142,9 @@ private:
     float gainSmooth = 0.0f, sendSmooth = 0.0f, gapsSmooth = 1.0f, outGain = 1.0f, bypassMix = 0.0f, mixSmooth = 0.0f;
     float smoothCoeff = 0.02f, paramCoeff = 0.001f, bypassStep = 0.004f;
 
-    std::atomic<float>* p[16] {};
-    enum ParamIndex { swingP, rateP, lengthP, smoothP, depthP, slapOnP, slapLockP, slapTimeP, slapFbP, slapToneP, slapMixP, slapGapsP, slapWideP, subSafeP, outputP, bypassP };
+    std::atomic<float>* p[17] {};
+    // TIMING (0.5.0) comes last, so every older parameter keeps its place.
+    enum ParamIndex { swingP, rateP, lengthP, smoothP, depthP, slapOnP, slapLockP, slapTimeP, slapFbP, slapToneP, slapMixP, slapGapsP, slapWideP, subSafeP, outputP, bypassP, timingP };
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (StutterProcessor)
 };

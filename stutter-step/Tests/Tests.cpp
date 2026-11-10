@@ -6,10 +6,12 @@
 #include <juce_events/juce_events.h>
 #include <cmath>
 #include <cstdio>
+#include <cstring>
 #include <set>
 #include <thread>
 #include <juce_cryptography/juce_cryptography.h>
 #include "SubSafeReference.h"
+#include "Compat043.h"
 
 using namespace stutter;
 
@@ -136,6 +138,7 @@ void testGenerator()
     for (std::uint32_t seed = 1; seed <= rolls; ++seed) {
         const auto g = generate (seed * 2654435761u, -1);
         if (g.swing >= 0.55f) ++swung;
+        if (g.family == Family::hats) ++bad; // ALL never rolls HATS
         int on = 0, hits = 0, sends = 0;
         for (const auto& c : g.pattern) { on += c.v != Step::off; hits += c.v == Step::hit; sends += c.slap; }
         if (on < 5 || on > 12) ++bad;
@@ -146,7 +149,7 @@ void testGenerator()
         for (int i = 0; i < numSteps; ++i)
             if (g.pattern[(size_t) i].v == Step::tie && (i == 0 || g.pattern[(size_t) i - 1].v == Step::off)) ++bad;
     }
-    check (bad == 0, "density 5-12 and ties follow a sounding step", bad, 0);
+    check (bad == 0, "density 5-12, ties follow a sounding step, and ALL never rolls HATS", bad, 0);
     check (badRun == 0, "never more than 4 empty steps in a row", badRun, 0);
     check (badSlap == 0, "2-4 slap sends", badSlap, 0);
     check (swung >= rolls * 8 / 10, "mostly swung under ALL", swung / (double) rolls, 0.8);
@@ -167,7 +170,7 @@ void testGenerator()
     std::set<std::string> distinct;
     Pattern current = factoryPatterns[0];
     for (std::uint32_t seed = 1; seed <= 2000; ++seed) {
-        const auto g = generate (seed * 2246822519u, (int) (seed % 9) - 2, &current);
+        const auto g = generate (seed * 2246822519u, (int) (seed % 10) - 2, &current);
         int nearest = numSteps;
         for (const auto& f : factoryPatterns) nearest = std::min (nearest, steps (g.pattern, f));
         if (nearest < 4) ++nearPreset;
@@ -406,11 +409,17 @@ void testState()
     a.lockSwing = true; a.rollFrom = 2; a.editorScale = 1.25f;
     juce::MemoryBlock block;
     a.getStateInformation (block);
-   #if JUCE_MAC
-    // Captured by compiling HEAD's unmodified 0.4.1 processor and serializing this same state.
-    check (juce::SHA256 (block).toHexString() == "d1329ececbc36b88ce6cf580a700516a4f933fd4e0f72ecb8d83d09ccda4b152",
-           "schema 2 state bytes match the unmodified 0.4.1 processor");
-   #endif
+    // 0.5.0 adds to the state (the TIMING parameter, the edit layer, send levels when any is below full); states saved
+    // by 0.4.3 load and sound identical (testCompat043).
+    {
+        const auto xml = juce::AudioProcessor::getXmlFromBinary (block.getData(), (int) block.getSize());
+        const auto* g = xml != nullptr ? xml->getChildByName ("GROOVE") : nullptr;
+        bool timing = false;
+        if (xml != nullptr)
+            for (const auto* param : xml->getChildWithTagNameIterator ("PARAM")) timing = timing || param->getStringAttribute ("id") == "timing";
+        check (g != nullptr && g->getIntAttribute ("schema") == 2 && timing && g->hasAttribute ("editLayer") && ! g->hasAttribute ("sendLevels"),
+               "states keep schema 2 and add TIMING and the edit layer; full sends write no levels");
+    }
     StutterProcessor b;
     b.setStateInformation (block.getData(), (int) block.getSize());
     check (a.getPattern() == b.getPattern(), "pattern round-trips");
@@ -864,6 +873,51 @@ static void testMidiClip()
     check (levelMismatches == 0, "hits are loud and ghosts soft where the gate says so", levelMismatches, 0);
     check (cases == numFactoryGrooves * 36, "36 settings per factory groove", cases, numFactoryGrooves * 36);
 
+    // 0.5.0: dotted and triplet steps, and nudged grooves whose held notes wrap the loop. A held note carries on from
+    // one cycle into the next with no new attack; the clip only starts again where it loops itself.
+    int timedMismatches = 0, timedBad = 0, wrapped = 0, retriggers = 0;
+    cases = 0;
+    for (int g = 0; g < numFactoryGrooves; ++g) {
+        const auto& f = factoryGroove (g);
+        const auto original = parsePattern (f.cells, f.slap);
+        for (const int timing : { 0, 1, 2 })
+            for (const int by : { 0, -1, 3 }) {
+                ++cases;
+                const auto pattern = rotated (original, by);
+                const double stepBeats = StutterProcessor::stepBeats (f.rate, timing), ticksPerStep = stepBeats * clipTicksPerQuarter;
+                const int repeats = clipRepeats (stepBeats), cycle = juce::roundToInt (numSteps * ticksPerStep);
+                const auto m = readClip (makeMidiClip (pattern, f.swing, f.length, stepBeats, 120.0, f.name));
+                const bool wraps = pattern[0].v == Step::tie && pattern[15].v != Step::off;
+                wrapped += wraps ? 1 : 0;
+                bool ok = m.badNotes == 0 && m.orderedOffBeforeOn && std::abs (m.end - cycle * repeats) <= 1
+                       && std::abs (std::fmod (m.end / (4.0 * clipTicksPerQuarter), 1.0)) < 1.0e-6;
+                for (const auto& n : m.notes) ok = ok && n.off > n.on && n.on >= 0 && n.off <= m.end;
+                if (! ok) { ++timedBad; continue; }
+                Envelope gate;
+                gate.build (pattern, f.swing, f.length, 0.002, 0.0f, false);
+                for (int k = 0; k < 1600; ++k) {
+                    const double t = (k + 0.5) / 1600.0 * numSteps * repeats, tick = t * ticksPerStep;
+                    const ClipNote* in = nullptr;
+                    bool nearEdge = false;
+                    for (const auto& n : m.notes) {
+                        if (tick >= n.on && tick < n.off) in = &n;
+                        nearEdge = nearEdge || std::abs (tick - n.on) < 0.01 * ticksPerStep || std::abs (tick - n.off) < 0.01 * ticksPerStep;
+                    }
+                    if (nearEdge) continue;
+                    const float level = gate.eval (std::fmod (t, (double) numSteps));
+                    if ((level > 0.1f) != (in != nullptr)) ++timedMismatches;
+                }
+                // Inside the clip, a note never restarts at a cycle boundary when the gate stays open across it.
+                for (int r = 1; r < repeats && wraps; ++r)
+                    for (const auto& n : m.notes)
+                        if (std::abs (n.on - r * cycle) <= 1 && gate.eval (numSteps - 0.001) > 0.5f) ++retriggers;
+            }
+    }
+    check (timedBad == 0, "dotted, triplet and nudged clips are well formed, whole 4/4 bars", timedBad, 0);
+    check (timedMismatches == 0, "their notes sound exactly where the gate is open", timedMismatches, 0);
+    check (wrapped > 10 && retriggers == 0, "held notes that wrap the loop carry on inside the clip", wrapped, 0);
+    check (cases == numFactoryGrooves * 9, "nine timings and nudges per factory groove", cases, numFactoryGrooves * 9);
+
     // The processor writes the clip it plays, named after the groove, and replaces it on the next drag.
     const auto folder = juce::File::getSpecialLocation (juce::File::tempDirectory)
         .getChildFile ("stutter-midi-" + juce::String (juce::Time::currentTimeMillis()));
@@ -897,8 +951,581 @@ static void testMidiClip()
     folder.deleteRecursively();
 }
 
-int main()
+// ---- compatibility: projects and .ssgroove files saved by 0.4.3 must load and sound identical ----
+namespace compat {
+struct Run { double bpm; juce::int64 start; bool playing; };
+
+// Three bars of a held reese through a loaded processor; the SHA-256 of every output sample, both channels.
+static juce::String renderHash (StutterProcessor& proc, const Run& run)
 {
+    FakePlayHead head;
+    head.bpm = run.bpm; head.sample = run.start; head.playing = run.playing;
+    proc.setPlayHead (&head);
+    proc.prepareToPlay (48000, 512);
+    const int total = (int) std::lround (48000.0 * 60.0 / run.bpm * 12.0);
+    const auto bass = reese (total);
+    std::vector<float> data;
+    data.reserve ((size_t) total * 2);
+    juce::AudioBuffer<float> buffer (2, 512);
+    juce::MidiBuffer midi;
+    for (int done = 0; done < total; done += 512) {
+        const int n = std::min (512, total - done);
+        buffer.setSize (2, n, false, false, true);
+        for (int ch = 0; ch < 2; ++ch) for (int i = 0; i < n; ++i) buffer.setSample (ch, i, bass[(size_t) (done + i)]);
+        proc.processBlock (buffer, midi);
+        for (int i = 0; i < n; ++i) { data.push_back (buffer.getSample (0, i)); data.push_back (buffer.getSample (1, i)); }
+        head.sample += n;
+    }
+    proc.setPlayHead (nullptr);
+    return juce::SHA256 (data.data(), data.size() * sizeof (float)).toHexString();
+}
+
+static juce::String clipsHash()
+{
+    juce::MemoryOutputStream all;
+    for (int g = 0; g < numFactoryGrooves043; ++g) {
+        const auto& f = factoryGroove (g);
+        for (int rate = 0; rate < 4; ++rate)
+            makeMidiClip (parsePattern (f.cells, f.slap), f.swing, f.length, StutterProcessor::rateBeats (rate), 140.0, f.name).writeTo (all, 0);
+    }
+    return juce::SHA256 (all.getData(), all.getDataSize()).toHexString();
+}
+
+// Writes Tests/Compat043.h. Run on the unmodified 0.4.3 Source: STUTTER-STEP Tests --write-compat <header>.
+static int writeFixtures (const juce::File& header)
+{
+    juce::String out;
+    out << "#pragma once\n"
+        << "// Saved by the unmodified 0.4.3 processor (STUTTER-STEP Tests --write-compat, 2026-11-03, macOS arm64):\n"
+        << "// host states and .ssgroove files (base64), with the SHA-256 of each one's render in compat::renderHash.\n"
+        << "// libm may round differently elsewhere; the fingerprints target macOS arm64.\n"
+        << "struct CompatState { const char* name; const char* state; double bpm; long long start; bool playing; const char* sha256; };\n"
+        << "struct CompatGroove { const char* name; const char* file; double bpm; const char* sha256; };\n"
+        << "inline const CompatState compatStates[] {\n";
+    const auto addBlock = [&] (const juce::String& name, const juce::MemoryBlock& block, Run run) {
+        StutterProcessor fresh;
+        fresh.setStateInformation (block.getData(), (int) block.getSize());
+        out << "    { \"" << name << "\", \"" << block.toBase64Encoding() << "\", " << juce::String (run.bpm, 1) << ", "
+            << juce::String (run.start) << ", " << (run.playing ? "true" : "false") << ", \"" << renderHash (fresh, run) << "\" },\n";
+    };
+    const auto addState = [&] (const juce::String& name, StutterProcessor& from, Run run) {
+        juce::MemoryBlock block;
+        from.getStateInformation (block);
+        addBlock (name, block, run);
+    };
+    const double tempos[] { 140.0, 90.0, 174.0 };
+    for (int i = 0; i < numFactoryGrooves; ++i) {
+        StutterProcessor p;
+        p.loadFactory (i);
+        addState (juce::String ("factory ") + factoryGroove (i).name, p, { tempos[i % 3], (juce::int64) i * 7919, true });
+    }
+    {   // Edited: a ghost send, a tie, 1/32, free slap time, GAPS, no WIDE, partial depth, SUB SAFE 200, quieter output.
+        StutterProcessor p;
+        p.loadFactory (5);
+        p.setCell (3, { Step::ghost, true }); p.setCell (9, { Step::tie, false }); p.setCell (12, { Step::hit, true });
+        setParam (p, "rate", 3); setParam (p, "swing", 71); setParam (p, "slapLock", 0); setParam (p, "slapTime", 37);
+        setParam (p, "slapGaps", 1); setParam (p, "slapWide", 0); setParam (p, "depth", 70); setParam (p, "smooth", 12);
+        setParam (p, "subSafe", 3); setParam (p, "output", -3);
+        addState ("edited factory groove", p, { 174.0, 12345, true });
+    }
+    {   // Sends on an off step and on tie continuations (the engine ignores them), at 1/4.
+        StutterProcessor p;
+        p.setPattern (parsePattern ("X--.g.X...X-.gX.", ".**.*.....*.**.*"));
+        setParam (p, "rate", 0); setParam (p, "slapFeedback", 60); setParam (p, "slapMix", 80);
+        addState ("ignored sends at 1/4", p, { 90.0, 0, true });
+    }
+    {   StutterProcessor p;
+        p.rollNewGroove();
+        setParam (p, "rate", 1);
+        addState ("rolled groove at 1/8", p, { 128.0, 48000, true });
+    }
+    {   StutterProcessor p;
+        p.loadFactory (12);
+        setParam (p, "slapOn", 0);
+        addState ("slap off", p, { 140.0, 0, true });
+    }
+    {   StutterProcessor p;
+        p.loadFactory (20);
+        setParam (p, "bypass", 1);
+        addState ("bypassed", p, { 140.0, 0, true });
+    }
+    {   StutterProcessor p;
+        p.loadFactory (30);
+        addState ("stopped transport", p, { 100.0, 0, false });
+    }
+    {   // Schema 1 (0.1/0.2): RATE stored as 0 = 1/8, 1 = 1/16, 2 = 1/32.
+        StutterProcessor p;
+        p.loadFactory (7);
+        juce::MemoryBlock block;
+        p.getStateInformation (block);
+        auto xml = juce::AudioProcessor::getXmlFromBinary (block.getData(), (int) block.getSize());
+        xml->getChildByName ("GROOVE")->setAttribute ("schema", 1);
+        for (auto* param : xml->getChildWithTagNameIterator ("PARAM"))
+            if (param->getStringAttribute ("id") == "rate") param->setAttribute ("value", 0);
+        juce::MemoryBlock patched;
+        juce::AudioProcessor::copyXmlToBinary (*xml, patched);
+        addBlock ("schema 1 project", patched, { 140.0, 0, true });
+    }
+    const auto root = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("stutter-compat-fixtures");
+    root.deleteRecursively();
+    setenv ("STUTTER_STEP_PRESET_ROOT", root.getFullPathName().toRawUTF8(), 1);
+    {   StutterProcessor p;
+        p.rollNewGroove();
+        p.saveUserGroove ("Compat User");
+        addState ("USER groove project", p, { 140.0, 0, true });
+    }
+    out << "};\ninline const CompatGroove compatGrooves[] {\n";
+    const auto addGroove = [&] (const juce::String& name, StutterProcessor& from, double bpm) {
+        from.saveUserGroove (name);
+        const auto file = root.getChildFile (name + StutterProcessor::grooveExtension);
+        juce::MemoryBlock text;
+        file.loadFileAsData (text);
+        StutterProcessor fresh;
+        fresh.loadUserGroove (file);
+        out << "    { \"" << name << "\", \"" << text.toBase64Encoding() << "\", " << juce::String (bpm, 1) << ", \""
+            << renderHash (fresh, { bpm, 0, true }) << "\" },\n";
+    };
+    {   StutterProcessor p;
+        p.loadFactory (17);
+        p.setCell (2, { Step::ghost, true });
+        setParam (p, "slapLock", 0); setParam (p, "slapTime", 61); setParam (p, "depth", 85);
+        addGroove ("Compat Edited", p, 140.0);
+    }
+    {   StutterProcessor p;
+        p.rollNewGroove();
+        setParam (p, "rate", 0); setParam (p, "slapGaps", 1);
+        addGroove ("Compat Quarter", p, 90.0);
+    }
+    {   StutterProcessor p;
+        p.loadFactory (40);
+        setParam (p, "rate", 3); setParam (p, "swing", 55);
+        addGroove ("Compat Thirty Second", p, 174.0);
+    }
+    out << "};\n";
+    root.deleteRecursively();
+    unsetenv ("STUTTER_STEP_PRESET_ROOT");
+    out << "// Every factory groove's DRAG MIDI clip at each RATE (140 BPM), written back to back.\n"
+        << "inline const char* const compatClipsSha256 = \"" << clipsHash() << "\";\n";
+    return header.replaceWithText (out) ? 0 : 1;
+}
+} // namespace compat
+
+// ---- 0.5.0 ----
+static void testCompat043()
+{
+    std::puts ("0.4.3 compatibility");
+    // The 0.4.3 bank keeps its indices and names; SIMPLE and HATS follow it.
+    int moved = 0;
+    for (int i = 0; i < numFactoryGrooves043; ++i)
+        if (juce::String ("factory ") + factoryGroove (i).name != compatStates[i].name) ++moved;
+    check (moved == 0, "the 43 grooves of 0.4.3 keep their place and name", moved, 0);
+    check (compat::clipsHash() == compatClipsSha256, "every 0.4.3 groove's DRAG MIDI clip is byte-identical at every RATE");
+   #if JUCE_MAC && JUCE_ARM
+    int states = 0, sameSound = 0, sameIntoDirty = 0, straight = 0, gateLayer = 0;
+    for (const auto& fixture : compatStates) {
+        juce::MemoryBlock block;
+        block.fromBase64Encoding (fixture.state);
+        const compat::Run run { fixture.bpm, (juce::int64) fixture.start, fixture.playing };
+        StutterProcessor fresh;
+        fresh.setStateInformation (block.getData(), (int) block.getSize());
+        straight += juce::roundToInt (fresh.apvts.getRawParameterValue ("timing")->load()) == 0 ? 1 : 0;
+        gateLayer += fresh.editLayer.load() == 0 ? 1 : 0;
+        sameSound += compat::renderHash (fresh, run) == fixture.sha256 ? 1 : 0;
+        // An instance already set to triplet, the SLAP layer and quieter sends opens the old project the same way.
+        StutterProcessor dirty;
+        setParam (dirty, "timing", 2);
+        dirty.editLayer = 1;
+        auto pattern = dirty.getPattern();
+        for (auto& c : pattern) { c.slap = true; c.send = 7; }
+        dirty.setPattern (pattern);
+        dirty.setStateInformation (block.getData(), (int) block.getSize());
+        straight += juce::roundToInt (dirty.apvts.getRawParameterValue ("timing")->load()) == 0 ? 1 : 0;
+        gateLayer += dirty.editLayer.load() == 0 ? 1 : 0;
+        sameIntoDirty += compat::renderHash (dirty, run) == fixture.sha256 ? 1 : 0;
+        ++states;
+    }
+    std::printf ("  %d of %d 0.4.3 projects render byte-identical\n", sameSound, states);
+    check (sameSound == states, "projects saved by 0.4.3 render byte-identical (factory, edited, rolled, USER, schema 1, slap off, bypass, stopped)", sameSound, states);
+    check (sameIntoDirty == states, "and identical when loaded over an instance on triplet timing with other sends", sameIntoDirty, states);
+    check (straight == 2 * states && gateLayer == 2 * states, "old projects open straight, on the GATE layer, whatever the instance had",
+           straight, 2 * states);
+
+    const auto root = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("stutter-compat-grooves");
+    root.deleteRecursively();
+    root.createDirectory();
+    int grooves = 0, sameGroove = 0;
+    for (const auto& fixture : compatGrooves) {
+        juce::MemoryBlock text;
+        text.fromBase64Encoding (fixture.file);
+        const auto file = root.getChildFile (juce::String (fixture.name) + StutterProcessor::grooveExtension);
+        file.replaceWithData (text.getData(), text.getSize());
+        StutterProcessor dirty;
+        setParam (dirty, "timing", 1);
+        check (dirty.loadUserGroove (file), "a 0.4.3 .ssgroove loads");
+        sameGroove += compat::renderHash (dirty, { fixture.bpm, 0, true }) == fixture.sha256 ? 1 : 0;
+        ++grooves;
+    }
+    check (sameGroove == grooves, ".ssgroove files saved by 0.4.3 load straight and render byte-identical", sameGroove, grooves);
+    root.deleteRecursively();
+   #else
+    std::puts ("  render fingerprints skipped: captured on macOS arm64");
+   #endif
+}
+
+static void testSendLevels()
+{
+    std::puts ("send levels");
+    auto p = parsePattern ("X...g...X-......", "*...*...*.......");
+    check (sendLevelsToString (p).empty(), "full sends write no levels (as before 0.5.0)");
+    p[0].send = 10; p[4].send = 1; p[13].send = 13;
+    const auto text = sendLevelsToString (p);
+    Pattern back = parsePattern ("X...g...X-......", "*...*...*.......");
+    applySendLevels (back, text);
+    check (back == p, "levels round-trip through text", 0, 0);
+    Pattern junk = parsePattern ("X...............", "*...............");
+    applySendLevels (junk, "50 x9 abc 250 -3");
+    check (junk[0].send == 10 && junk[1].send == fullSend && junk[3].send == fullSend && junk[5].send == fullSend,
+           "unreadable levels stay full, numbers are clamped");
+
+    Envelope send;
+    send.build (p, 0.5, 0.5, 0.05, 0.0f, true);
+    near (send.eval (0.25), 0.5, 1e-6, "a 50% send sends half the hit");
+    near (send.eval (4.25), ghostLevel * 0.05, 1e-6, "a 5% send on a ghost");
+    near (send.eval (8.25), 1.0, 1e-6, "a full send is unchanged");
+    Envelope gate;
+    gate.build (p, 0.5, 0.5, 0.05, 0.0f, false);
+    near (gate.eval (0.25), 1.0, 1e-6, "send levels never touch the gate");
+
+    StutterProcessor proc;
+    proc.setPattern (p);
+    check (proc.getPattern() == p, "the processor keeps send levels");
+    juce::MemoryBlock block;
+    proc.getStateInformation (block);
+    StutterProcessor reopened;
+    reopened.setStateInformation (block.getData(), (int) block.getSize());
+    check (reopened.getPattern() == p, "projects keep send levels");
+
+    // How much echo: half the send, half the slap (linear), dry unchanged.
+    const auto wet = [] (int level) {
+        StutterProcessor q;
+        FakePlayHead head;
+        q.setPlayHead (&head);
+        setParam (q, "depth", 0); setParam (q, "slapMix", 100); setParam (q, "slapGaps", 0); setParam (q, "subSafe", 0);
+        auto pat = parsePattern ("X...............", "*...............");
+        pat[0].send = (std::uint8_t) level;
+        q.setPattern (pat);
+        q.prepareToPlay (48000, 512);
+        const auto out = render (q, head, 24000);
+        double e = 0;
+        for (size_t i = 6000; i < out.size(); ++i) e += (out[i] - 0.5) * (out[i] - 0.5);
+        return std::sqrt (e);
+    };
+    const double full = wet (fullSend), half = wet (fullSend / 2);
+    near (half / full, 0.5, 0.01, "a 50% send gives half the echo");
+
+    // Who owns a step's send.
+    const auto q = parsePattern ("-X--..-.g-......", "");
+    check (eventOwner (q, 0) == 0 && eventOwner (q, 2) == 1 && eventOwner (q, 3) == 1 && eventOwner (q, 4) == -1
+               && eventOwner (q, 6) == 6 && eventOwner (q, 9) == 8, "a held step belongs to the note it continues");
+    const auto wrap = parsePattern ("--..X.........X-", "");
+    check (eventOwner (wrap, 0) == 14 && eventOwner (wrap, 1) == 14 && eventOwner (wrap, 15) == 14, "around the loop too");
+    check (eventOwner (parsePattern ("----------------", ""), 9) == 0, "every step tied: the first step starts it");
+}
+
+static void testNudge()
+{
+    std::puts ("nudge");
+    int identity = 0;
+    for (int i = 0; i < numFactoryGrooves; ++i) {
+        auto p = parsePattern (factoryGroove (i).cells, factoryGroove (i).slap);
+        p[3].send = 9;
+        auto r = p;
+        for (int k = 0; k < numSteps; ++k) r = rotated (r, 1);
+        identity += rotated (rotated (p, -1), 1) == p && r == p && rotated (p, 5) == rotated (rotated (p, 2), 3) ? 1 : 0;
+    }
+    check (identity == numFactoryGrooves, "nudging back undoes a nudge; 16 nudges come home", identity, numFactoryGrooves);
+    const auto p = parsePattern ("X-..g.X...X-.gX.", "......*.......*.");
+    const auto r = rotated (p, 1);
+    check (r[0] == p[15] && r[7] == p[6] && r[7].slap && r[12].v == Step::tie, "each step keeps its gate, tie and send");
+
+    // Moving a groove is moving its sound: the gate (and the sends) shifted by whole steps, held notes held across the
+    // loop. Straight swing moves by one step; with swing, two steps keep every hit on its swung place.
+    int shiftedWrong = 0, cases = 0;
+    for (int i = 0; i < numFactoryGrooves; ++i) {
+        auto pat = parsePattern (factoryGroove (i).cells, factoryGroove (i).slap);
+        for (const auto& [swing, by] : { std::pair { 0.5, 1 }, { 0.5, -1 }, { 0.62, 2 }, { 0.71, -2 } }) {
+            ++cases;
+            Envelope a, b, sa, sb;
+            const double length = factoryGroove (i).length;
+            a.build (pat, swing, length, 0.03, 0.1f, false);
+            b.build (rotated (pat, by), swing, length, 0.03, 0.1f, false);
+            sa.build (pat, swing, length, 0.03, 0.0f, true);
+            sb.build (rotated (pat, by), swing, length, 0.03, 0.0f, true);
+            float worst = 0;
+            for (double t = 0; t < 16; t += 0.0137)
+                worst = std::max ({ worst, std::abs (b.eval (t + by) - a.eval (t)), std::abs (sb.eval (t + by) - sa.eval (t)) });
+            if (worst > 1e-4f) { ++shiftedWrong; std::printf ("  %s nudged %d at swing %.2f: %.5f\n", factoryGroove (i).name, by, swing, worst); }
+        }
+    }
+    check (shiftedWrong == 0, "every factory groove nudged plays the same gate and sends, shifted in time", shiftedWrong, 0);
+    check (cases == numFactoryGrooves * 4, "four nudges per groove");
+
+    // The processor: edited, the host hears it, saves and DRAG MIDI follow.
+    StutterProcessor proc;
+    HostCounter host;
+    proc.addListener (&host);
+    proc.loadFactory (factoryIndexOf ("Lean Back"));
+    const auto before = proc.getPattern();
+    const auto revision = proc.grooveRevision.load();
+    const int changes = host.changes;
+    proc.nudge (-1);
+    check (proc.getPattern() == rotated (before, -1) && proc.getGrooveInfo().edited && proc.getGrooveInfo().name == "Lean Back",
+           "NUDGE moves the groove and marks it edited, like any edit");
+    check (proc.grooveRevision.load() != revision && host.changes > changes, "the screen and the host hear about it");
+    proc.removeListener (&host);
+    juce::MemoryBlock block;
+    proc.getStateInformation (block);
+    StutterProcessor reopened;
+    reopened.setStateInformation (block.getData(), (int) block.getSize());
+    check (reopened.getPattern() == proc.getPattern() && reopened.getGrooveInfo().edited, "projects keep the nudged groove");
+    const auto folder = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("stutter-nudge-" + juce::String (juce::Time::currentTimeMillis()));
+    proc.uiBpm = 140.0;
+    const auto file = proc.writeMidiClip (folder);
+    juce::MemoryBlock written;
+    file.loadFileAsData (written);
+    const auto s = proc.snapshot();
+    juce::MemoryOutputStream want;
+    makeMidiClip (rotated (before, -1), s.swing, s.length, StutterProcessor::stepBeats (s.rate, s.timing), 140.0, "Lean Back").writeTo (want, 0);
+    check (written == want.getMemoryBlock(), "DRAG MIDI writes the nudged groove");
+    folder.deleteRecursively();
+
+    // In the processor, at 125 BPM (a 1/16 step is 5760 samples): the nudged render is the original, one step late.
+    const auto renderOf = [] (const Pattern& pat) {
+        StutterProcessor q;
+        FakePlayHead head;
+        head.bpm = 125.0;
+        q.setPlayHead (&head);
+        q.loadFactory (factoryIndexOf ("Lean Back"));
+        setParam (q, "slapOn", 0); setParam (q, "swing", 50); setParam (q, "rate", 2);
+        q.setPattern (pat);
+        q.prepareToPlay (48000, 512);
+        return render (q, head, 48000 * 3);
+    };
+    const auto original = renderOf (before), later = renderOf (rotated (before, 1));
+    float worst = 0;
+    for (size_t n = 5760 + 1000; n < later.size(); ++n) worst = std::max (worst, std::abs (later[n] - original[n - 5760]));
+    check (worst < 1e-4f, "nudged one step later sounds exactly one step later", worst, 0);
+}
+
+static void testDottedTriplet()
+{
+    std::puts ("dotted and triplet");
+    for (int rate = 0; rate < 4; ++rate) {
+        const double timed = StutterProcessor::stepBeats (rate, 0), plain = StutterProcessor::rateBeats (rate);
+        check (std::memcmp (&timed, &plain, sizeof timed) == 0, "straight is RATE exactly");
+        near (StutterProcessor::stepBeats (rate, 1), 1.5 * StutterProcessor::rateBeats (rate), 1e-12, "dotted is 1.5 times RATE");
+        near (StutterProcessor::stepBeats (rate, 2), 2.0 / 3.0 * StutterProcessor::rateBeats (rate), 1e-12, "triplet is two thirds of RATE");
+    }
+    StutterProcessor timingParam;
+    auto* parameter = timingParam.apvts.getParameter ("timing");
+    check (parameter != nullptr && parameter->getCurrentValueAsText() == "Straight" && timingParam.getParameters().getLast() == parameter,
+           "TIMING is a host parameter, appended last, default straight");
+
+    // The gate opens on the timed grid, with swing, at several tempos, across the loop.
+    int late = 0, wrongState = 0, onsets = 0;
+    for (const double bpm : { 90.0, 140.0, 174.0 })
+        for (const int timing : { 1, 2 })
+            for (const int rate : { 1, 2, 3 }) {
+                StutterProcessor proc;
+                FakePlayHead head;
+                head.bpm = bpm;
+                proc.setPlayHead (&head);
+                setParam (proc, "slapOn", 0); setParam (proc, "length", 50); setParam (proc, "smooth", 1); setParam (proc, "depth", 100);
+                setParam (proc, "swing", 62); setParam (proc, "rate", (float) rate); setParam (proc, "timing", (float) timing);
+                proc.setPattern (parsePattern ("XX..X...X.X.X..X", ""));
+                proc.prepareToPlay (48000, 512);
+                const double stepSamples = 48000.0 * 60.0 / bpm * StutterProcessor::stepBeats (rate, timing);
+                const int cycles = 2;
+                const auto out = render (proc, head, (int) std::ceil (stepSamples * 16 * cycles) + 512);
+                const auto pat = proc.getPattern();
+                for (int c = 0; c < cycles; ++c)
+                    for (int i = 0; i < 16; ++i) {
+                        const double start = (c * 16 + stepStart (i, 0.62)) * stepSamples, slot = slotLength (i, 0.62) * stepSamples;
+                        const bool sounding = pat[(size_t) i].v == Step::hit;
+                        const float mid = out[(size_t) std::lround (start + slot * 0.25)];
+                        if (sounding != (mid > 0.45f)) ++wrongState;
+                        if (! sounding || start < 1) continue;
+                        int cross = -1;
+                        for (int n = (int) start - 200; n < (int) start + 200; ++n) if (out[(size_t) n] >= 0.25f) { cross = n; break; }
+                        ++onsets;
+                        if (std::abs (cross - start) > 30) ++late;
+                    }
+            }
+    check (wrongState == 0, "dotted and triplet steps open and close on their grid, swing included (90, 140, 174 BPM)", wrongState, 0);
+    check (late == 0, "every onset lands within 30 samples of its timed grid line, past the loop too", late, onsets);
+
+    // LOCK follows the timed step; the playhead the screen draws stays on the gate's clock.
+    StutterProcessor proc;
+    auto snap = proc.snapshot();
+    snap.swing = 0.62; snap.bpm = 140; snap.rate = 2; snap.slapLock = true; snap.timing = 2;
+    near (snap.slapSeconds(), 2.0 * 0.62 * 60.0 / 140.0 * 0.25 * 2.0 / 3.0, 1e-9, "LOCK lands the echo on the swung triplet off-step");
+    snap.timing = 1;
+    near (snap.slapSeconds(), 2.0 * 0.62 * 60.0 / 140.0 * 0.25 * 1.5, 1e-9, "and on the dotted one");
+    FakePlayHead head;
+    head.bpm = 132.0;
+    proc.setPlayHead (&head);
+    setParam (proc, "rate", 2); setParam (proc, "timing", 1);
+    proc.prepareToPlay (48000, 512);
+    render (proc, head, 100000);
+    near (proc.uiPosition.load(), std::fmod (100000.0 / 48000.0 * 132.0 / 60.0 / 0.375, 16.0), 1e-6, "the playhead runs on dotted steps");
+
+    // No clicks: the host loops every two bars while dotted and triplet cycles run across the bar line, and each
+    // jump back is smoothed like any gate edge (held input, SMOOTH 1 ms).
+    float worstStep = 0;
+    for (const int timing : { 0, 1, 2 }) {
+        StutterProcessor q;
+        FakePlayHead h;
+        h.bpm = 140.0;
+        q.setPlayHead (&h);
+        q.loadFactory (factoryIndexOf ("Lean Back"));
+        q.nudge (-1); // a tie now wraps the loop
+        setParam (q, "slapOn", 0); setParam (q, "smooth", 1); setParam (q, "timing", (float) timing);
+        q.prepareToPlay (48000, 256);
+        const int loop = (int) std::lround (48000.0 * 60.0 / 140.0 * 8.0);
+        std::vector<float> out;
+        juce::AudioBuffer<float> buffer (2, 256);
+        juce::MidiBuffer midi;
+        for (int done = 0; done < loop * 3; done += 256) {
+            h.sample = done % loop; // the host's loop: the song position jumps back every two bars
+            for (int ch = 0; ch < 2; ++ch) for (int i = 0; i < 256; ++i) buffer.setSample (ch, i, 0.5f);
+            q.processBlock (buffer, midi);
+            for (int i = 0; i < 256; ++i) out.push_back (buffer.getSample (0, i));
+        }
+        for (size_t i = 1; i < out.size(); ++i) worstStep = std::max (worstStep, std::abs (out[i] - out[i - 1]));
+    }
+    const float smoothing = 1.0f - std::exp (-1.0f / (0.0005f * 48000.0f));
+    check (worstStep <= 0.5f * smoothing * 1.02f, "loop jumps and cycle wraps never step the gain faster than its smoother", worstStep, 0.5 * smoothing);
+
+    // DRAG MIDI writes what is heard: the clip's onsets are the rendered onsets.
+    for (const int timing : { 1, 2 }) {
+        StutterProcessor q;
+        FakePlayHead h;
+        h.bpm = 140.0;
+        q.setPlayHead (&h);
+        setParam (q, "slapOn", 0); setParam (q, "length", 50); setParam (q, "smooth", 1); setParam (q, "swing", 58);
+        setParam (q, "rate", 2); setParam (q, "timing", (float) timing);
+        q.setPattern (parsePattern ("X..X..g.X.X...X.", ""));
+        q.prepareToPlay (48000, 512);
+        const auto out = render (q, h, 48000 * 4);
+        const auto s = q.snapshot();
+        const auto clip = makeMidiClip (s.pattern, s.swing, s.length, StutterProcessor::stepBeats (s.rate, s.timing), 140.0, "t");
+        const auto& track = *clip.getTrack (0);
+        int matched = 0, notes = 0;
+        for (int e = 0; e < track.getNumEvents(); ++e) {
+            const auto& m = track.getEventPointer (e)->message;
+            if (! m.isNoteOn()) continue;
+            const double sample = m.getTimeStamp() / clipTicksPerQuarter * 60.0 / 140.0 * 48000.0;
+            if (sample > out.size() - 200) continue;
+            ++notes;
+            const float level = m.getVelocity() == hitVelocity ? 1.0f : ghostLevel;
+            int cross = -1;
+            for (int n = juce::jmax (0, (int) sample - 200); n < (int) sample + 200; ++n) if (out[(size_t) n] >= 0.25f * level) { cross = n; break; }
+            matched += std::abs (cross - sample) <= 30 || sample < 1 ? 1 : 0;
+        }
+        check (notes > 6 && matched == notes, timing == 1 ? "dotted clip notes start where the gate opens" : "triplet clip notes start where the gate opens", matched, notes);
+    }
+    const std::pair<double, int> lengths[] { { 0.25 * 1.5, 2 }, { 0.5 * 1.5, 1 }, { 1.5, 1 }, { 0.125 * 1.5, 4 },
+                                             { 0.25 * 2 / 3.0, 3 }, { 0.5 * 2 / 3.0, 3 }, { 2 / 3.0, 3 }, { 0.125 * 2 / 3.0, 3 },
+                                             { 0.125, 2 }, { 0.25, 1 }, { 0.5, 1 }, { 1.0, 1 } };
+    int wrongRepeats = 0;
+    for (const auto& [beats, repeats] : lengths) wrongRepeats += clipRepeats (beats) == repeats ? 0 : 1;
+    check (wrongRepeats == 0, "clips are whole bars: dotted 1/16 twice (3 bars), triplet 1/16 three times (2 bars)", wrongRepeats, 0);
+
+    // Grooves own their timing as they own RATE; NEW GROOVE keeps what you set; USER grooves save it.
+    StutterProcessor g;
+    g.loadFactory (factoryIndexOf ("Triplet Rolls"));
+    check (juce::roundToInt (g.apvts.getRawParameterValue ("timing")->load()) == 2, "a triplet factory groove sets triplet timing");
+    g.loadFactory (0);
+    check (juce::roundToInt (g.apvts.getRawParameterValue ("timing")->load()) == 0, "and the older grooves set straight");
+    setParam (g, "timing", 1); setParam (g, "rate", 3);
+    for (const int family : { -1, (int) Family::hats }) {
+        g.rollFrom = family;
+        g.rollNewGroove();
+        check (juce::roundToInt (g.apvts.getRawParameterValue ("timing")->load()) == 1 && juce::roundToInt (g.apvts.getRawParameterValue ("rate")->load()) == 3,
+               "NEW GROOVE keeps your timing and RATE");
+    }
+    const auto root = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("stutter-timing-grooves");
+    root.deleteRecursively();
+    setenv ("STUTTER_STEP_PRESET_ROOT", root.getFullPathName().toRawUTF8(), 1);
+    auto withLevels = g.getPattern();
+    withLevels[0].slap = true; withLevels[0].send = 11;
+    g.setPattern (withLevels);
+    check (g.saveUserGroove ("Dotted One").wasOk(), "a dotted groove saves");
+    StutterProcessor other;
+    setParam (other, "timing", 2);
+    check (other.loadUserGroove (root.getChildFile (juce::String ("Dotted One") + StutterProcessor::grooveExtension))
+               && juce::roundToInt (other.apvts.getRawParameterValue ("timing")->load()) == 1 && other.getPattern() == withLevels,
+           "USER grooves keep their timing and send levels");
+    root.deleteRecursively();
+    unsetenv ("STUTTER_STEP_PRESET_ROOT");
+
+    // The swing padlock holds through every groove, the new ones included, and through rolls.
+    StutterProcessor locked;
+    locked.lockSwing = true;
+    setParam (locked, "swing", 73.0f);
+    bool held = true;
+    for (int i = 0; i < numFactoryGrooves; ++i) { locked.loadFactory (i); held = held && std::abs (locked.apvts.getRawParameterValue ("swing")->load() - 73.0f) < 0.05f; }
+    locked.rollFrom = (int) Family::hats;
+    locked.rollNewGroove();
+    locked.nudge (3);
+    held = held && std::abs (locked.apvts.getRawParameterValue ("swing")->load() - 73.0f) < 0.05f;
+    check (held, "the swing padlock holds through all 75 grooves, a HATS roll and a nudge");
+}
+
+static void testNewBank()
+{
+    std::puts ("SIMPLE and HATS");
+    int simple = 0, hats = 0, misplaced = 0, hatProblems = 0, simpleProblems = 0, twins = 0;
+    for (int i = 0; i < numFactoryGrooves; ++i) {
+        const auto& f = factoryGroove (i);
+        const juce::String folder (f.folder);
+        if (i < numFactoryGrooves043) { misplaced += folder == "SIMPLE" || folder == "HATS" || f.timing != 0 ? 1 : 0; continue; }
+        if (folder == "SIMPLE") { ++simple; misplaced += hats > 0 ? 1 : 0; simpleProblems += f.swing > 0.55f || f.smoothMs < 3.0f ? 1 : 0; }
+        else if (folder == "HATS") {
+            ++hats;
+            int sends = 0;
+            for (const auto& c : parsePattern (f.cells, f.slap)) sends += c.slap ? 1 : 0;
+            hatProblems += f.family != Family::hats || f.length > 0.5f || f.smoothMs > 1.5f || f.depth < 1.0f || sends > 1 || f.mix > 0.2f ? 1 : 0;
+        }
+        else ++misplaced;
+        for (int j = 0; j < i; ++j) {
+            const auto& o = factoryGroove (j);
+            twins += std::string (o.cells) == f.cells && o.rate == f.rate && o.timing == f.timing && std::abs (o.swing - f.swing) < 0.01f
+                      && std::abs (o.length - f.length) < 0.05f ? 1 : 0;
+        }
+    }
+    check (simple == 15 && hats == 17 && misplaced == 0, "SIMPLE (15) then HATS (17) follow the 43 older grooves", simple * 100 + hats, 1517);
+    check (simpleProblems == 0, "SIMPLE grooves are straight or lightly swung, with click-free edges", simpleProblems, 0);
+    check (hatProblems == 0, "HATS grooves: short LENGTH, crisp SMOOTH, full DEPTH, slap off or one faint send", hatProblems, 0);
+    check (twins == 0, "no two grooves are the same rhythm, timing, swing and LENGTH", twins, 0);
+    StutterProcessor proc;
+    check (proc.getNumPrograms() == 75 && proc.getProgramName (74) == "Dotted Hats" && proc.getProgramName (43) == "Quarter Chug",
+           "hosts see 75 programs, the new ones after the old");
+
+    // HATS rolls: busy and accented, short, never on a factory groove, no slap sends.
+    int bad = 0;
+    for (std::uint32_t seed = 1; seed <= 2000; ++seed) {
+        const auto g = generate (seed * 2654435761u, (int) Family::hats);
+        int on = 0, sends = 0;
+        for (const auto& c : g.pattern) { on += c.v != Step::off; sends += c.slap; }
+        bad += g.family != Family::hats || on < 8 || sends != 0 || g.length > 0.4f || g.swing > 0.58f ? 1 : 0;
+    }
+    check (bad == 0, "HATS rolls: 8-16 steps, short, lightly swung, no sends", bad, 0);
+}
+
+int main (int argc, char** argv)
+{
+    if (argc > 2 && juce::String (argv[1]) == "--write-compat") return compat::writeFixtures (juce::File (juce::String (argv[2])));
     // Pure console: no GUI initialiser, MessageManager, NSApplication or editor.
     // APVTS copyState() flushes parameter values synchronously; its UI timer isn't needed here.
     check (juce::MessageManager::getInstanceWithoutCreating() == nullptr, "console tests start without a GUI/message runtime");
@@ -914,6 +1541,11 @@ int main()
     testUserGrooves();
     testRandomGroove();
     testMidiClip();
+    testCompat043();
+    testSendLevels();
+    testNudge();
+    testDottedTriplet();
+    testNewBank();
     check (juce::MessageManager::getInstanceWithoutCreating() == nullptr, "DSP/state tests never create a GUI/message runtime");
     std::printf ("%d checks, %d failures\n", checks, failures);
     return failures == 0 ? 0 : 1;

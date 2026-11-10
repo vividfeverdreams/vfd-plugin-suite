@@ -11,7 +11,9 @@ const juce::Colour bench { 0xff050d0e }, cream { 0xfff4ead2 }, glassText { 0xffd
     keyFill { 0xff0a2a2c }, navy { 0xff1b2c5e }, badgeText { 0xff8fe9de }, panel { 0xff071d1f };
 
 // Artwork coordinates, measured on Assets/DeviceShell.png (1120 x 1408).
-const juce::Rectangle<float> laneArt { 250, 286, 684, 128 }, dotsArt { 250, 440, 684, 30 };
+// The step lane spans the screen; the row under it (0.5.0) holds GATE/SLAP, NUDGE and DOTTED/TRIPLET.
+const juce::Rectangle<float> laneArt { 196, 286, 738, 128 }, toolRowArt { 196, 444, 738, 30 };
+const juce::Rectangle<float> nudgeCaptionArt { 529, 444, 72, 30 };
 const juce::Rectangle<float> subSafeArt { 432, 514, 104, 32 }, outputArt { 552, 514, 104, 32 }, midiArt { 672, 514, 56, 32 },
     meterArt { 744, 494, 190, 52 };
 const juce::Point<float> ledCentre { 948, 127 };
@@ -27,9 +29,25 @@ juce::String percent (double v01) { return juce::String (juce::roundToInt (v01 *
 juce::String hertz (float hz) { return hz >= 1000.0f ? juce::String (hz / 1000.0f, hz >= 10000.0f ? 0 : 1) + " kHz" : juce::String (juce::roundToInt (hz)) + " Hz"; }
 const char* rateNames[] { "1/4", "1/8", "1/16", "1/32" };
 
+// How long the 16 steps last, in bars ("1 BAR", "1\u00bd BARS", "\u2154 BAR").
+juce::String spanText (double cycleBeats)
+{
+    const double bars = cycleBeats / 4.0;
+    const int whole = (int) std::floor (bars + 1.0e-6);
+    const double part = bars - whole;
+    juce::String fraction;
+    if (std::abs (part - 0.5) < 1.0e-6) fraction = juce::String::fromUTF8 ("\xc2\xbd");
+    else if (std::abs (part - 1.0 / 3.0) < 1.0e-6) fraction = juce::String::fromUTF8 ("\xe2\x85\x93");
+    else if (std::abs (part - 2.0 / 3.0) < 1.0e-6) fraction = juce::String::fromUTF8 ("\xe2\x85\x94");
+    else if (std::abs (part - 0.75) < 1.0e-6) fraction = juce::String::fromUTF8 ("\xc2\xbe");
+    else if (std::abs (part - 0.25) < 1.0e-6) fraction = juce::String::fromUTF8 ("\xc2\xbc");
+    const juce::String number = (whole > 0 ? juce::String (whole) : juce::String()) + fraction;
+    return number + (bars > 1.0 + 1.0e-6 ? " BARS" : " BAR");
+}
+
 juce::Image loadShell()
 {
-    return juce::ImageCache::getFromMemory (BinaryData::DeviceShell_png, BinaryData::DeviceShell_pngSize);
+    return juce::ImageCache::getFromMemory (BinaryData::DeviceShellfullbleed_png, BinaryData::DeviceShellfullbleed_pngSize);
 }
 
 // Envelopes for the screen, built exactly as the processor builds them.
@@ -139,6 +157,7 @@ public:
     }
     std::function<juce::String()> label;
     std::function<bool()> lit;
+    juce::Colour litColour = aqua; // SLAP lights lime, like the slap everywhere else
     void paintButton (juce::Graphics& g, bool over, bool down) override
     {
         const auto s = (float) getHeight() / 32.0f;
@@ -164,9 +183,9 @@ public:
             return;
         }
         const float radius = 7.0f * s;
-        g.setColour (on ? aqua : keyFill.withAlpha (down ? 1.0f : 0.8f));
+        g.setColour (on ? litColour : keyFill.withAlpha (down ? 1.0f : 0.8f));
         g.fillRoundedRectangle (r, radius);
-        g.setColour (on ? aqua : aqua.withAlpha (over || focus ? 0.6f : 0.26f));
+        g.setColour (on ? litColour : aqua.withAlpha (over || focus ? 0.6f : 0.26f));
         g.drawRoundedRectangle (r, radius, (focus ? 2.0f : 1.5f) * s);
         if (style == Style::left || style == Style::right) {
             juce::Path chevron;
@@ -422,33 +441,56 @@ private:
     bool dragged = false, dragging = false;
 };
 
-// The step lane: gate shape, swing, echo energy and playhead. Click to edit.
+// The step lane: gate shape, swing, echo energy, slap sends and playhead. GATE/SLAP under it picks what clicks edit.
 class StutterEditor::Lane final : public juce::Component, public juce::SettableTooltipClient
 {
 public:
     explicit Lane (StutterEditor& e) : editor (e)
     {
         setMouseCursor (juce::MouseCursor::PointingHandCursor);
-        setTitle ("Gate pattern");
-        setDescription ("Click a step: hit, ghost, off. Shift-click ties it to the step before. Right-click toggles its slap send.");
-        setTooltip ("Click a step: hit, ghost, off. Shift-click: tie to the step before. Right-click: slap send.");
+        setTitle ("Step lane");
+        updateTooltip();
+    }
+    bool slapLayer() const { return editor.proc.editLayer.load() == 1; }
+    void updateTooltip()
+    {
+        const bool slapMode = slapLayer();
+        if (slapMode == tooltipForSlap && getTooltip().isNotEmpty()) return;
+        tooltipForSlap = slapMode;
+        setDescription (slapMode
+            ? "Editing slap sends. Click a sounding step to send it to the slap, click again to stop. Drag up or down for how much it sends; drag across to draw."
+            : "Editing the gate. Click a step: hit, ghost, off. Shift-click ties it to the step before. Right-click toggles its slap send.");
+        setTooltip (slapMode
+            ? "SLAP: click a sounding step to send it to the slap, click again to stop. Drag up or down for how much; drag across to draw."
+            : "GATE: click a step for hit, ghost, off. Shift-click ties it to the step before. Right-click: slap send.");
     }
     void paint (juce::Graphics& g) override
     {
         const auto snap = editor.proc.snapshot();
         const LaneModel m (snap);
+        const bool slapMode = slapLayer();
         const float s = (float) getWidth() / laneArt.getWidth();
         g.addTransform (juce::AffineTransform::scale (s));
         const float W = laneArt.getWidth(), H = laneArt.getHeight();
         const auto xOf = [W] (double t) { return (float) (t / numSteps * W); };
         const auto yOf = [H] (float v) { return H - 10.0f - v * (H - 22.0f); };
 
+        // Step lines, and stronger lines where the labels under the lane sit (beats, or bars for long cycles).
         for (int i = 0; i <= numSteps; ++i) {
-            g.setColour (aqua.withAlpha (i % 4 == 0 ? 0.20f : 0.07f));
+            g.setColour (aqua.withAlpha (0.07f));
             g.fillRect (xOf (i) - 0.5f, 4.0f, 1.0f, H - 8.0f);
         }
+        const double cycle = numSteps * StutterProcessor::stepBeats (snap.rate, snap.timing), unit = cycle <= 4.0 + 1.0e-9 ? 1.0 : 4.0;
+        if (unit > 1.0 && cycle < numSteps - 1.0e-9) {
+            g.setColour (aqua.withAlpha (0.11f)); // beats inside the bars, when a beat is wider than a step
+            for (int k = 1; k < cycle - 1.0e-9; ++k)
+                g.fillRect ((float) (k / cycle) * W - 0.5f, 4.0f, 1.0f, H - 8.0f);
+        }
+        g.setColour (aqua.withAlpha (0.2f));
+        for (int k = 0; k * unit < cycle + 1.0e-9; ++k)
+            g.fillRect ((float) (k * unit / cycle) * W - 0.5f, 4.0f, 1.0f, H - 8.0f);
         if (snap.swing > 0.505) {
-            g.setColour (juce::Colour (0xffa0dcd6).withAlpha (0.55f));
+            g.setColour (juce::Colour (0xffa0dcd6).withAlpha (slapMode ? 0.3f : 0.55f));
             for (int i = 1; i < numSteps; i += 2) {
                 const float x0 = xOf (i), x1 = xOf (stepStart (i, snap.swing));
                 g.drawLine (x0, 6.0f, x1 - 3.0f, 6.0f, 1.4f);
@@ -457,8 +499,9 @@ public:
                 g.fillPath (head);
             }
         }
-        // Echo energy, sampled the way the slap hears the send.
-        if (snap.slapOn && ! snap.bypassed) {
+        const auto drawEchoes = [&] (float base, float span) {
+            // Echo energy, sampled the way the slap hears the send.
+            if (! snap.slapOn || snap.bypassed) return;
             const double d = snap.slapSeconds() / snap.stepSeconds();
             const float visMix = 0.3f + 0.7f * (float) snap.mix;
             for (float x = 0; x < W; x += 2.0f) {
@@ -468,17 +511,18 @@ public:
                 e *= m.gaps.eval (t) * visMix;
                 if (e < 0.01f) continue;
                 const float h = juce::jmin (1.0f, e) * (H - 22.0f);
-                g.setColour (lime.withAlpha (0.18f + 0.4f * juce::jmin (1.0f, e)));
+                g.setColour (lime.withAlpha (base + span * juce::jmin (1.0f, e)));
                 g.fillRect (x, H - 10.0f - h, 2.0f, h);
             }
-        }
+        };
+        if (! slapMode) drawEchoes (0.18f, 0.4f);
         if (m.closed > 0.001f && ! snap.bypassed) {
             juce::Path floor;
             floor.startNewSubPath (0, yOf (m.closed));
             floor.lineTo (W, yOf (m.closed));
             const float dash[] { 4.0f, 5.0f };
             juce::PathStrokeType (1.0f).createDashedStroke (floor, floor, dash, 2);
-            g.setColour (aqua.withAlpha (0.35f));
+            g.setColour (aqua.withAlpha (slapMode ? 0.15f : 0.35f));
             g.fillPath (floor);
         }
         juce::Path shape, line;
@@ -490,17 +534,41 @@ public:
         }
         shape.lineTo (W, H - 10.0f);
         shape.closeSubPath();
-        g.setGradientFill ({ aqua.withAlpha (0.55f), 0, 8, aqua.withAlpha (0.06f), 0, H, false });
-        g.fillPath (shape);
-        g.setColour (aqua.withAlpha (0.22f));
-        g.strokePath (line, juce::PathStrokeType (6.0f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
-        g.setColour (gateStroke);
-        g.strokePath (line, juce::PathStrokeType (2.2f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+        if (slapMode) {
+            // The gate steps back: a faint outline to play against.
+            g.setColour (aqua.withAlpha (0.07f));
+            g.fillPath (shape);
+            g.setColour (gateStroke.withAlpha (0.3f));
+            g.strokePath (line, juce::PathStrokeType (1.4f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+        } else {
+            g.setGradientFill ({ aqua.withAlpha (0.55f), 0, 8, aqua.withAlpha (0.06f), 0, H, false });
+            g.fillPath (shape);
+            g.setColour (aqua.withAlpha (0.22f));
+            g.strokePath (line, juce::PathStrokeType (6.0f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+            g.setColour (gateStroke);
+            g.strokePath (line, juce::PathStrokeType (2.2f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+        }
 
         for (int i = 0; i < numSteps; ++i) {
             const auto v = snap.pattern[(size_t) i].v;
-            g.setColour (gateStroke.withAlpha (v == Step::hit ? 0.95f : v == Step::ghost ? 0.5f : v == Step::tie ? 0.28f : 0.1f));
+            const float a = v == Step::hit ? 0.95f : v == Step::ghost ? 0.5f : v == Step::tie ? 0.28f : 0.1f;
+            g.setColour (gateStroke.withAlpha (slapMode ? a * 0.35f : a));
             g.fillRect (xOf (stepStart (i, snap.swing)) + 2.0f, H - 5.0f, xOf (slotLength (i, snap.swing)) - 4.0f, 4.0f);
+        }
+        if (slapMode) {
+            drawEchoes (0.14f, 0.3f);
+            drawSends (g, snap, W, H);
+        } else {
+            // Which hits send to the slap: a lime dot under each, brighter for a bigger send.
+            for (int i = 0; i < numSteps; ++i) {
+                const auto& c = snap.pattern[(size_t) i];
+                if (! c.slap || eventOwner (snap.pattern, i) != i) continue;
+                const juce::Point<float> centre { xOf (stepStart (i, snap.swing) + slotLength (i, snap.swing) * 0.5), H - 15.0f };
+                g.setColour (lime.withAlpha (0.3f));
+                g.fillEllipse (juce::Rectangle<float> (13, 13).withCentre (centre));
+                g.setColour (lime.withAlpha (0.45f + 0.55f * sendGain (c)));
+                g.fillEllipse (juce::Rectangle<float> (8, 8).withCentre (centre));
+            }
         }
         // Current step and playhead.
         const double pos = editor.proc.uiPosition.load();
@@ -513,11 +581,89 @@ public:
         g.setColour (cream.withAlpha (0.95f));
         g.fillRect (px - 0.8f, 2.0f, 1.6f, H - 4.0f);
     }
+
+    // SLAP: one column per note, on the step that starts it; its height is how much the note sends.
+    void drawSends (juce::Graphics& g, const StutterProcessor::Snapshot& snap, float W, float H) const
+    {
+        const auto xOf = [W] (double t) { return (float) (t / numSteps * W); };
+        const auto font = editor.font (13).withExtraKerningFactor (0.06f);
+        for (int i = 0; i < numSteps; ++i) {
+            const auto& c = snap.pattern[(size_t) i];
+            const int owner = eventOwner (snap.pattern, i);
+            const float x0 = xOf (stepStart (i, snap.swing)), w = xOf (slotLength (i, snap.swing));
+            if (owner < 0) {
+                g.setColour (lime.withAlpha (0.16f));
+                g.fillEllipse (juce::Rectangle<float> (5, 5).withCentre ({ x0 + w * 0.5f, H - 15.0f }));
+                continue;
+            }
+            if (owner != i) {
+                // A held step belongs to the note before it: a thin lime tail, sending (or not) with that note.
+                g.setColour (lime.withAlpha (snap.pattern[(size_t) owner].slap ? 0.5f : 0.18f));
+                g.fillRect (x0 - 2.0f, H - 13.0f, w, 3.0f);
+                continue;
+            }
+            const auto slot = juce::Rectangle<float> (x0 + 4.0f, 12.0f, juce::jmax (4.0f, w - 8.0f), H - 22.0f);
+            const bool hot = i == activeOwner;
+            if (c.slap) {
+                const float top = slot.getBottom() - sendGain (c) * slot.getHeight();
+                const auto column = slot.withTop (top);
+                g.setGradientFill ({ lime.withAlpha (c.v == Step::ghost ? 0.55f : 0.8f), 0, top, lime.withAlpha (0.35f), 0, slot.getBottom(), false });
+                g.fillRoundedRectangle (column, 3.0f);
+                g.setColour (lime);
+                g.fillRoundedRectangle (column.withHeight (3.0f), 1.5f);
+                if (hot) {
+                    g.setColour (lime.withAlpha (0.9f));
+                    g.drawRoundedRectangle (slot.expanded (1.5f), 3.0f, 1.0f);
+                }
+            } else {
+                g.setColour (lime.withAlpha (hot ? 0.6f : 0.28f));
+                g.drawRoundedRectangle (slot, 3.0f, hot ? 1.6f : 1.2f);
+            }
+            if (hot) {
+                // The send amount, above the column (or inside its top when it is full).
+                const juce::String amount = c.slap ? juce::String (juce::roundToInt (sendGain (c) * 100.0f)) + "%" : juce::String ("OFF");
+                const float tw = juce::GlyphArrangement::getStringWidth (font, amount) + 10.0f;
+                const float top = c.slap ? slot.getBottom() - sendGain (c) * slot.getHeight() : slot.getY() + slot.getHeight() * 0.5f;
+                auto tag = juce::Rectangle<float> (tw, 18.0f).withCentre ({ slot.getCentreX(), juce::jmax (12.0f, top - 13.0f) + 0.0f });
+                tag = tag.withX (juce::jlimit (0.0f, W - tw, tag.getX()));
+                g.setColour (panel.withAlpha (0.92f));
+                g.fillRoundedRectangle (tag, 4.0f);
+                g.setColour (lime);
+                g.setFont (font);
+                g.drawText (amount, tag, juce::Justification::centred, false);
+            }
+        }
+    }
+
+    int stepUnder (juce::Point<float> p) const
+    {
+        const double t = juce::jlimit (0.0, 15.9999, (double) p.x / getWidth() * numSteps);
+        return stepAt (t, editor.proc.snapshot().swing);
+    }
+    int sendLevelAt (float y) const
+    {
+        const float H = laneArt.getHeight(), local = y / ((float) getHeight() / H);
+        const float v = juce::jlimit (0.0f, 1.0f, (H - 10.0f - local) / (H - 22.0f));
+        return juce::jlimit (1, fullSend, juce::roundToInt (v * fullSend));
+    }
+    void mouseMove (const juce::MouseEvent& e) override
+    {
+        const int owner = slapLayer() ? eventOwner (editor.proc.getPattern(), stepUnder (e.position)) : -1;
+        if (owner != activeOwner) { activeOwner = owner; repaint(); }
+    }
+    void mouseExit (const juce::MouseEvent&) override { if (! isMouseButtonDown() && activeOwner >= 0) { activeOwner = -1; repaint(); } }
     void mouseDown (const juce::MouseEvent& e) override
     {
         const auto snap = editor.proc.snapshot();
-        const double t = juce::jlimit (0.0, 15.9999, (double) e.position.x / getWidth() * numSteps);
-        const int i = stepAt (t, snap.swing);
+        const int i = stepUnder (e.position);
+        drawing = false;
+        if (slapLayer()) {
+            pressedOwner = eventOwner (snap.pattern, i);
+            activeOwner = pressedOwner;
+            if (e.mods.isPopupMenu()) { toggleSend (pressedOwner); pressedOwner = -2; }
+            repaint();
+            return;
+        }
         auto cell = snap.pattern[(size_t) i];
         if (e.mods.isPopupMenu()) cell.slap = ! cell.slap;
         else if (e.mods.isShiftDown()) cell.v = (cell.v == Step::tie || i == 0 || snap.pattern[(size_t) i - 1].v == Step::off) ? Step::hit : Step::tie;
@@ -525,55 +671,45 @@ public:
         editor.proc.setCell (i, cell);
         editor.repaint();
     }
-private:
-    StutterEditor& editor;
-};
-
-// Slap-send dots under the lane, one per step at its swung centre.
-class StutterEditor::Dots final : public juce::Component, public juce::SettableTooltipClient
-{
-public:
-    explicit Dots (StutterEditor& e) : editor (e)
+    void mouseDrag (const juce::MouseEvent& e) override
     {
-        setMouseCursor (juce::MouseCursor::PointingHandCursor);
-        setTitle ("Slap sends");
-        setTooltip ("Lime dots send that hit to the slap. Click to toggle.");
-    }
-    void paint (juce::Graphics& g) override
-    {
-        const auto snap = editor.proc.snapshot();
-        const float s = (float) getWidth() / dotsArt.getWidth();
-        g.addTransform (juce::AffineTransform::scale (s));
-        for (int i = 0; i < numSteps; ++i) {
-            const auto& c = snap.pattern[(size_t) i];
-            const float x = (float) ((stepStart (i, snap.swing) + slotLength (i, snap.swing) * 0.5) / numSteps * dotsArt.getWidth());
-            const juce::Point<float> centre { x, 15.0f };
-            if (c.v == Step::off) {
-                g.setColour (lime.withAlpha (0.14f));
-                g.drawEllipse (juce::Rectangle<float> (6, 6).withCentre (centre), 1.5f);
-            } else if (c.slap) {
-                g.setColour (lime.withAlpha (0.35f));
-                g.fillEllipse (juce::Rectangle<float> (20, 20).withCentre (centre));
-                g.setColour (lime);
-                g.fillEllipse (juce::Rectangle<float> (12, 12).withCentre (centre));
-            } else {
-                g.setColour (lime.withAlpha (0.35f));
-                g.drawEllipse (juce::Rectangle<float> (12, 12).withCentre (centre), 2.0f);
+        if (! slapLayer() || e.mods.isPopupMenu()) return;
+        if (! drawing && e.getDistanceFromDragStart() < 4) return;
+        drawing = true;
+        const auto pattern = editor.proc.getPattern();
+        const int owner = eventOwner (pattern, stepUnder (e.position));
+        activeOwner = owner;
+        if (owner >= 0) {
+            auto cell = pattern[(size_t) owner];
+            const int level = sendLevelAt (e.position.y);
+            if (! cell.slap || cell.send != level) {
+                cell.slap = true;
+                cell.send = (std::uint8_t) level;
+                editor.proc.setCell (owner, cell);
             }
         }
+        editor.repaint();
     }
-    void mouseDown (const juce::MouseEvent& e) override
+    void mouseUp (const juce::MouseEvent& e) override
     {
-        const auto snap = editor.proc.snapshot();
-        const int i = stepAt (juce::jlimit (0.0, 15.9999, (double) e.position.x / getWidth() * numSteps), snap.swing);
-        auto cell = snap.pattern[(size_t) i];
-        cell.slap = ! cell.slap;
-        if (cell.slap && cell.v == Step::off) cell.v = Step::hit;
-        editor.proc.setCell (i, cell);
+        if (slapLayer() && ! drawing && ! e.mods.isPopupMenu() && pressedOwner != -2) toggleSend (pressedOwner);
+        drawing = false;
+        pressedOwner = -2;
+        if (! isMouseOver()) activeOwner = -1;
         editor.repaint();
     }
 private:
+    void toggleSend (int owner)
+    {
+        if (owner < 0) { editor.flash ("SLAP SENDS GO ON STEPS THAT SOUND"); return; }
+        auto cell = editor.proc.getPattern()[(size_t) owner];
+        cell.slap = ! cell.slap;
+        editor.proc.setCell (owner, cell);
+        editor.repaint();
+    }
     StutterEditor& editor;
+    int activeOwner = -1, pressedOwner = -2; // -2: no press to finish; -1: pressed a silent step
+    bool drawing = false, tooltipForSlap = false;
 };
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -613,9 +749,7 @@ StutterEditor::StutterEditor (StutterProcessor& p)
             };
 
     lane = std::make_unique<Lane> (*this);
-    dots = std::make_unique<Dots> (*this);
     addAndMakeVisible (*lane);
-    addAndMakeVisible (*dots);
 
     rollFrom = std::make_unique<ScreenKey> ("Roll from", ScreenKey::Style::text, semiBold);
     rollFrom->label = [this] { return juce::String ("ROLL FROM ") + juce::String::charToString (0x25BE) + " |"
@@ -665,12 +799,45 @@ StutterEditor::StutterEditor (StutterProcessor& p)
         key = std::make_unique<ScreenKey> (juce::String ("Rate ") + rateNames[i], ScreenKey::Style::key, semiBold);
         key->label = [i] { return juce::String (rateNames[i]); };
         key->lit = [this, i] { return juce::roundToInt (param ("rate")) == i; };
-        key->setTooltip ("Step size. The 16 steps span 4 bars at 1/4, 2 bars at 1/8, 1 bar at 1/16 and half a bar at 1/32.");
+        key->setTooltip ("Step size. The 16 steps span 4 bars at 1/4, 2 bars at 1/8, 1 bar at 1/16 and half a bar at 1/32. "
+                         "DOTTED and TRIPLET under the lane stretch or squeeze it.");
         key->onClick = [this, i] { setParam ("rate", (float) i); repaint(); };
     }
-    for (auto* key : { presetMenu.get(), rollFrom.get(), saveKey.get(), randomKey.get(), prev.get(), next.get(), subSafe.get() })
+    // Under the lane: what clicks edit (GATE or SLAP), NUDGE, and the step timing.
+    const char* layerNames[] { "GATE", "SLAP" };
+    for (int i = 0; i < 2; ++i) {
+        auto& key = layerKeys[(size_t) i];
+        key = std::make_unique<ScreenKey> (juce::String ("Edit ") + juce::String (layerNames[i]).toLowerCase(), ScreenKey::Style::key, semiBold);
+        key->label = [name = juce::String (layerNames[i])] { return name; };
+        key->lit = [this, i] { return proc.editLayer.load() == i; };
+        key->litColour = i == 0 ? aqua : lime;
+        key->onClick = [this, i] { proc.editLayer = i; lane->updateTooltip(); repaint(); };
+    }
+    layerKeys[0]->setTooltip ("Clicks in the lane edit the gate: hit, ghost, off and ties.");
+    layerKeys[1]->setTooltip ("Clicks in the lane edit the slap sends: which steps echo, and how much (drag up or down).");
+    nudgeEarlier = std::make_unique<ScreenKey> ("Nudge earlier", ScreenKey::Style::left, semiBold);
+    nudgeLater = std::make_unique<ScreenKey> ("Nudge later", ScreenKey::Style::right, semiBold);
+    nudgeEarlier->onClick = [this] { proc.nudge (-1); repaint(); };
+    nudgeLater->onClick = [this] { proc.nudge (1); repaint(); };
+    nudgeEarlier->setTooltip ("Nudge the whole groove one step earlier. It wraps around, and every step keeps its hit, ghost, tie and slap send.");
+    nudgeLater->setTooltip ("Nudge the whole groove one step later. It wraps around, and every step keeps its hit, ghost, tie and slap send.");
+    const char* timingNames[] { "DOTTED", "TRIPLET" };
+    for (int i = 0; i < 2; ++i) {
+        auto& key = timingKeys[(size_t) i];
+        const int timing = i + 1;
+        key = std::make_unique<ScreenKey> (juce::String (i == 0 ? "Dotted" : "Triplet") + " timing", ScreenKey::Style::key, semiBold);
+        key->label = [name = juce::String (timingNames[i])] { return name; };
+        key->lit = [this, timing] { return juce::roundToInt (param ("timing")) == timing; };
+        key->onClick = [this, timing] { setParam ("timing", juce::roundToInt (param ("timing")) == timing ? 0.0f : (float) timing); repaint(); };
+    }
+    timingKeys[0]->setTooltip ("Dotted: every step is 1.5 times the RATE, so the groove stretches across the bar line. Click again for straight.");
+    timingKeys[1]->setTooltip ("Triplet: every step is two thirds of the RATE, so three steps fit where two did. Click again for straight.");
+    for (auto* key : { presetMenu.get(), rollFrom.get(), saveKey.get(), randomKey.get(), prev.get(), next.get(), subSafe.get(),
+                       nudgeEarlier.get(), nudgeLater.get() })
         addAndMakeVisible (*key);
     for (auto& key : rateKeys) addAndMakeVisible (*key);
+    for (auto& key : layerKeys) addAndMakeVisible (*key);
+    for (auto& key : timingKeys) addAndMakeVisible (*key);
     midiKey = std::make_unique<MidiKey> (*this, semiBold);
     addAndMakeVisible (*midiKey);
     startExternalDrag = [this] (const juce::File& file) {
@@ -890,7 +1057,12 @@ void StutterEditor::resized()
     refreshShell();
     for (auto& k : knobs) k->slider.setBounds (toEditor (k->hit()));
     lane->setBounds (toEditor (laneArt));
-    dots->setBounds (toEditor (dotsArt));
+    layerKeys[0]->setBounds (toEditor (toolRowArt.withWidth (62)));
+    layerKeys[1]->setBounds (toEditor (toolRowArt.withX (262).withWidth (62)));
+    nudgeEarlier->setBounds (toEditor (toolRowArt.withX (nudgeCaptionArt.getX() - 40).withWidth (36)));
+    nudgeLater->setBounds (toEditor (toolRowArt.withX (nudgeCaptionArt.getRight() + 4).withWidth (36)));
+    timingKeys[0]->setBounds (toEditor (toolRowArt.withX (782).withWidth (74)));
+    timingKeys[1]->setBounds (toEditor (toolRowArt.withX (860).withWidth (74)));
     rollFrom->setBounds (toEditor ({ 196, 194, 360, 30 }));
     presetMenu->setBounds (toEditor ({ 188, 226, 530, 46 }));
     // SAVE, then random and the arrows spaced as a group, ending on the counter's right edge.
@@ -1024,20 +1196,13 @@ void StutterEditor::drawScreen (juce::Graphics& g) const
 
 void StutterEditor::drawLanes (juce::Graphics& g, const StutterProcessor::Snapshot& snap) const
 {
-
-    text (g, "GATE", { 196, 340, 54, 20 }, 13, glassMuted, juce::Justification::centredLeft, false, 0.16f);
-    text (g, "SLAP", { 196, 446, 54, 20 }, 13, juce::Colour (0xffa9c96a), juce::Justification::centredLeft, false, 0.16f);
-    // Lane labels at the straight grid (bars at 1/4, beats at 1/16, every other beat or bar otherwise);
-    // the span label on the right.
-    const int rate = snap.rate;
-    const char* labelsEach[] { "1", "2", "3", "4" };
-    const char* labelsHalf[] { "1", "", "2", "" };
-    for (int k = 0; k < 4; ++k) {
-        const juce::String l = rate == 0 || rate == 2 ? labelsEach[k] : labelsHalf[k];
-        if (l.isNotEmpty()) text (g, l, { laneArt.getX() + k * laneArt.getWidth() / 4 + 3, 418, 30, 18 }, 13, glassMuted);
-    }
-    const juce::String span = rate == 0 ? "4 BARS" : rate == 1 ? "2 BARS" : rate == 2 ? "1 BAR" : juce::String::fromUTF8 ("\xc2\xbd BAR");
-    text (g, span, { 834, 418, 100, 18 }, 13, glassMuted, juce::Justification::centredRight, false, 0.14f);
+    // Under the lane: beat numbers (bar numbers when the 16 steps run past a bar) where the lane's stronger lines
+    // fall, and how long the 16 steps last on the right. TIMING moves both.
+    const double cycle = numSteps * StutterProcessor::stepBeats (snap.rate, snap.timing), unit = cycle <= 4.0 + 1.0e-9 ? 1.0 : 4.0;
+    for (int k = 0; k * unit < cycle - 1.0e-9; ++k)
+        text (g, juce::String (k + 1), { laneArt.getX() + (float) (k * unit / cycle) * laneArt.getWidth() + 3, 418, 30, 18 }, 13, glassMuted);
+    text (g, spanText (cycle), { 814, 418, 120, 18 }, 13, snap.timing != 0 ? aqua : glassMuted, juce::Justification::centredRight, false, 0.14f);
+    text (g, "NUDGE", nudgeCaptionArt, 12, glassMuted, juce::Justification::centred, false, 0.16f);
     g.setColour (aqua.withAlpha (0.14f));
     g.fillRect (juce::Rectangle<float> (196, 482, 738, 1));
     // Bottom row labels, OUTPUT readout, meter.
@@ -1161,6 +1326,7 @@ std::uint64_t StutterEditor::displayKey() const
         mix ((std::uint64_t) juce::roundToInt (parameter->getValue() * 100000.0f));
     mix (proc.grooveRevision.load());
     mix ((std::uint64_t) (proc.rollFrom + 2));
+    mix ((std::uint64_t) (proc.editLayer.load() + 11));
     mix (proc.uiPlaying.load() ? 1 : 0);
     mix ((std::uint64_t) juce::roundToInt (proc.uiBpm.load() * 10.0));
     mix (juce::Time::getMillisecondCounterHiRes() < flashUntil ? 3 : naming ? 5 : 7);
@@ -1177,6 +1343,7 @@ void StutterEditor::timerCallback()
     ledLevel = closed >= 0.999f ? 0.35f : juce::jlimit (0.0f, 1.0f, (proc.uiGate.load() - closed) / (1.0f - closed));
     if (param ("bypass") > 0.5f) ledLevel = 0.0f;
     if (swingLock->getToggleState() != proc.lockSwing) swingLock->setToggleState (proc.lockSwing, juce::dontSendNotification);
+    lane->updateTooltip(); // the layer can change from a host state
 
     const auto key = displayKey();
     if (key != lastKey) {

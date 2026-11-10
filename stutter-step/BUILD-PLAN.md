@@ -59,7 +59,7 @@ Three envelopes come from one build: **gate**, **send** (slap-flagged events onl
 
 ## UI
 
-The shell art is the generated teal sibling (`Assets/DeviceShell.png`, 1120 × 1408, made from the SHIFTY shell in edit mode). The editor crops `(50, 54, 1024, 1304)` (the enclosure's outer edges) and opens at **660 × 840**. Right-click the shell for 90/100/125/150 %. Every label, value, graph and light is drawn by JUCE over the art. Chakra Petch, as across the suite.
+The shell art is the generated teal sibling (`Assets/DeviceShell.png`, 1120 × 1408, made from the SHIFTY shell in edit mode). Since 0.5.0 the editor draws `Assets/DeviceShell-fullbleed.png` (tighter corners, ARTWORK.md) cropped to `(67, 64, 990, 1259)`, just inside the enclosure's edges, and opens at **660 × 839** (0.4.3: `(50, 54, 1024, 1304)`, 660 × 840). Right-click the shell for 90/100/125/150 %. Every label, value, graph and light is drawn by JUCE over the art. Chakra Petch, as across the suite.
 
 Measured control map (artwork pixels):
 
@@ -76,9 +76,9 @@ Measured control map (artwork pixels):
 | Slap switch, LOCK / GAPS / WIDE keys | 290,1046 (96×40); keys at x 182 / 256 / 330, y 1104 (68×52) |
 | INFO key | 485,1230 (150×56) |
 
-**Screen:** ROLL FROM and the preset counter, the groove name and family, prev/next, the 16-step lane (swing arrows, gate shape, lime echo energy, dashed DEPTH floor, playhead), the slap-send dots, then RATE, SUB SAFE, OUTPUT, BPM and a stereo meter.
+**Screen:** ROLL FROM and the preset counter, the groove name and family, prev/next, the 16-step lane (swing arrows, gate shape, lime echo energy, dashed DEPTH floor, playhead; art x 196-934, y 286-414), its beat numbers and span, then (0.5.0, y 444-474) GATE/SLAP, NUDGE ‹ › and DOTTED/TRIPLET, then RATE, SUB SAFE, OUTPUT, DRAG MIDI, BPM and a stereo meter. Until 0.4.3 a row of slap-send dots sat under the lane instead of the 0.5.0 row.
 
-**Lane gestures:** click cycles HIT → GHOST → OFF; Shift-click toggles TIE; right-click or a dot toggles the slap send.
+**Lane gestures:** GATE layer: click cycles HIT → GHOST → OFF; Shift-click toggles TIE; right-click toggles the slap send. SLAP layer (0.5.0): click a note's column to send it or stop; drag up or down for the send level (5-100%); drag across to draw.
 
 **INFO** reuses `shared/VfdInfo.h` with a new teal `STUTTER` theme.
 
@@ -106,6 +106,10 @@ To join the suite later, move `stutter-step/` next to the others in the suite re
 ## Milestones
 
 1. Scaffold, parameters, state. 2. Groove model + generator + envelope, with tests. 3. Gate in the processor. 4. Slap. 5. Editor over the shell art. 6. Tests, pluginval/auval, install for an Ableton check. 7. Icon and the suite installer.
+
+## Status (v0.5.0, 3 November 2026)
+
+**0.5.0** (user, 2026-11-03: shape nudging as in BACK-SCRATCH, dotted and triplet toggles, simpler grooves and a hi-hat section, a GATE/SLAP edit-layer switch, no dark window corners). NUDGE ‹ ›, DOTTED/TRIPLET (host parameter Timing, appended), the GATE/SLAP layer with per-step send levels, SIMPLE (15) and HATS (17) appended to the bank, a HATS roll family, full-bleed window. Details in `README.md`, tests in `VALIDATION.md`. Projects and `.ssgroove` files from 0.4.3 render byte-identical.
 
 ## Status (v0.4.3, 26 October 2026)
 

@@ -7,7 +7,7 @@
 namespace stutter {
 
 namespace {
-constexpr const char* familyNames[] { "SHUFFLE", "BOUNCE", "SKANK", "DRAG", "GALLOP", "WONK", "STRAIGHT" };
+constexpr const char* familyNames[] { "SHUFFLE", "BOUNCE", "SKANK", "DRAG", "GALLOP", "WONK", "STRAIGHT", "HATS" };
 
 // How each family feels. NEW GROOVE composes from the family's one-beat cells (one beat at 1/16,
 // set in a phrase form such as A A A B or A B A C and lightly varied) or, more often for BOUNCE and
@@ -15,11 +15,13 @@ constexpr const char* familyNames[] { "SHUFFLE", "BOUNCE", "SKANK", "DRAG", "GAL
 // g ghost, - tie, . off.
 struct FamilyRecipe
 {
-    int weight;
+    int weight;            // share of ALL rolls (HATS: 0, so ALL never rolls hats)
     float swingLow, swingHigh, length;
     float groupChance;     // chance of an accent grouping instead of beat cells
     float groupTie, groupGhost;
     std::array<const char*, 10> cells;
+    int minOn = 5, maxOn = 12;  // sounding steps
+    int maxSends = 4;           // slap sends: 2 to 4, or none
 };
 
 const std::array<FamilyRecipe, (size_t) Family::count> recipes { {
@@ -30,6 +32,8 @@ const std::array<FamilyRecipe, (size_t) Family::count> recipes { {
     { 12, 0.55f, 0.62f, 0.50f, 0.10f, 0.10f, 0.30f, { "XXX.", "XX.X", "X.XX", "XXg.", "XgX.", "X.X.", "XXXg", "gXX.", "X.Xg", "XX.." } },
     { 11, 0.66f, 0.75f, 0.62f, 0.85f, 0.25f, 0.45f, { "X..X", "g.X.", "X.g.", ".X.g", "X-.X", "..Xg", "Xg..", "X...", ".gX-", "X..g" } },
     {  5, 0.50f, 0.52f, 0.55f, 0.05f, 0.30f, 0.20f, { "X.X.", "X-X-", "XXXX", "X-.X", ".XXX", "X...", "X-X.", "XX.X", "X.XX", "X--X" } },
+    // HATS: busy, short and accented (hits loud, ghosts soft), with open (tied) hats and rolls; no slap sends.
+    {  0, 0.50f, 0.58f, 0.32f, 0.08f, 0.10f, 0.60f, { "XgXg", "X.Xg", "XgX.", "Xggg", "XgX-", "XgXX", "X.XX", "ggXg", "XXXX", "gXgX" }, 8, 16, 0 },
 } };
 
 // Names for rolled grooves. None of them is a factory name (generate() makes sure), so a rolled
@@ -42,6 +46,7 @@ const std::array<std::array<const char*, 8>, (size_t) Family::count> adjectives 
     { "Rodeo", "Stampede", "Clip", "Bronco", "Derby", "Saddle", "Spur", "Hoof" },
     { "Drunk", "Wobbly", "Bent", "Warped", "Squiffy", "Off-Kilter", "Sideways", "Cockeyed" },
     { "Clean", "Square", "Steel", "Even", "Laser", "Quartz", "Chrome", "Metro" },
+    { "Crisp", "Tight", "Ticky", "Glassy", "Snappy", "Hissy", "Tinny", "Fizzy" },
 } };
 const std::array<std::array<const char*, 6>, (size_t) Family::count> nouns { {
     { "Shuffle", "Strut", "Saunter", "Sway", "Glide", "Stroll" },
@@ -51,6 +56,7 @@ const std::array<std::array<const char*, 6>, (size_t) Family::count> nouns { {
     { "Gallop", "Canter", "Trot", "Stomp", "Charge", "Dash" },
     { "Wonk", "Stumble", "Lurch", "Wobble", "Stagger", "Tumble" },
     { "Pump", "Chop", "Pulse", "Grid", "March", "Tick" },
+    { "Hats", "Ticks", "Shaker", "Sizzle", "Chatter", "Rattle" },
 } };
 
 // Folders in browsing order. Built for 140 halftime, riddim and left-field bass; see PRESETS.md.
@@ -98,6 +104,41 @@ const std::array<FactoryGroove, numFactoryGrooves> factory { {
     { "STUTTER", "Machine Lean", Family::gallop, "XXXXXXXX..XX..X.", "..............*.", 0.66f, 3, 0.45f, 1.2f, 1.0f, true, 90.0f, 0.35f, 0.65f, 0.4f, true, true },
     { "STUTTER", "Fill Me In", Family::straight, "X.......XXXXXXXX", "...............*", 0.6f, 2, 0.45f, 2.0f, 1.0f, true, 90.0f, 0.45f, 0.5f, 0.45f, true, true },
     { "STUTTER", "Hiccup", Family::wonk, "X..XX...X..XX.g.", "....*.......*...", 0.68f, 2, 0.35f, 1.5f, 1.0f, false, 45.0f, 0.2f, 0.7f, 0.4f, false, true },
+    // 0.5.0, appended so every older groove keeps its place. SIMPLE: plain, useful patterns for a mid bass.
+    { "SIMPLE", "Quarter Chug", Family::straight, "X...X...X...X...", "............*...", 0.5f, 2, 0.6f, 5.0f, 1.0f, true, 90.0f, 0.2f, 0.45f, 0.3f, false, true },
+    { "SIMPLE", "Straight Eighths", Family::straight, "X.X.X.X.X.X.X.X.", "..............*.", 0.5f, 2, 0.5f, 4.0f, 1.0f, true, 90.0f, 0.2f, 0.45f, 0.28f, false, true },
+    { "SIMPLE", "Offbeats", Family::skank, "..X...X...X...X.", "..............*.", 0.5f, 2, 0.6f, 5.0f, 1.0f, true, 90.0f, 0.25f, 0.45f, 0.32f, false, true },
+    { "SIMPLE", "Sixteenths", Family::straight, "XXXXXXXXXXXXXXXX", "................", 0.5f, 2, 0.5f, 3.0f, 1.0f, true, 90.0f, 0.2f, 0.45f, 0.3f, false, true },
+    { "SIMPLE", "Trance Gate", Family::straight, "X.XX.XX.X.XX.XX.", "................", 0.5f, 2, 0.75f, 4.0f, 1.0f, true, 90.0f, 0.2f, 0.45f, 0.3f, false, true },
+    { "SIMPLE", "Three Three Two", Family::bounce, "X..X..X.X..X..X.", "......*.......*.", 0.5f, 2, 0.6f, 5.0f, 1.0f, true, 90.0f, 0.22f, 0.45f, 0.32f, false, true },
+    { "SIMPLE", "Plain Gallop", Family::gallop, "X.XXX.XXX.XXX.XX", "................", 0.5f, 2, 0.55f, 4.0f, 1.0f, true, 90.0f, 0.2f, 0.45f, 0.3f, false, true },
+    { "SIMPLE", "Reverse Gallop", Family::gallop, "XX.XXX.XXX.XXX.X", "................", 0.5f, 2, 0.55f, 4.0f, 1.0f, true, 90.0f, 0.2f, 0.45f, 0.3f, false, true },
+    { "SIMPLE", "Long Short", Family::drag, "X-.XX-.XX-.XX-.X", "...............*", 0.5f, 2, 0.8f, 6.0f, 1.0f, true, 90.0f, 0.22f, 0.4f, 0.3f, false, true },
+    { "SIMPLE", "Half Notes", Family::drag, "X-------X-------", "................", 0.5f, 2, 0.85f, 10.0f, 1.0f, true, 90.0f, 0.2f, 0.4f, 0.3f, false, true },
+    { "SIMPLE", "Two and Four", Family::skank, "....X--.....X--.", "............*...", 0.5f, 2, 0.8f, 6.0f, 1.0f, true, 90.0f, 0.25f, 0.4f, 0.32f, false, true },
+    { "SIMPLE", "Half-Time Chop", Family::bounce, "X-.X....X-.X....", "...........*....", 0.5f, 2, 0.75f, 6.0f, 1.0f, true, 90.0f, 0.25f, 0.4f, 0.35f, false, true },
+    { "SIMPLE", "Dotted Eighth Pulse", Family::straight, "XXXXXXXXXXXXXXXX", "................", 0.5f, 1, 0.5f, 5.0f, 1.0f, true, 90.0f, 0.2f, 0.45f, 0.3f, false, true, 1 },
+    { "SIMPLE", "Triplet Eighths", Family::straight, "X-X-X-X-X-X-X-X-", "................", 0.5f, 2, 0.5f, 4.0f, 1.0f, true, 90.0f, 0.2f, 0.45f, 0.3f, false, true, 2 },
+    { "SIMPLE", "Quarter Triplets", Family::straight, "X---X---X---X---", "............*...", 0.5f, 2, 0.5f, 5.0f, 1.0f, true, 90.0f, 0.22f, 0.45f, 0.3f, false, true, 2 },
+    // HATS: put STUTTER-STEP on a held hi-hat, noise or open-hat loop to carve hat patterns. Short LENGTH, crisp
+    // SMOOTH, full DEPTH; ghosts sit 8.4 dB down; ties hold the hat open. Slap off or a faint tick.
+    { "HATS", "Eighth Hats", Family::hats, "X.X.X.X.X.X.X.X.", "................", 0.5f, 2, 0.3f, 1.0f, 1.0f, false, 60.0f, 0.12f, 0.8f, 0.18f, false, true },
+    { "HATS", "Sixteenth Hats", Family::hats, "XgXgXgXgXgXgXgXg", "................", 0.5f, 2, 0.3f, 1.0f, 1.0f, false, 60.0f, 0.12f, 0.8f, 0.18f, false, true },
+    { "HATS", "Shuffle Hats", Family::hats, "XgXgXgXgXgXgXgXg", "................", 0.62f, 2, 0.32f, 1.0f, 1.0f, false, 60.0f, 0.12f, 0.8f, 0.18f, false, true },
+    { "HATS", "Ghost Sixteenths", Family::hats, "XgggXgggXgggXggg", "................", 0.5f, 2, 0.28f, 1.0f, 1.0f, false, 60.0f, 0.12f, 0.8f, 0.18f, false, true },
+    { "HATS", "Offbeat Accents", Family::hats, "ggXgggXgggXgggXg", "................", 0.5f, 2, 0.3f, 1.0f, 1.0f, false, 60.0f, 0.12f, 0.8f, 0.18f, false, true },
+    { "HATS", "Offbeat Opens", Family::hats, "g.X-g.X-g.X-g.X-", "..............*.", 0.5f, 2, 0.45f, 1.5f, 1.0f, false, 55.0f, 0.12f, 0.8f, 0.18f, false, true },
+    { "HATS", "Open Sixteenths", Family::hats, "XgX-XgX-XgX-XgX-", "................", 0.5f, 2, 0.35f, 1.2f, 1.0f, false, 60.0f, 0.12f, 0.8f, 0.18f, false, true },
+    { "HATS", "Skip Hats", Family::hats, "X.XgX.XXX.XgX.XX", "................", 0.5f, 2, 0.3f, 1.0f, 1.0f, false, 60.0f, 0.12f, 0.8f, 0.18f, false, true },
+    { "HATS", "Two-Step Hats", Family::hats, "X.gXX.gXX.gXXgX.", "................", 0.58f, 2, 0.3f, 1.0f, 1.0f, false, 60.0f, 0.12f, 0.8f, 0.18f, false, true },
+    { "HATS", "Gallop Hats", Family::hats, "XgXXXgXXXgXXXgXX", "................", 0.5f, 2, 0.28f, 1.0f, 1.0f, false, 60.0f, 0.12f, 0.8f, 0.18f, false, true },
+    { "HATS", "Half-Time Hats", Family::hats, "X.X.X.X-X.X.X.X.", "......*.........", 0.5f, 2, 0.32f, 1.2f, 1.0f, false, 70.0f, 0.15f, 0.75f, 0.2f, false, true },
+    { "HATS", "Trap Rolls", Family::hats, "X.X.X.X.X.X.XXXX", "................", 0.5f, 3, 0.5f, 1.0f, 1.0f, false, 60.0f, 0.12f, 0.8f, 0.18f, false, true },
+    { "HATS", "Trap Flutter", Family::hats, "X.X.XXX.X.X.XgXg", "................", 0.5f, 3, 0.5f, 1.0f, 1.0f, false, 60.0f, 0.12f, 0.8f, 0.18f, false, true },
+    { "HATS", "Triplet Hats", Family::hats, "X.X.X.X.X.X.X.X.", "................", 0.5f, 2, 0.35f, 1.0f, 1.0f, false, 60.0f, 0.12f, 0.8f, 0.18f, false, true, 2 },
+    { "HATS", "Triplet Sixteenths", Family::hats, "XgXgXgXgXgXgXgXg", "................", 0.5f, 2, 0.32f, 1.0f, 1.0f, false, 60.0f, 0.12f, 0.8f, 0.18f, false, true, 2 },
+    { "HATS", "Triplet Rolls", Family::hats, "X..X..X..X..XXXX", "................", 0.5f, 3, 0.5f, 1.0f, 1.0f, false, 60.0f, 0.12f, 0.8f, 0.18f, false, true, 2 },
+    { "HATS", "Dotted Hats", Family::hats, "XgXgXgXgXgXgXgXg", "................", 0.5f, 3, 0.35f, 1.0f, 1.0f, false, 60.0f, 0.12f, 0.8f, 0.18f, false, true, 1 },
 } };
 
 // mulberry32, matching the prototype's generator.
@@ -152,6 +193,50 @@ std::string slapToString (const Pattern& p)
     return s;
 }
 
+std::string sendLevelsToString (const Pattern& p)
+{
+    bool allFull = true;
+    for (const auto& c : p) allFull = allFull && c.send == fullSend;
+    if (allFull) return {};
+    std::string s;
+    for (const auto& c : p) s += (s.empty() ? "" : " ") + std::to_string (c.send * 100 / fullSend);
+    return s;
+}
+
+void applySendLevels (Pattern& p, const std::string& text)
+{
+    size_t at = 0;
+    for (auto& c : p) {
+        while (at < text.size() && text[at] == ' ') ++at;
+        if (at >= text.size()) break;
+        int percent = 0, digits = 0;
+        while (at < text.size() && text[at] >= '0' && text[at] <= '9' && digits < 4) { percent = percent * 10 + (text[at++] - '0'); ++digits; }
+        while (at < text.size() && text[at] != ' ') ++at; // skip anything unreadable
+        if (digits > 0) c.send = (std::uint8_t) std::clamp ((percent * fullSend + 50) / 100, 1, fullSend);
+    }
+}
+
+Pattern rotated (const Pattern& p, int steps)
+{
+    Pattern out {};
+    for (int i = 0; i < numSteps; ++i) out[(size_t) (((i + steps) % numSteps + numSteps) % numSteps)] = p[(size_t) i];
+    return out;
+}
+
+int eventOwner (const Pattern& p, int step)
+{
+    if (step < 0 || step >= numSteps || p[(size_t) step].v == Step::off) return -1;
+    // Walk back through held ties to the cell that starts the note, around the loop as Envelope::build plays it.
+    int i = step;
+    for (int walked = 0; walked < numSteps; ++walked) {
+        if (p[(size_t) i].v != Step::tie) return i;
+        const int before = (i + numSteps - 1) % numSteps;
+        if (p[(size_t) before].v == Step::off) return i; // a tie after silence starts its own note
+        i = before;
+    }
+    return 0; // every step tied: one note from the first step
+}
+
 int stepAt (double position, double swing)
 {
     int idx = 0;
@@ -171,13 +256,22 @@ void Envelope::build (const Pattern& p, double swing, double length, double a, f
         const auto& c = p[(size_t) i];
         const double s = stepStart (i, swing), e = s + length * slotLength (i, swing);
         if (c.v == Step::hit || c.v == Step::ghost || (c.v == Step::tie && cur < 0)) {
-            evs[(size_t) n] = { s, e, c.v == Step::ghost ? ghostLevel : 1.0f, c.slap };
+            // The send carries the step's send level; a full send (every one before 0.5.0) multiplies by exactly 1.
+            const float level = c.v == Step::ghost ? ghostLevel : 1.0f;
+            evs[(size_t) n] = { s, e, slapOnly ? level * sendGain (c) : level, c.slap };
             cur = n++;
         } else if (c.v == Step::tie) {
             evs[(size_t) cur].e = e;
         } else {
             cur = -1;
         }
+    }
+    // A tie on the first step continues the note still sounding on the last one, across the loop. The tie
+    // chain that opened the cycle as its own note joins the last note instead, which ends past the cycle.
+    if (n > 1 && p[0].v == Step::tie && cur >= 0) {
+        evs[(size_t) n - 1].e = evs[0].e + numSteps;
+        for (int k = 1; k < n; ++k) evs[(size_t) k - 1] = evs[(size_t) k];
+        --n;
     }
     if (slapOnly) {
         int kept = 0;
@@ -372,9 +466,11 @@ Generated generate (std::uint32_t seed, int familyFilter, const Pattern* avoid)
     const auto& recipe = recipes[(size_t) fam];
 
     // Compose until the rhythm is new: at least four steps away from every factory groove and from
-    // the groove it replaces, so NEW GROOVE never lands on (or next to) a preset.
-    std::array<Step, numSteps> steps {};
-    for (int attempt = 0; attempt < 24; ++attempt) {
+    // the groove it replaces, so NEW GROOVE never lands on (or next to) a preset. If no attempt gets there,
+    // the one furthest from them all is kept.
+    std::array<Step, numSteps> steps {}, furthest {};
+    int furthestDistance = -1;
+    for (int attempt = 0; attempt < 64; ++attempt) {
         steps = rng.next() < recipe.groupChance ? composeGroups (rng, recipe) : composeBeats (rng, recipe);
 
         // A short fill into the next bar now and then.
@@ -387,7 +483,7 @@ Generated generate (std::uint32_t seed, int familyFilter, const Pattern* avoid)
         if (fam != Family::skank || rng.next() < 0.4) steps[0] = Step::hit;
 
         const auto onCount = [&] { return (int) std::count_if (steps.begin(), steps.end(), [] (Step v) { return v != Step::off; }); };
-        for (int guard = 0; onCount() < 5 && guard < 32; ++guard) {
+        for (int guard = 0; onCount() < recipe.minOn && guard < 32; ++guard) {
             int best = -1; double bestScore = -1;
             for (int i = 0; i < numSteps; ++i) {
                 const double score = strength[(size_t) i] + rng.next() * 0.3;
@@ -395,7 +491,7 @@ Generated generate (std::uint32_t seed, int familyFilter, const Pattern* avoid)
             }
             if (best >= 0) steps[(size_t) best] = Step::hit;
         }
-        for (int guard = 0; onCount() > 12 && guard < 32; ++guard) {
+        for (int guard = 0; onCount() > recipe.maxOn && guard < 32; ++guard) {
             int worst = -1; double worstScore = 9;
             for (int i = 1; i < numSteps; ++i) {
                 const double score = strength[(size_t) i] + rng.next() * 0.3;
@@ -420,11 +516,13 @@ Generated generate (std::uint32_t seed, int familyFilter, const Pattern* avoid)
         for (int f = 0; f < numFactoryGrooves; ++f)
             nearest = std::min (nearest, distance (steps, parsePattern (factory[(size_t) f].cells, factory[(size_t) f].slap)));
         if (avoid != nullptr) nearest = std::min (nearest, distance (steps, *avoid));
+        if (nearest > furthestDistance) { furthest = steps; furthestDistance = nearest; }
         if (nearest >= 4) break;
     }
+    steps = furthest;
 
     Generated out;
-    for (int i = 0; i < numSteps; ++i) out.pattern[(size_t) i] = { steps[(size_t) i], false };
+    for (int i = 0; i < numSteps; ++i) out.pattern[(size_t) i] = { steps[(size_t) i], false, fullSend };
     auto& pattern = out.pattern;
 
     // Slap sends go to the hits followed by the longest gaps, so the echo has room to speak.
@@ -438,7 +536,7 @@ Generated generate (std::uint32_t seed, int familyFilter, const Pattern* avoid)
         candidates[(size_t) numCandidates++] = { i, gap + rng.next() * 0.9 };
     }
     std::sort (candidates.begin(), candidates.begin() + numCandidates, [] (auto& x, auto& y) { return x.score > y.score; });
-    const int sends = std::min (numCandidates, 2 + (int) (rng.next() * 3));
+    const int sends = recipe.maxSends == 0 ? 0 : std::min (numCandidates, 2 + (int) (rng.next() * 3));
     for (int k = 0; k < sends; ++k) pattern[(size_t) candidates[(size_t) k].i].slap = true;
 
     out.swing = std::round ((recipe.swingLow + (recipe.swingHigh - recipe.swingLow) * (float) rng.next()) * 200.0f) / 200.0f;

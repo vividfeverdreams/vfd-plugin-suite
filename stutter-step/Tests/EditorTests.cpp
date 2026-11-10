@@ -4,6 +4,7 @@
 #include <iostream>
 
 int runStutterHostKeys();
+int runStutterWindowEdges (const juce::File& cropsFolder);
 
 namespace {
 juce::Component* findControl (juce::Component& editor, const juce::String& name)
@@ -180,6 +181,65 @@ int runStutterHostKeys()
             ss->startExternalDrag = nullptr;
         }
         holder.removeChildComponent (&hostField);
+
+        // 0.5.0: the row under the lane. Every key works with a click, takes no focus, and the host keeps Return.
+        click (probe.blankSpot);
+        proc.loadFactory (0);
+        proc.editLayer = 0;
+        pump();
+        const auto key = [&] (const char* name) { return findControl (*editor, name); };
+        bool allThere = true;
+        for (const auto* name : { "Edit gate", "Edit slap", "Nudge earlier", "Nudge later", "Dotted timing", "Triplet timing" }) {
+            auto* c = key (name);
+            allThere = allThere && c != nullptr && ! c->getWantsKeyboardFocus() && c->isShowing();
+        }
+        expect (allThere, "GATE, SLAP, both NUDGE keys, DOTTED and TRIPLET are on screen and never take the keyboard");
+        if (allThere) {
+            const auto centre = [&] (const char* name) { return key (name)->getBounds().getCentre(); };
+            const auto start = proc.getPattern();
+            click (centre ("Nudge later"));
+            expect (proc.getPattern() == stutter::rotated (start, 1) && proc.getGrooveInfo().edited, "NUDGE later moves the groove one step and marks it edited");
+            click (centre ("Nudge earlier"));
+            expect (proc.getPattern() == start, "NUDGE earlier moves it back");
+            expect (! press (juce::KeyPress::returnKey) && ! press (juce::KeyPress::spaceKey), "Return and space still reach the host after NUDGE");
+            click (centre ("Dotted timing"));
+            expect (juce::roundToInt (proc.apvts.getRawParameterValue ("timing")->load()) == 1, "DOTTED lights dotted timing");
+            click (centre ("Triplet timing"));
+            expect (juce::roundToInt (proc.apvts.getRawParameterValue ("timing")->load()) == 2, "TRIPLET replaces it: only one is lit");
+            click (centre ("Triplet timing"));
+            expect (juce::roundToInt (proc.apvts.getRawParameterValue ("timing")->load()) == 0, "clicking the lit key goes back to straight");
+
+            // The lane follows the layer: GATE edits the gate, SLAP edits sends (click toggles, drag sets the amount).
+            auto* laneControl = key ("Step lane");
+            const auto stepPoint = [&] (int step, float height01) {
+                const auto b = laneControl->getBounds().toFloat();
+                return juce::Point<float> (b.getX() + b.getWidth() * ((float) step + 0.5f) / 16.0f, b.getY() + b.getHeight() * height01).toInt();
+            };
+            proc.setPattern (stutter::parsePattern ("X...X...X...X...", "................"));
+            click (stepPoint (4, 0.5f));
+            expect (proc.getPattern()[4].v == stutter::Step::ghost && ! proc.getPattern()[4].slap, "in GATE a click cycles the step (hit to ghost)");
+            click (centre ("Edit slap"));
+            expect (proc.editLayer.load() == 1, "SLAP switches the lane to the slap sends");
+            const auto gateBefore = stutter::cellsToString (proc.getPattern());
+            click (stepPoint (8, 0.5f));
+            expect (proc.getPattern()[8].slap && proc.getPattern()[8].send == stutter::fullSend
+                        && stutter::cellsToString (proc.getPattern()) == gateBefore, "in SLAP a click sends that step, full, and leaves the gate alone");
+            click (stepPoint (8, 0.5f));
+            expect (! proc.getPattern()[8].slap, "a second click stops the send");
+            click (stepPoint (2, 0.5f));
+            expect (! proc.getPattern()[2].slap && stutter::cellsToString (proc.getPattern()) == gateBefore, "a silent step can't send, and stays silent");
+            const auto from = stepPoint (12, 0.2f), to = stepPoint (12, 0.62f);
+            mouse (from, true); mouse (from.translated (0, 6), true); mouse (to, true); mouse (to, false); pump();
+            const auto dragged = proc.getPattern()[12];
+            expect (dragged.slap && dragged.send > 4 && dragged.send < 14, "dragging down a column sets a smaller send");
+            const auto a = stepPoint (0, 0.15f), b = stepPoint (4, 0.15f);
+            mouse (a, true); mouse (a.translated (6, 0), true); mouse (b, true); mouse (b, false); pump();
+            expect (proc.getPattern()[0].slap && proc.getPattern()[4].slap && proc.getPattern()[0].send >= 18,
+                    "dragging across draws sends on every sounding step it crosses");
+            expect (! press (juce::KeyPress::returnKey) && ! press (juce::KeyPress::spaceKey), "Return and space still reach the host after editing sends");
+            click (centre ("Edit gate"));
+            expect (proc.editLayer.load() == 0, "GATE switches back");
+        }
     }
     holder.removeFromDesktop();
     holder.removeChildComponent (editor.get());
@@ -187,5 +247,55 @@ int runStutterHostKeys()
     if (previousRoot.isEmpty()) unsetenv ("STUTTER_STEP_PRESET_ROOT");
     else setenv ("STUTTER_STEP_PRESET_ROOT", previousRoot.toRawUTF8(), 1);
     std::cout << "STUTTER EDITOR: " << checks << " checks, " << failures << " total failures (including shared host keys)\n";
+    return failures == 0 ? 0 : 1;
+}
+
+// The window shows only the device: at every size option, the corner pixels and edge midpoints are enclosure, never
+// the background around its rounded outline (0.4.3 left dark wedges in all four corners).
+int runStutterWindowEdges (const juce::File& cropsFolder)
+{
+    StutterProcessor proc;
+    std::unique_ptr<juce::AudioProcessorEditor> editor (proc.createEditor());
+    const juce::Colour background { 0xff050d0e };
+    int failures = 0, checks = 0;
+    const float scales[] { 0.8f, 0.9f, 1.0f, 1.25f, 1.5f }; // the smallest drag size, then the SIZE menu's options
+    for (const float scale : scales)
+        for (const float pixels : { 1.0f, 2.0f }) {
+            editor->setSize (juce::roundToInt (StutterEditor::baseWidth * scale),
+                             juce::roundToInt (StutterEditor::baseWidth * scale * StutterEditor::cropH / StutterEditor::cropW));
+            const auto image = editor->createComponentSnapshot (editor->getLocalBounds(), true, pixels);
+            const int w = image.getWidth(), h = image.getHeight();
+            const juce::Point<int> spots[] { { 0, 0 }, { w - 1, 0 }, { 0, h - 1 }, { w - 1, h - 1 },
+                                             { w / 2, 0 }, { w / 2, h - 1 }, { 0, h / 2 }, { w - 1, h / 2 } };
+            int bad = 0;
+            for (const auto& p : spots) {
+                const auto c = image.getPixelAt (p.x, p.y);
+                const int distance = std::abs (c.getRed() - background.getRed()) + std::abs (c.getGreen() - background.getGreen())
+                                   + std::abs (c.getBlue() - background.getBlue());
+                if (distance < 40 || c.getAlpha() < 255) {
+                    ++bad;
+                    std::cout << "  at " << p.x << "," << p.y << ": " << c.toDisplayString (true) << '\n';
+                }
+            }
+            ++checks;
+            failures += bad > 0 ? 1 : 0;
+            std::cout << (bad == 0 ? "  ok   " : "  FAIL ") << juce::roundToInt (scale * 100) << "% at " << pixels
+                      << "x: corners and edge midpoints show the device (" << w << " x " << h << ")\n";
+            if (cropsFolder != juce::File() && std::abs (scale - 1.0f) < 0.01f && pixels > 1.5f) {
+                // The four corners, 120 px each, side by side, for the review folder.
+                juce::Image crops (juce::Image::RGB, 4 * 120 + 3 * 8, 120, true);
+                juce::Graphics g (crops);
+                g.fillAll (juce::Colours::white);
+                const juce::Point<int> corners[] { { 0, 0 }, { w - 120, 0 }, { 0, h - 120 }, { w - 120, h - 120 } };
+                for (int i = 0; i < 4; ++i)
+                    g.drawImage (image.getClippedImage ({ corners[i].x, corners[i].y, 120, 120 }), i * 128, 0, 120, 120, 0, 0, 120, 120);
+                cropsFolder.createDirectory();
+                const auto file = cropsFolder.getChildFile ("corners-after-100.png");
+                file.deleteFile();
+                juce::FileOutputStream out (file);
+                juce::PNGImageFormat().writeImageToStream (crops, out);
+            }
+        }
+    std::cout << "WINDOW EDGES: " << checks << " checks, " << failures << " failures\n";
     return failures == 0 ? 0 : 1;
 }

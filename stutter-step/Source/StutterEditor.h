@@ -21,8 +21,10 @@ public:
     std::unique_ptr<juce::ComponentTraverser> createKeyboardFocusTraverser() override
     { return vfd::HostKeys::createTraverser(); }
 
-    // The crop sits on the enclosure's outer edges in Assets/DeviceShell.png, so the device meets the window.
-    static constexpr int cropX = 50, cropY = 54, cropW = 1024, cropH = 1304, baseWidth = 660;
+    // The window shows this part of Assets/DeviceShell-fullbleed.png: just inside the enclosure's outer edges,
+    // where every pixel is the device, so no background shows in the window's corners (0.5.0; ARTWORK.md). All
+    // layout stays in artwork coordinates. 0.4.3 showed (50, 54, 1024, 1304), the whole silhouette on black.
+    static constexpr int cropX = 67, cropY = 64, cropW = 990, cropH = 1259, baseWidth = 660;
 
     // Hands the DRAG key's MIDI clip to the OS drag. Tests replace it, since a real drag needs a real mouse.
     std::function<bool (const juce::File&)> startExternalDrag;
@@ -30,7 +32,6 @@ public:
 private:
     struct Knob;
     class Lane;
-    class Dots;
     class ScreenKey;
     class MidiKey;
     class PlateKey;
@@ -66,9 +67,11 @@ private:
     std::unique_ptr<juce::LookAndFeel_V4> skin;
     std::vector<std::unique_ptr<Knob>> knobs;
     std::unique_ptr<Lane> lane;
-    std::unique_ptr<Dots> dots;
     std::unique_ptr<ScreenKey> rollFrom, prev, next, randomKey, subSafe, presetMenu, saveKey;
     std::array<std::unique_ptr<ScreenKey>, 4> rateKeys; // 1/4, 1/8, 1/16, 1/32
+    // The row under the step lane: what the lane edits (GATE, SLAP), NUDGE and the step timing (DOTTED, TRIPLET).
+    std::array<std::unique_ptr<ScreenKey>, 2> layerKeys, timingKeys;
+    std::unique_ptr<ScreenKey> nudgeEarlier, nudgeLater;
     std::unique_ptr<MidiKey> midiKey;
     void showPresetMenu();
     // SAVE: the groove name becomes a text field; Return (or OK) saves the groove to USER, Escape cancels.

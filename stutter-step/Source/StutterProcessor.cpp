@@ -1,6 +1,8 @@
 #include "StutterProcessor.h"
 #include "MidiClip.h"
+#include <algorithm>
 #include <cstdlib>
+#include <iterator>
 #include <vector>
 #if ! STUTTER_HEADLESS
  #include "StutterEditor.h"
@@ -9,12 +11,21 @@
 using namespace stutter;
 
 namespace {
-const char* const paramIds[16] { "swing", "rate", "length", "smooth", "depth", "slapOn", "slapLock", "slapTime",
-                                 "slapFeedback", "slapTone", "slapMix", "slapGaps", "slapWide", "subSafe", "output", "bypass" };
+const char* const paramIds[17] { "swing", "rate", "length", "smooth", "depth", "slapOn", "slapLock", "slapTime",
+                                 "slapFeedback", "slapTone", "slapMix", "slapGaps", "slapWide", "subSafe", "output", "bypass",
+                                 "timing" };
 constexpr float subSafeChoices[] { 0.0f, 80.0f, 120.0f, 200.0f };
 
-std::uint8_t pack (Cell c) noexcept { return (std::uint8_t) ((std::uint8_t) c.v | (c.slap ? 4 : 0)); }
-Cell unpack (std::uint8_t b) noexcept { return { (Step) (b & 3), (b & 4) != 0 }; }
+// Bits 0-1 the step, bit 2 the slap send, bits 3-7 its level (1..20).
+std::uint8_t pack (Cell c) noexcept
+{
+    return (std::uint8_t) ((std::uint8_t) c.v | (c.slap ? 4 : 0) | (std::clamp ((int) c.send, 1, fullSend) << 3));
+}
+Cell unpack (std::uint8_t b) noexcept
+{
+    const int send = b >> 3;
+    return { (Step) (b & 3), (b & 4) != 0, (std::uint8_t) (send == 0 ? fullSend : send) };
+}
 
 juce::NormalisableRange<float> logRange (float lo, float hi)
 {
@@ -24,7 +35,7 @@ juce::NormalisableRange<float> logRange (float lo, float hi)
 }
 }
 
-double StutterProcessor::Snapshot::stepSeconds() const noexcept { return 60.0 / juce::jmax (1.0, bpm) * rateBeats (rate); }
+double StutterProcessor::Snapshot::stepSeconds() const noexcept { return 60.0 / juce::jmax (1.0, bpm) * stepBeats (rate, timing); }
 double StutterProcessor::Snapshot::slapSeconds() const noexcept
 {
     return slapLock ? juce::jlimit (0.01, maxLockSeconds, 2.0 * swing * stepSeconds()) : slapTimeMs / 1000.0;
@@ -58,6 +69,8 @@ juce::AudioProcessorValueTreeState::ParameterLayout StutterProcessor::createLayo
     layout.add (std::make_unique<AudioParameterFloat> (ParameterID { "output", 1 }, "Output", NormalisableRange<float> (-12.0f, 12.0f, 0.1f), 0.0f,
         AudioParameterFloatAttributes().withStringFromValueFunction ([] (float v, int) { return String (v, 1) + " dB"; })));
     layout.add (std::make_unique<AudioParameterBool> (ParameterID { "bypass", 1 }, "Bypass", false));
+    // 0.5.0, appended: the step at RATE (straight), 1.5 times it (dotted) or two thirds of it (triplet).
+    layout.add (std::make_unique<AudioParameterChoice> (ParameterID { "timing", 1 }, "Timing", StringArray { "Straight", "Dotted", "Triplet" }, 0));
     return layout;
 }
 
@@ -66,7 +79,7 @@ StutterProcessor::StutterProcessor()
                                        .withOutput ("Output", juce::AudioChannelSet::stereo(), true)),
       apvts (*this, nullptr, "STUTTER", createLayout())
 {
-    for (int i = 0; i < 16; ++i) p[i] = apvts.getRawParameterValue (paramIds[i]);
+    for (int i = 0; i < (int) std::size (paramIds); ++i) p[i] = apvts.getRawParameterValue (paramIds[i]);
     // A fresh instance opens on the first factory groove; a host's saved state replaces it.
     loadFactory (0);
 }
@@ -140,6 +153,14 @@ void StutterProcessor::setCell (int index, Cell cell)
     setPattern (pattern);
 }
 
+void StutterProcessor::nudge (int steps)
+{
+    const juce::ScopedLock lock (grooveMutex);
+    if (steps % numSteps == 0) return;
+    groove.edited = true;
+    setPattern (rotated (getPattern(), steps));
+}
+
 void StutterProcessor::setParamValue (const juce::String& id, float value)
 {
     if (auto* parameter = apvts.getParameter (id)) {
@@ -162,6 +183,7 @@ void StutterProcessor::loadFactory (int index)
     const int i = ((index % numFactoryGrooves) + numFactoryGrooves) % numFactoryGrooves;
     const auto& f = factoryGroove (i);
     setParamValue ("rate", (float) f.rate);
+    setParamValue ("timing", (float) f.timing);
     setParamValue ("smooth", f.smoothMs);
     setParamValue ("depth", f.depth * 100.0f);
     setParamValue ("slapLock", f.lock ? 1.0f : 0.0f);
@@ -179,7 +201,7 @@ void StutterProcessor::loadFactory (int index)
 namespace {
 // What a user groove recalls besides its pattern, swing and length: the settings a factory groove sets.
 const char* const userGrooveParameters[] { "rate", "smooth", "depth", "slapLock", "slapTime", "slapFeedback",
-                                           "slapTone", "slapMix", "slapGaps", "slapWide" };
+                                           "slapTone", "slapMix", "slapGaps", "slapWide", "timing" };
 }
 
 juce::File StutterProcessor::userGrooveRoot()
@@ -231,6 +253,8 @@ juce::Result StutterProcessor::saveUserGroove (const juce::String& typed)
     t.setProperty ("family", juce::String (familyName (groove.family)), nullptr);
     t.setProperty ("cells", juce::String (cellsToString (pattern)), nullptr);
     t.setProperty ("slap", juce::String (slapToString (pattern)), nullptr);
+    if (const auto levels = sendLevelsToString (pattern); ! levels.empty())
+        t.setProperty ("sendLevels", juce::String (levels), nullptr); // 0.5.0; absent = every send full
     t.setProperty ("swing", p[swingP]->load(), nullptr);
     t.setProperty ("length", p[lengthP]->load(), nullptr);
     for (const auto* id : userGrooveParameters)
@@ -257,10 +281,12 @@ bool StutterProcessor::loadUserGroove (const juce::File& file)
     if (steps.length() != numSteps || ! steps.containsOnly ("Xg-.") || ! slapSends.containsOnly ("*.")) return false;
     for (const auto* id : userGrooveParameters)
         if (t.hasProperty (id)) setParamValue (id, (float) (double) t[id]);
+    if (! t.hasProperty ("timing")) setParamValue ("timing", 0.0f); // saved before 0.5.0: straight
     const auto name = file.getFileNameWithoutExtension();
     groove = { name, familyFromName (t["family"].toString().toStdString()), -1, 0, false, name };
-    applyGroove (parsePattern (steps.toRawUTF8(), slapSends.toRawUTF8()),
-                 (float) (double) t.getProperty ("swing", 60.0) / 100.0f, (float) (double) t.getProperty ("length", 60.0) / 100.0f);
+    auto pattern = parsePattern (steps.toRawUTF8(), slapSends.toRawUTF8());
+    applySendLevels (pattern, t["sendLevels"].toString().toStdString());
+    applyGroove (pattern, (float) (double) t.getProperty ("swing", 60.0) / 100.0f, (float) (double) t.getProperty ("length", 60.0) / 100.0f);
     grooveRevision.fetch_add (1);
     return true;
 }
@@ -328,7 +354,7 @@ juce::File StutterProcessor::writeMidiClip (const juce::File& folder) const
     const auto s = snapshot();
     auto name = cleanGrooveName (getGrooveInfo().name);
     if (name.isEmpty()) name = "STUTTER-STEP";
-    const auto clip = makeMidiClip (s.pattern, s.swing, s.length, rateBeats (s.rate), s.bpm, name);
+    const auto clip = makeMidiClip (s.pattern, s.swing, s.length, stepBeats (s.rate, s.timing), s.bpm, name);
     if (folder.createDirectory().failed()) return {};
     // The file's name becomes the clip's name in the host.
     const auto file = folder.getChildFile (name + ".mid");
@@ -349,6 +375,7 @@ StutterProcessor::Snapshot StutterProcessor::snapshot() const
     s.smoothMs = p[smoothP]->load();
     s.depth = p[depthP]->load() / 100.0;
     s.rate = juce::jlimit (0, 3, (int) p[rateP]->load());
+    s.timing = juce::jlimit (0, 2, (int) p[timingP]->load());
     s.bpm = uiBpm.load();
     s.slapOn = p[slapOnP]->load() > 0.5f;
     s.slapLock = p[slapLockP]->load() > 0.5f;
@@ -382,15 +409,17 @@ void StutterProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mid
         }
     }
     const int rate = juce::jlimit (0, 3, (int) p[rateP]->load());
-    const double stepsPerSample = bpm / 60.0 / sampleRate / rateBeats (rate);
-    const double startSteps = beat0 / rateBeats (rate);
-    const double stepSeconds = 60.0 / bpm * rateBeats (rate);
+    const int timing = juce::jlimit (0, 2, (int) p[timingP]->load());
+    const double beatsPerStep = stepBeats (rate, timing); // straight: exactly rateBeats (rate)
+    const double stepsPerSample = bpm / 60.0 / sampleRate / beatsPerStep;
+    const double startSteps = beat0 / beatsPerStep;
+    const double stepSeconds = 60.0 / bpm * beatsPerStep;
 
     // ---- rebuild the envelopes when anything that shapes them moves ----
     const float swing = p[swingP]->load() / 100.0f, length = p[lengthP]->load() / 100.0f;
     const float smooth = p[smoothP]->load(), depth = p[depthP]->load() / 100.0f;
     const bool slapOn = p[slapOnP]->load() > 0.5f, gaps = p[slapGapsP]->load() > 0.5f;
-    BuildKey key { patternVersion.load (std::memory_order_acquire), swing, length, smooth, depth, rate,
+    BuildKey key { patternVersion.load (std::memory_order_acquire), swing, length, smooth, depth, rate, timing,
                    std::round (bpm * 100.0) / 100.0, slapOn, gaps, false };
     if (! (key == built)) {
         const auto pattern = getPattern();
@@ -465,6 +494,8 @@ void StutterProcessor::getStateInformation (juce::MemoryBlock& dest)
     g.setProperty ("schema", 2, nullptr);
     g.setProperty ("cells", juce::String (cellsToString (pattern)), nullptr);
     g.setProperty ("slap", juce::String (slapToString (pattern)), nullptr);
+    if (const auto levels = sendLevelsToString (pattern); ! levels.empty())
+        g.setProperty ("sendLevels", juce::String (levels), nullptr); // 0.5.0; absent = every send full
     g.setProperty ("name", groove.name, nullptr);
     g.setProperty ("family", juce::String (familyName (groove.family)), nullptr);
     g.setProperty ("preset", groove.presetIndex, nullptr);
@@ -474,6 +505,7 @@ void StutterProcessor::getStateInformation (juce::MemoryBlock& dest)
     g.setProperty ("lockSwing", lockSwing.load(), nullptr);
     g.setProperty ("rollFrom", rollFrom.load(), nullptr);
     g.setProperty ("editorScale", editorScale.load(), nullptr);
+    g.setProperty ("editLayer", editLayer.load(), nullptr);
     state.removeChild (state.getChildWithName ("GROOVE"), nullptr);
     state.appendChild (g, nullptr);
     if (auto xml = state.createXml()) copyXmlToBinary (*xml, dest);
@@ -493,9 +525,19 @@ void StutterProcessor::setStateInformation (const void* data, int size)
         for (auto param : state)
             if (param.hasType ("PARAM") && param["id"].toString() == "rate")
                 param.setProperty ("value", juce::jlimit (0, 2, (int) (double) param["value"]) + 1, nullptr);
+    // Projects from before 0.5.0 have no TIMING: they play straight, whatever this instance had. JUCE's APVTS resets
+    // a parameter missing from a state to its default; writing straight here keeps that true whatever JUCE does.
+    if (! state.getChildWithProperty ("id", "timing").isValid()) {
+        juce::ValueTree timing ("PARAM");
+        timing.setProperty ("id", "timing", nullptr);
+        timing.setProperty ("value", 0.0, nullptr);
+        state.appendChild (timing, nullptr);
+    }
     apvts.replaceState (state);
     if (g.isValid()) {
-        setPattern (parsePattern (g["cells"].toString().toRawUTF8(), g["slap"].toString().toRawUTF8()));
+        auto pattern = parsePattern (g["cells"].toString().toRawUTF8(), g["slap"].toString().toRawUTF8());
+        applySendLevels (pattern, g["sendLevels"].toString().toStdString());
+        setPattern (pattern);
         groove.name = g["name"].toString();
         groove.family = familyFromName (g["family"].toString().toStdString());
         // Factory grooves are found by name, so projects keep their preset when the bank grows or reorders.
@@ -508,6 +550,7 @@ void StutterProcessor::setStateInformation (const void* data, int size)
         lockSwing = (bool) g["lockSwing"];
         rollFrom = juce::jlimit (-1, (int) Family::count - 1, (int) g["rollFrom"]);
         editorScale = (float) g["editorScale"];
+        editLayer = juce::jlimit (0, 1, (int) g["editLayer"]);
     }
     grooveRevision.fetch_add (1);
     updateHostDisplay (ChangeDetails().withProgramChanged (true).withNonParameterStateChanged (true));

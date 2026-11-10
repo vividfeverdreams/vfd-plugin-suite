@@ -8,6 +8,19 @@
 
 ## Enclosure
 
-`Assets/DeviceShell.png` (1120 × 1408 RGBA) was made with GPT Image 2 in Krea, in edit mode. Inputs: the SHIFTY `DeviceShell.png` as the edit target, with BACK-SCRATCH `Interior-v8.png` and THROW-UP `DeviceShell-v2.png` as style references. The near-black background was then cut to alpha and the color lifted slightly (saturation ×1.18, contrast ×1.04) to match the siblings' vividness. The editor crops `(50, 54, 1024, 1304)`. Control positions were measured on the result; the measured map is in `BUILD-PLAN.md`. The wordmark, every label, value, graph, LED and meter is drawn live by the editor.
+`Assets/DeviceShell.png` (1120 × 1408 RGBA) was made with GPT Image 2 in Krea, in edit mode. Inputs: the SHIFTY `DeviceShell.png` as the edit target, with BACK-SCRATCH `Interior-v8.png` and THROW-UP `DeviceShell-v2.png` as style references. The near-black background was then cut to alpha and the color lifted slightly (saturation ×1.18, contrast ×1.04) to match the siblings' vividness. Up to 0.4.3 the editor cropped `(50, 54, 1024, 1304)`, the enclosure's outer edges, so the background showed in the window's rounded corners. Control positions were measured on the result; the measured map is in `BUILD-PLAN.md`.
+
+### Full-bleed window (0.5.0)
+
+The editor now draws `Assets/DeviceShell-fullbleed.png`: the same art with tighter outer corners, made with the suite's `shared/tools/tighten_shell_corners.py` (no pixel moves outside the four corner zones, so every measured position still holds). The source corners are about r 100 (top) and r 140 (bottom). The top half uses radius 30; the bottom half uses radius 60 with the inner 60% of each corner untouched, which keeps the bottom screws and the speaker slots undistorted:
+
+```sh
+T=../shared/tools/tighten_shell_corners.py
+python3 $T Assets/DeviceShell.png /tmp/top.png    --edges 54.5 54.5 1071.5 1355.5 --radius 100 100 140 140 --new-radius 30
+python3 $T Assets/DeviceShell.png /tmp/bottom.png --edges 54.5 54.5 1071.5 1355.5 --radius 100 100 140 140 --new-radius 60 --inner 0.6
+python3 -c "import numpy as n;from PIL import Image as I;a=n.array(I.open('/tmp/top.png'));b=n.array(I.open('/tmp/bottom.png'));b[:700]=a[:700];I.fromarray(b).save('Assets/DeviceShell-fullbleed.png',optimize=True)"
+```
+
+The window shows `(67, 64, 990, 1259)` of it (`StutterEditor::cropX..cropH`): the smallest rectangle, with 2 px to spare, whose every pixel is fully opaque enclosure. That leaves the rails at the window's edges, as in ENERGY HARVESTER, and no background in the corners at any size. `STUTTER-STEP Shots --window-edges` checks the corners and edge midpoints at every size option. `Assets/DeviceShell.png` stays as the source. The wordmark, every label, value, graph, LED and meter is drawn live by the editor.
 
 Fonts: Chakra Petch SemiBold and Bold Italic, as across the suite (`Assets/ChakraPetch-OFL.txt`).

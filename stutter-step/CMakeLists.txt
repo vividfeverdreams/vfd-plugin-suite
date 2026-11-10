@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.22)
-project(StutterStep VERSION 0.4.3 LANGUAGES C CXX)
+project(StutterStep VERSION 0.5.0 LANGUAGES C CXX)
 
 if (APPLE)
     enable_language(OBJCXX)
@@ -12,7 +12,7 @@ set(JUCE_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/external/JUCE" CACHE PATH "Pinn
 add_subdirectory("${JUCE_SOURCE_DIR}" "${CMAKE_BINARY_DIR}/JUCE")
 
 juce_add_binary_data(StutterStepAssets SOURCES
-    Assets/DeviceShell.png
+    Assets/DeviceShell-fullbleed.png
     ../shared/VfdLogo.svg
     Assets/ChakraPetch-SemiBold.ttf
     Assets/ChakraPetch-BoldItalic.ttf)

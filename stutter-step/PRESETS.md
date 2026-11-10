@@ -6,7 +6,9 @@ Your own grooves go in **USER** (0.4.0): press **SAVE** beside the arrows, name 
 
 The **shuffle key** between SAVE and the arrows (0.4.1) loads one of the factory or USER grooves at random, never the one you're on. NEW GROOVE is different: it composes a brand-new rhythm.
 
-43 grooves in eight folders, built for 140 halftime dubstep, riddim and left-field bass. Browse them from the menu on the groove name or step through with the arrows. Loading a groove sets the pattern, swing, rate, length, smooth, depth and all slap settings. SUB SAFE, OUTPUT and bypass stay as you set them. With the swing padlock closed, your swing stays too.
+75 grooves in ten folders. The first 43 (eight folders) are built for 140 halftime dubstep, riddim and left-field bass; 0.5.0 adds **SIMPLE** (15 plain, useful patterns) and **HATS** (17 hi-hat patterns) after them, so every older groove keeps its number and projects keep their groove. Browse them from the menu on the groove name or step through with the arrows. Loading a groove sets the pattern, swing, rate, timing (straight, dotted or triplet), length, smooth, depth and all slap settings. SUB SAFE, OUTPUT and bypass stay as you set them. With the swing padlock closed, your swing stays too.
+
+**Timing (0.5.0):** DOTTED and TRIPLET under the step lane make every step 1.5 times or two thirds of the RATE; the 43 older grooves load straight. A few SIMPLE and HATS grooves use them (marked *dotted* or *triplet* below). NEW GROOVE keeps the RATE and timing you set. ROLL FROM can now roll **HATS** too (ALL never does).
 
 Each one is rendered on a held reese with dry halftime drums at 140 BPM in `../review/preset-demos/` (`00 TOUR.wav` plays two bars of each; `TOUR.txt` has the timestamps).
 
@@ -93,3 +95,50 @@ Each one is rendered on a held reese with dry halftime drums at 140 BPM in `../r
 | **Machine Lean** | 1/32, swing 66%, length 45% | LOCK, fb 35%, mix 40%, GAPS | 1/32 machine-gun burst into gaps-only echoes. |
 | **Fill Me In** | 1/16, swing 60%, length 45% | LOCK, fb 45%, mix 45%, GAPS | One hit, then a rolling fill into a final slap. Automate it in on bar 4. |
 | **Hiccup** | 1/16, swing 68%, length 35% | 45 ms, fb 20%, mix 40% | Short doubled hiccups with bright free-time slaps. |
+
+## SIMPLE (0.5.0)
+
+Plain, useful patterns for a mid bass: straight or nearly, clean edges (SMOOTH 3-10 ms), full depth. Slap sends are few or none; LOCK keeps any echo on the grid.
+
+| Groove | Feel | Slap | |
+|---|---|---|---|
+| **Quarter Chug** | 1/16, straight, length 60% | LOCK, fb 20%, mix 30% | Four on the floor, one echo before the bar line. |
+| **Straight Eighths** | 1/16, straight, length 50% | LOCK, fb 20%, mix 28% | Even 8ths: the plainest chop there is. |
+| **Offbeats** | 1/16, straight, length 60% | LOCK, fb 25%, mix 32% | Only the "and"s: the house/skank upbeat. |
+| **Sixteenths** | 1/16, straight, length 50% | none | Every 16th, half open: a steady pump. |
+| **Trance Gate** | 1/16, straight, length 75% | none | The classic 16th trance gate (3-3-2 inside each half bar). |
+| **Three Three Two** | 1/16, straight, length 60% | LOCK, fb 22%, mix 32% | 3-3-2 tresillo across the bar, twice. |
+| **Plain Gallop** | 1/16, straight, length 55% | none | An 8th and two 16ths on every beat. |
+| **Reverse Gallop** | 1/16, straight, length 55% | none | Two 16ths and an 8th on every beat. |
+| **Long Short** | 1/16, straight, length 80% | LOCK, fb 22%, mix 30% | A held 8th, then a 16th on the "a": dah-dit. |
+| **Half Notes** | 1/16, straight, length 85% | none | Two long holds per bar with a breath before each. |
+| **Two and Four** | 1/16, straight, length 80% | LOCK, fb 25%, mix 32% | Held stabs on the backbeat only. |
+| **Half-Time Chop** | 1/16, straight, length 75% | LOCK, fb 25%, mix 35% | Held hit plus a pickup on 1 and 3: the halftime bass chop. |
+| **Dotted Eighth Pulse** | 1/8 *dotted*, straight, length 50% | none | Even dotted 8ths that roll across the bar line (repeats every 3 bars). |
+| **Triplet Eighths** | 1/16 *triplet*, straight, length 50% | none | Even 8th-note triplets. |
+| **Quarter Triplets** | 1/16 *triplet*, straight, length 50% | LOCK, fb 22%, mix 30% | Quarter-note triplets: three across two beats. |
+
+## HATS (0.5.0)
+
+Put STUTTER-STEP on a held hi-hat, a noise loop or an open-hat loop and these carve hat patterns out of it. Short LENGTH (28-50%), crisp SMOOTH (1-1.5 ms), full DEPTH. Ghosts sit 8.4 dB under the hits, which gives the accents; ties hold the hat open. The slap is off (no sends) except for a faint tick on two of them (free time 55-70 ms, mix 18-20%). Turn the SLAP switch off if your hats should stay completely dry.
+
+| Groove | Feel | Slap | |
+|---|---|---|---|
+| **Eighth Hats** | 1/16, straight, length 30% | none | Closed 8th hats. |
+| **Sixteenth Hats** | 1/16, straight, length 30% | none | 16ths, accented on the 8ths. |
+| **Shuffle Hats** | 1/16, swing 62%, length 32% | none | The same 16ths, shuffled. |
+| **Ghost Sixteenths** | 1/16, straight, length 28% | none | One accent per beat, ghosts between. |
+| **Offbeat Accents** | 1/16, straight, length 30% | none | 16ths with the accent on the "and". |
+| **Offbeat Opens** | 1/16, straight, length 45% | 55 ms, mix 18% | Ghost on the beat, an open hat (held) on every "and". |
+| **Open Sixteenths** | 1/16, straight, length 35% | none | 16ths with an open hat closing each beat. |
+| **Skip Hats** | 1/16, straight, length 30% | none | 8ths with skipping 16th pickups. |
+| **Two-Step Hats** | 1/16, swing 58%, length 30% | none | Skippy garage hats. |
+| **Gallop Hats** | 1/16, straight, length 28% | none | Accent, ghost, two hits: galloping 16ths. |
+| **Half-Time Hats** | 1/16, straight, length 32% | 70 ms, mix 20% | 8ths with an open hat into the snare on 3. |
+| **Trap Rolls** | 1/32, straight, length 50% | none | 16ths with a 32nd roll at the end of every two beats. |
+| **Trap Flutter** | 1/32, straight, length 50% | none | 16ths with a flutter in the middle and ghosted 32nds at the end. |
+| **Triplet Hats** | 1/16 *triplet*, straight, length 35% | none | Rolling 8th-note triplet hats. |
+| **Triplet Sixteenths** | 1/16 *triplet*, straight, length 32% | none | 16th triplets, accented on the 8th triplets. |
+| **Triplet Rolls** | 1/32 *triplet*, straight, length 50% | none | 16ths, then a 32nd-triplet roll; the cycle is a third of a bar, so the rolls move around the bar. |
+| **Dotted Hats** | 1/32 *dotted*, straight, length 35% | none | Fast dotted hats against the beat (repeats every 3 beats). |
+

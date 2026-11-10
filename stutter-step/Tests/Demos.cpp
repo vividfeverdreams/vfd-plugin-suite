@@ -1,7 +1,11 @@
 // Renders every factory groove on a held reese bass with dry halftime drums, at 140 BPM.
 // STUTTER-STEP Demos <output folder>: one WAV per preset plus 00 TOUR.wav (two bars each) and TOUR.txt.
+// STUTTER-STEP Demos --source <wav> --groove <name> --bars <n> --out <wav> [--timing dotted|triplet] [--from-bar <b>]
+//   plays a sample (looped) through one factory groove at 140 BPM and writes the plug-in's output alone (24-bit);
+//   --timing switches DOTTED or TRIPLET on at bar b (default 0), as a user would mid-loop.
 #include "Groove.h"
 #include "StutterProcessor.h"
+#include <juce_audio_formats/juce_audio_formats.h>
 #include <juce_events/juce_events.h>
 #include <cmath>
 #include <cstdio>
@@ -112,10 +116,81 @@ float render (int preset, int bars, std::vector<float>& left, std::vector<float>
     }
     return peak;
 }
+
+// --source: one sample through one groove.
+int renderSource (const juce::StringArray& args)
+{
+    const auto value = [&] (const char* flag, const juce::String& fallback = {}) {
+        const int i = args.indexOf (flag);
+        return i >= 0 && i + 1 < args.size() ? args[i + 1] : fallback;
+    };
+    juce::AudioFormatManager formats;
+    formats.registerBasicFormats();
+    std::unique_ptr<juce::AudioFormatReader> reader (formats.createReaderFor (juce::File (value ("--source"))));
+    const int groove = factoryIndexOf (value ("--groove").toStdString());
+    if (reader == nullptr || groove < 0) { std::printf ("need a readable --source and a factory --groove\n"); return 1; }
+    const double rate = reader->sampleRate;
+    juce::AudioBuffer<float> source (2, (int) reader->lengthInSamples);
+    reader->read (&source, 0, source.getNumSamples(), 0, true, true);
+    const int bars = value ("--bars", "4").getIntValue(), switchBar = value ("--from-bar", "0").getIntValue();
+    const juce::String timing = value ("--timing");
+    const int perBar = (int) std::round (rate * 60.0 / bpm * 4.0), total = bars * perBar, fade = (int) (rate * 0.03);
+    // The sample, looped with a short crossfade so a held sound stays held.
+    const auto sourceAt = [&] (int ch, int n) {
+        const int len = source.getNumSamples() - fade;
+        const int i = n % len;
+        float v = source.getSample (ch, i);
+        if (n >= len && i < fade) v = v * ((float) i / fade) + source.getSample (ch, len + i) * (1.0f - (float) i / fade);
+        return v;
+    };
+    StutterProcessor proc;
+    struct SourceHead final : juce::AudioPlayHead
+    {
+        juce::int64 sample = 0; double sr = 48000.0;
+        juce::Optional<PositionInfo> getPosition() const override
+        {
+            PositionInfo info;
+            info.setBpm (bpm); info.setIsPlaying (true); info.setPpqPosition ((double) sample / sr * bpm / 60.0);
+            return info;
+        }
+    } head;
+    head.sr = rate;
+    proc.setPlayHead (&head);
+    proc.loadFactory (groove);
+    proc.prepareToPlay (rate, 512);
+    const auto setTiming = [&] (int t) { auto* p = proc.apvts.getParameter ("timing"); p->setValueNotifyingHost (p->convertTo0to1 ((float) t)); };
+    std::vector<float> left, right;
+    juce::AudioBuffer<float> buffer (2, 512);
+    juce::MidiBuffer midi;
+    for (int done = 0; done < total; ) {
+        if (timing.isNotEmpty() && done == switchBar * perBar) setTiming (timing == "dotted" ? 1 : timing == "triplet" ? 2 : 0);
+        const int nextSwitch = timing.isNotEmpty() && done < switchBar * perBar ? switchBar * perBar : total;
+        const int n = std::min ({ 512, total - done, nextSwitch - done });
+        buffer.setSize (2, n, false, false, true);
+        for (int ch = 0; ch < 2; ++ch) for (int i = 0; i < n; ++i) buffer.setSample (ch, i, sourceAt (ch, done + i));
+        proc.processBlock (buffer, midi);
+        for (int i = 0; i < n; ++i) { left.push_back (buffer.getSample (0, i)); right.push_back (buffer.getSample (1, i)); }
+        head.sample += n;
+        done += n;
+    }
+    juce::WavAudioFormat wav;
+    const juce::File out (value ("--out"));
+    out.deleteFile();
+    std::unique_ptr<juce::OutputStream> stream (out.createOutputStream());
+    auto writer = wav.createWriterFor (stream, juce::AudioFormatWriterOptions().withSampleRate (rate).withNumChannels (2).withBitsPerSample (24));
+    if (writer == nullptr) return 1;
+    const float* channels[] { left.data(), right.data() };
+    writer->writeFromFloatArrays (channels, 2, (int) left.size());
+    std::printf ("wrote %s (%s, %d bars)\n", out.getFullPathName().toRawUTF8(), factoryGroove (groove).name, bars);
+    return 0;
+}
 }
 
 int main (int argc, char** argv)
 {
+    juce::StringArray args;
+    for (int i = 1; i < argc; ++i) args.add (juce::String::fromUTF8 (argv[i]));
+    if (args.contains ("--source")) return renderSource (args);
     // Pure offline DSP/WAV rendering: do not initialise JUCE GUI or open an audio device.
     const juce::File folder (argc > 1 ? juce::String (argv[1]) : juce::File::getCurrentWorkingDirectory().getFullPathName());
     folder.createDirectory();
