@@ -14,14 +14,18 @@ constexpr const char* ids[] = {
     "motionFreeHz", "bypass", "vowel",
     // 0.5.0
     "vowelMorph", "voiceSet", "character", "talk", "envAmount", "envAttack", "envRelease",
-    "yoiAmount", "yoiFrom", "yoiTo", "yoiTime", "yoiShift", "motionTarget"
+    "yoiAmount", "yoiFrom", "yoiTo", "yoiTime", "yoiShift", "motionTarget",
+    // 0.6.0: DRIVE model and the SMASH finisher. Their defaults are the sound
+    // before 0.6.0 (SOFT drive, SMASH off), so older projects are unchanged.
+    "driveModel", "smash", "smashTime", "smashBalance"
 };
 enum Index : size_t {
     iShift, iFocus, iBite, iDrive, iMix, iSubSafe, iSubCut, iOutput,
     iMotionEnable, iMotionShape, iMotionRate, iMotionDepth, iMotionSync,
     iMotionFreeHz, iBypass, iVowel,
     iVowelMorph, iVoiceSet, iCharacter, iTalk, iEnvAmount, iEnvAttack, iEnvRelease,
-    iYoiAmount, iYoiFrom, iYoiTo, iYoiTime, iYoiShift, iMotionTarget
+    iYoiAmount, iYoiFrom, iYoiTo, iYoiTime, iYoiShift, iMotionTarget,
+    iDriveModel, iSmash, iSmashTime, iSmashBalance
 };
 constexpr double twoPi = juce::MathConstants<double>::twoPi;
 constexpr int engineVersion = 4;
@@ -95,6 +99,12 @@ juce::AudioProcessorValueTreeState::ParameterLayout ShiftyProcessor::createParam
     skewed("yoiTime", "Yoi Time", 20.0f, 1000.0f, .1f, 200.0f, 200.0f);
     f("yoiShift", "Yoi Shift", -12.0f, 12.0f, .01f, 0.0f, 2);
     choice("motionTarget", "Motion Target", {"Shift", "Vowel", "Both"}, 0, 2);
+    // 0.6.0. Defaults = the sound before 0.6.0: JUCE gives a parameter missing
+    // from a saved state its default, so old projects load SOFT and SMASH off.
+    choice("driveModel", "Drive Model", {"Soft", "Tape", "Tube", "Fuzz"}, 0, 3);
+    f("smash", "Smash", 0.0f, 1.0f, .001f, 0.0f, 3);
+    f("smashTime", "Smash Time", 0.0f, 1.0f, .001f, 0.5f, 3);
+    f("smashBalance", "Smash Up/Down", -1.0f, 1.0f, .001f, 0.0f, 3);
     return layout;
 }
 
@@ -189,6 +199,7 @@ void ShiftyProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)
     classicLowLatencyEngine.prepare(sampleRate, samplesPerBlock, channels);
     talkEngine.prepare(sampleRate, samplesPerBlock, channels);
     mouthEngine.prepare(sampleRate, samplesPerBlock, channels);
+    finisher.prepare(sampleRate, channels);
     envelopeFollower.prepare(sampleRate);
     yoiSweep.prepare(sampleRate);
     setLatencySamples(latencyFor(engineMode(), classicLowLatency(), sampleRate));
@@ -303,6 +314,28 @@ void ShiftyProcessor::processAudio(juce::AudioBuffer<float>& buffer, bool forceB
             for (int c = 0; c < channels; ++c)
                 buffer.setSample(c, i, buffer.getSample(c, i) * gain);
         }
+    }
+
+    // SMASH, the finisher: last in the chain, before OUTPUT. At 0 it leaves the
+    // buffer untouched (every project made before 0.6.0).
+    {
+        const auto val = [this](size_t i) noexcept { return paramValues[i]->load(std::memory_order_relaxed); };
+        Finisher::Params f;
+        f.amount = val(iSmash);
+        f.time = val(iSmashTime);
+        f.balance = val(iSmashBalance);
+        f.subSafe = val(iSubSafe) >= .5f;
+        f.subCut = val(iSubCut);
+        f.bypass = isBypassed;
+        finisher.setParameters(f);
+        juce::AudioBuffer<float> view(buffer.getArrayOfWritePointers(), channels, n);
+        finisher.process(view);
+        const auto& meter = finisher.meter();
+        for (size_t b = 0; b < 3; ++b) {
+            displaySmashGain[b].store(meter.gainDb[b], std::memory_order_relaxed);
+            displaySmashLevel[b].store(meter.levelDb[b], std::memory_order_relaxed);
+        }
+        displaySmashEngaged.store(meter.engaged, std::memory_order_relaxed);
     }
 
     const float gain = isBypassed ? 1.0f : juce::Decibels::decibelsToGain(paramValues[iOutput]->load(std::memory_order_relaxed));
@@ -420,6 +453,7 @@ void ShiftyProcessor::processLatest(juce::AudioBuffer<float>& buffer, int channe
     p.vowelMorph = val(iVowelMorph);
     p.voiceSet = juce::jlimit(0, 2, (int) std::round(val(iVoiceSet)));
     p.character = character;
+    p.driveModel = juce::jlimit(0, driveModelCount - 1, (int) std::round(val(iDriveModel)));
     if (mode == EngineMode::classic)
         p.focus = val(iFocus) + character * 0.3f * (1.0f - val(iFocus));
     if (bypassed) {
@@ -583,6 +617,11 @@ ShiftyProcessor::Display ShiftyProcessor::display() const noexcept
     d.envelope = displayEnvelopeLevel.load(std::memory_order_relaxed);
     d.yoi = displayYoi.load(std::memory_order_relaxed);
     d.motionRunning = displayMotionRunning.load(std::memory_order_relaxed);
+    for (size_t b = 0; b < 3; ++b) {
+        d.smashGain[b] = displaySmashGain[b].load(std::memory_order_relaxed);
+        d.smashLevel[b] = displaySmashLevel[b].load(std::memory_order_relaxed);
+    }
+    d.smashEngaged = displaySmashEngaged.load(std::memory_order_relaxed);
     return d;
 }
 
@@ -803,15 +842,15 @@ bool ShiftyProcessor::isParameterLocked(const juce::String& id) const
 {
     if (id == engineLockId) return (randomLocks.load() & engineLockBit) != 0;
     for (size_t i = 0; i < std::size(ids); ++i)
-        if (id == ids[i]) return (randomLocks.load() & (1u << i)) != 0;
+        if (id == ids[i]) return (randomLocks.load() & lockBit(i)) != 0;
     return false;
 }
 
 void ShiftyProcessor::setParameterLocked(const juce::String& id, bool locked)
 {
-    uint32_t bit = id == engineLockId ? engineLockBit : 0u;
+    uint64_t bit = id == engineLockId ? engineLockBit : 0u;
     for (size_t i = 0; i < std::size(ids) && bit == 0; ++i)
-        if (id == ids[i]) bit = 1u << i;
+        if (id == ids[i]) bit = lockBit(i);
     if (bit == 0) return;
     if (locked) randomLocks.fetch_or(bit);
     else randomLocks.fetch_and(~bit);
@@ -852,11 +891,14 @@ void ShiftyProcessor::randomizeParameters()
         range(0.0f, 4.0f), (float)variationRandom.nextInt(3), range(0.0f, .8f), range(0.0f, .8f),
         range(-.6f, .8f), logRange(1.0f, 30.0f), logRange(40.0f, 400.0f),
         variationRandom.nextBool() ? range(.4f, 1.0f) : 0.0f, range(0.0f, 4.0f), range(0.0f, 4.0f),
-        logRange(60.0f, 500.0f), range(-6.0f, 6.0f), (float)variationRandom.nextInt(3)
+        logRange(60.0f, 500.0f), range(-6.0f, 6.0f), (float)variationRandom.nextInt(3),
+        // 0.6.0: an analog DRIVE model nine times in ten, and SMASH from light to heavy.
+        variationRandom.nextInt(10) == 0 ? 0.0f : (float)(1 + variationRandom.nextInt(3)),
+        range(.15f, .85f), range(.25f, .75f), range(-.6f, .6f)
     };
     static_assert(std::size(values) == std::size(ids));
     for (size_t i = 0; i < std::size(ids); ++i) {
-        if ((locks & (1u << i)) != 0) continue;
+        if ((locks & lockBit(i)) != 0) continue;
         setParameterAsGesture(ids[i], values[i]);
     }
     setPresetName("Random Variation");
@@ -873,8 +915,10 @@ void ShiftyProcessor::getStateInformation(juce::MemoryBlock& dest)
     tree.setProperty("engineVersion", engineVersion, nullptr);
     tree.setProperty("presetName", currentPresetName(), nullptr);
     tree.setProperty("presetFolder", currentPresetFolder(), nullptr);
-    tree.setProperty("randomLockMask", (int)randomLocks.load(), nullptr);
-    tree.setProperty("randomLockVersion", 2, nullptr);
+    const auto locks = randomLocks.load();
+    tree.setProperty("randomLockMask", (int)(uint32_t)(locks & legacyLockBits), nullptr);
+    tree.setProperty("randomLockMask2", (int)(uint32_t)(locks >> (legacyParameterCount + 1)), nullptr);
+    tree.setProperty("randomLockVersion", 3, nullptr);
     tree.setProperty("engineMode", static_cast<int>(engineMode()), nullptr);
     tree.setProperty("classicLowLatency", classicLowLatency(), nullptr);
     tree.setProperty("editorScale", editorScale(), nullptr);
@@ -901,7 +945,8 @@ void ShiftyProcessor::setStateInformation(const void* data, int size)
                     : parameter->convertFrom0to1(parameter->getDefaultValue()), nullptr);
                 tree.addChild(child, -1, nullptr);
             }
-            auto locks = (uint32_t)(int)tree.getProperty("randomLockMask", (int)defaultRandomLocks);
+            uint64_t locks = (uint32_t)(int)tree.getProperty("randomLockMask", (int)(uint32_t)defaultRandomLocks);
+            locks &= legacyLockBits;
             if (!tree.hasProperty("randomLockVersion")) {
                 // Saved before 0.5.3, when the engine had no lock. A mask still
                 // at the old default (Vowel Color locked) was never touched and
@@ -911,7 +956,14 @@ void ShiftyProcessor::setStateInformation(const void* data, int size)
             }
             // A session that made its own lock choices before Vowel Color
             // existed keeps it out of RANDOM.
-            if (missingVowel && tree.hasProperty("randomLockMask")) locks |= (1u << 15);
+            if (missingVowel && tree.hasProperty("randomLockMask")) locks |= (uint64_t { 1 } << 15);
+            if (tree.hasProperty("randomLockMask2")) {
+                locks |= (uint64_t)(uint32_t)(int)tree.getProperty("randomLockMask2") << (legacyParameterCount + 1);
+            } else if (locks == legacyLockBits) {
+                // Saved before 0.6.0 with everything locked: RANDOM stays a no-op.
+                // Otherwise the new controls start unlocked, like every new control.
+                locks = allRandomLocks;
+            }
             randomLocks.store(locks & allRandomLocks);
             // Projects saved before 0.5.0 carry no engine: they made the 0.4.2
             // sound, so they keep it until the user upgrades.
@@ -1123,6 +1175,10 @@ void ShiftyProcessor::applyFactoryPreset(const FactoryPreset& p, bool keepLocked
     set("yoiTime", p.yoiTime);
     set("yoiShift", p.yoiShift);
     set("motionTarget", (float)p.target);
+    set("driveModel", (float)p.driveModel);
+    set("smash", p.smash);
+    set("smashTime", p.smashTime);
+    set("smashBalance", p.smashBalance);
     if (!(keepLocked && isParameterLocked(engineLockId))) applyEngine(p.engine, p.lowLatency);
     assignPresetName(p.name, p.folder);
 }

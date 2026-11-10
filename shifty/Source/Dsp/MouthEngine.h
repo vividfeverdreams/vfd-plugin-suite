@@ -1,6 +1,7 @@
 #pragma once
 
 #include "DspCommon.h"
+#include "Drive.h"
 
 #include <cstdint>
 #include <vector>
@@ -54,7 +55,7 @@ private:
         std::vector<float> output;    // grain accumulator, absolute-time ring
         LinkwitzRiley4 drySplit;
         LinkwitzRiley4 wetSplit;
-        AdaaDrive drive;
+        DriveStage drive;
         std::array<float, 6> mouthState {}; // three band-pass resonators, two states each
         float dryPower = 0.0f;
         float wetPower = 0.0f;
@@ -91,6 +92,7 @@ private:
     float autoGainCoefficient_ = 0.0f;
     float autoGain_ = 1.0f;
     float lastSubCut_ = -1.0f;
+    int driveModel_ = 0;
 
     // Pitch tracker (decimated mono)
     int decimation_ = 4;

@@ -16,13 +16,15 @@
 namespace shifty::tests {
 
 namespace {
-// The 16 controls of 0.4.2 in their original order, then the 13 added in 0.5.0 (append-only).
-constexpr std::array<const char*, 29> expectedParameterIds {{
+// The 16 controls of 0.4.2 in their original order, then the 13 added in 0.5.0 and the 4 added in
+// 0.6.0 (append-only).
+constexpr std::array<const char*, 33> expectedParameterIds {{
     "shift", "focus", "bite", "drive", "mix", "subSafe", "subCut", "output",
     "motionEnable", "motionShape", "motionRate", "motionDepth", "motionSync",
     "motionFreeHz", "bypass", "vowel",
     "vowelMorph", "voiceSet", "character", "talk", "envAmount", "envAttack", "envRelease",
-    "yoiAmount", "yoiFrom", "yoiTo", "yoiTime", "yoiShift", "motionTarget"
+    "yoiAmount", "yoiFrom", "yoiTo", "yoiTime", "yoiShift", "motionTarget",
+    "driveModel", "smash", "smashTime", "smashBalance"
 }};
 constexpr size_t legacyParameterCount = 16; // parameters that existed in 0.4.2
 using Values = std::array<float, expectedParameterIds.size()>;
@@ -176,7 +178,7 @@ void checkRandomLocksAndRanges(Checks& checks)
     ShiftyProcessor processor;
     const auto eligible = ShiftyProcessor::randomizableParameterIds();
     checks.require(eligible.size() == static_cast<int>(expectedParameterIds.size()),
-                   "all 29 parameters are listed for randomization");
+                   "all 33 parameters are listed for randomization");
     for (const auto* id : expectedParameterIds) {
         checks.require(eligible.contains(id), juce::String("randomization includes ") + id);
         checks.require(processor.isParameterLocked(id)
@@ -764,10 +766,10 @@ void checkHostBypass(Checks& checks)
                        && dynamic_cast<juce::AudioParameterBool*>(bypass) != nullptr,
                    "the host's bypass is SHIFTY's own BYPASS switch, at index 14");
     const auto& parameters = processor.getParameters();
-    checks.require(parameters.size() == static_cast<int>(expectedParameterIds.size()), "29 parameters, append-only");
+    checks.require(parameters.size() == static_cast<int>(expectedParameterIds.size()), "33 parameters, append-only");
     for (int i = 0; i < juce::jmin(parameters.size(), static_cast<int>(expectedParameterIds.size())); ++i) {
         const auto* ranged = dynamic_cast<const juce::RangedAudioParameter*>(parameters[i]);
-        const int expectedHint = static_cast<size_t>(i) < legacyParameterCount ? 1 : 2;
+        const int expectedHint = static_cast<size_t>(i) < legacyParameterCount ? 1 : i < 29 ? 2 : 3;
         checks.require(ranged != nullptr && ranged->getParameterID() == expectedParameterIds[static_cast<size_t>(i)]
                            && parameters[i]->getVersionHint() == expectedHint,
                        juce::String("parameter order, ID and version hint at index ") + juce::String(i));

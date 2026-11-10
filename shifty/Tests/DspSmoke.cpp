@@ -2,6 +2,7 @@
 #include "../Source/Dsp/Modulators.h"
 #include "../Source/Dsp/MouthEngine.h"
 #include "../Source/Dsp/TalkEngine.h"
+#include "DriveLab.h"
 
 #include <juce_audio_formats/juce_audio_formats.h>
 
@@ -1016,6 +1017,213 @@ bool checkAdaaDrive()
     return ok;
 }
 
+
+/** Aliased power (dB re the fundamental) of a DRIVE model at a drive amount on a sine. */
+double modelAliasLevel (int model, float amount, double frequency, float amplitude)
+{
+    constexpr double sampleRate = 48000.0;
+    constexpr int order = 15;
+    constexpr int size = 1 << order;
+    shifty::DriveStage drive;
+    drive.prepare (sampleRate);
+    std::vector<float> data (static_cast<size_t> (2 * size), 0.0f);
+    for (int i = -4096; i < size; ++i)
+    {
+        const float x = amplitude * static_cast<float> (std::sin (2.0 * pi * frequency * (i + 4096) / sampleRate));
+        const float y = drive.process (x, amount, model);
+        if (i < 0) continue;
+        const double t = 2.0 * pi * i / size;
+        const double w = 0.35875 - 0.48829 * std::cos (t) + 0.14128 * std::cos (2.0 * t) - 0.01168 * std::cos (3.0 * t);
+        data[static_cast<size_t> (i)] = static_cast<float> (y * w);
+    }
+    juce::dsp::FFT fft (order);
+    fft.performFrequencyOnlyForwardTransform (data.data());
+    double aliasPower = 0.0, fundamental = 0.0;
+    for (int bin = 2; bin < size / 2; ++bin)
+    {
+        const double f = bin * sampleRate / size;
+        const double power = static_cast<double> (data[static_cast<size_t> (bin)]) * data[static_cast<size_t> (bin)];
+        const double harmonic = std::round (f / frequency);
+        const bool isHarmonic = harmonic >= 1.0 && std::abs (f - harmonic * frequency) < 6.0 * sampleRate / size;
+        if (! isHarmonic && f > 20.0) aliasPower += power;
+        if (std::abs (f - frequency) < 6.0 * sampleRate / size) fundamental += power;
+    }
+    return 10.0 * std::log10 (aliasPower / fundamental);
+}
+
+/** The 0.6.0 DRIVE models: DRIVE 0 is exact, every model is bounded, keeps its level and is anti-aliased. */
+bool checkDriveModels()
+{
+    bool ok = true;
+    constexpr double sampleRate = 48000.0;
+    const char* names[] = { "SOFT", "TAPE", "TUBE", "FUZZ" };
+    // A bass-like test tone: a 55 Hz saw at -12 dBFS RMS with a 110 Hz FM growl on top.
+    std::vector<float> bass (static_cast<size_t> (sampleRate * 2.0));
+    double sum = 0.0;
+    for (size_t i = 0; i < bass.size(); ++i)
+    {
+        const double t = static_cast<double> (i) / sampleRate;
+        double v = 0.0;
+        for (int h = 1; h * 55.0 < 18000.0; ++h) v += std::sin (2.0 * pi * 55.0 * h * t) / h;
+        const double ph = 2.0 * pi * 110.0 * t;
+        v = 0.6 * v + 0.6 * std::sin (ph + 2.0 * std::sin (ph));
+        bass[i] = static_cast<float> (v);
+        sum += v * v;
+    }
+    const float norm = static_cast<float> (std::pow (10.0, -12.0 / 20.0) / std::sqrt (sum / static_cast<double> (bass.size())));
+    for (auto& v : bass) v *= norm;
+    const double inputRms = rms (bass, 0, static_cast<int> (bass.size()));
+
+    for (int model = 0; model < shifty::driveModelCount; ++model)
+    {
+        // DRIVE 0 passes the input untouched.
+        shifty::DriveStage zero;
+        zero.prepare (sampleRate);
+        bool transparent = true;
+        for (size_t i = 0; i < 4800; ++i)
+            transparent = transparent && juce::exactlyEqual (zero.process (bass[i], 0.0f, model), bass[i]);
+        // Level against DRIVE, and bounds at the extremes.
+        double lowest = 100.0, highest = -100.0;
+        bool bounded = true;
+        for (float amount : { 0.25f, 0.5f, 0.75f, 1.0f })
+        {
+            shifty::DriveStage stage;
+            stage.prepare (sampleRate);
+            std::vector<float> out (bass.size());
+            for (size_t i = 0; i < bass.size(); ++i)
+            {
+                out[i] = stage.process (bass[i], amount, model);
+                bounded = bounded && std::isfinite (out[i]) && std::abs (out[i]) < 4.0f;
+            }
+            const int skip = static_cast<int> (0.2 * sampleRate);
+            const double db = 20.0 * std::log10 (rms (out, skip, static_cast<int> (out.size())) / inputRms);
+            lowest = std::min (lowest, db);
+            highest = std::max (highest, db);
+        }
+        shifty::DriveStage extreme;
+        extreme.prepare (sampleRate);
+        for (int i = 0; i < 48000; ++i)
+        {
+            const float y = extreme.process (static_cast<float> (8.0 * std::sin (2.0 * pi * 3000.0 * i / sampleRate)), 1.0f, model);
+            bounded = bounded && std::isfinite (y) && std::abs (y) < 8.0f;
+        }
+        const double alias41 = modelAliasLevel (model, 1.0f, 4100.0, 0.9f);
+        const double alias73 = modelAliasLevel (model, 1.0f, 7300.0, 0.9f);
+        const double aliasBass = modelAliasLevel (model, 1.0f, 110.0, 0.35f);
+        // SOFT is the 0.5 curve (it gets louder as it drives); the analog models keep their level.
+        const bool levelKept = model == 0 || (lowest > -3.0 && highest < 3.0);
+        const bool clean = model == 0 || (alias41 < -30.0 && aliasBass < -60.0);
+        const bool modelOk = transparent && bounded && levelKept && clean;
+        ok = ok && modelOk;
+        std::cout << "DRIVE " << names[model] << ": DRIVE 0 exact " << (transparent ? "yes" : "no")
+                  << ", level change at 25..100% " << lowest << " .. " << highest << " dB, aliasing at full drive: 4.1 kHz "
+                  << alias41 << " dB, 7.3 kHz " << alias73 << " dB, 110 Hz " << aliasBass << " dB re fundamental"
+                  << (modelOk ? "" : "  FAILED") << '\n';
+    }
+
+    // Switching model crossfades: no step larger than the models' own steps when they run alone.
+    {
+        const auto largestStep = [&] (auto modelAt)
+        {
+            shifty::DriveStage stage;
+            stage.prepare (sampleRate);
+            float previous = 0.0f, largest = 0.0f;
+            for (size_t i = 0; i < bass.size(); ++i)
+            {
+                const float y = stage.process (bass[i], 0.6f, modelAt (i));
+                if (i > 0) largest = std::max (largest, std::abs (y - previous));
+                previous = y;
+            }
+            return largest;
+        };
+        float steady = 0.0f;
+        for (int model = 0; model < shifty::driveModelCount; ++model)
+            steady = std::max (steady, largestStep ([model] (size_t) { return model; }));
+        const float switching = largestStep ([] (size_t i) { return static_cast<int> (i / 12000) % shifty::driveModelCount; });
+        const bool smooth = switching <= 1.1f * steady;
+        ok = ok && smooth;
+        std::cout << "DRIVE model switches (every 250 ms): largest sample step " << switching << ", models alone " << steady
+                  << (smooth ? "" : "  FAILED") << '\n';
+    }
+    return ok;
+}
+
+/** SMASH: untouched at 0, the same at any block size, sub untouched with SUB SAFE, level kept, never over 0 dBFS. */
+bool checkFinisher (double sampleRate)
+{
+    bool ok = true;
+    const int length = static_cast<int> (sampleRate * 4.0);
+    // A gated bass: 40 Hz sub, a 220 Hz saw-ish mid and a little top, notes with gaps.
+    auto make = [&] (double gain)
+    {
+        auto audio = makeAudio (2, length);
+        for (int i = 0; i < length; ++i)
+        {
+            const double t = i / sampleRate;
+            const double gate = std::fmod (t, 0.5) < 0.38 ? envelope (std::fmod (t, 0.5), 0.38) : 0.0;
+            double mid = 0.0;
+            for (int h = 1; h < 30; ++h) mid += std::sin (2.0 * pi * 220.0 * h * t) / h;
+            const double v = gain * (0.5 * std::sin (2.0 * pi * 40.0 * t) + gate * 0.35 * mid);
+            for (int c = 0; c < 2; ++c) audio[static_cast<size_t> (c)][static_cast<size_t> (i)] = static_cast<float> (v);
+        }
+        return audio;
+    };
+    const auto run = [&] (const Audio& input, shifty::Finisher::Params params, int block)
+    {
+        shifty::Finisher finisher;
+        finisher.prepare (sampleRate, 2);
+        finisher.setParameters (params);
+        auto audio = input;
+        for (int start = 0; start < length; start += block)
+        {
+            const int count = std::min (block, length - start);
+            float* pointers[2] { audio[0].data() + start, audio[1].data() + start };
+            juce::AudioBuffer<float> view (pointers, 2, count);
+            finisher.process (view);
+        }
+        return audio;
+    };
+    const auto input = make (1.0);
+    shifty::Finisher::Params off;
+    const auto untouched = run (input, off, 512);
+    bool exact = true;
+    for (int c = 0; c < 2; ++c)
+        for (int i = 0; i < length; ++i)
+            exact = exact && juce::exactlyEqual (untouched[static_cast<size_t> (c)][static_cast<size_t> (i)],
+                                                 input[static_cast<size_t> (c)][static_cast<size_t> (i)]);
+
+    shifty::Finisher::Params full;
+    full.amount = 1.0f;
+    const auto a = run (input, full, 37);
+    const auto b = run (input, full, 1024);
+    const double blockDifference = differenceRms (a[0], b[0], 0, 0, length);
+
+    // The 40 Hz sub with SUB SAFE on: its level is the input's.
+    const int from = static_cast<int> (sampleRate * 1.5);
+    const double subIn = toneAmplitude (input[0], sampleRate, 40.0, from, length);
+    const double subOut = toneAmplitude (a[0], sampleRate, 40.0, from, length);
+    const double subChange = 20.0 * std::log10 (subOut / subIn);
+    // Level (whole signal after the first second) and the ceiling on a hot input (+6 dBFS peaks).
+    const double levelChange = 20.0 * std::log10 (rms (a[0], from, length) / rms (input[0], from, length));
+    const auto hot = run (make (2.6), full, 512);
+    float hottest = 0.0f;
+    for (const auto& channel : hot)
+        for (const float v : channel) hottest = std::max (hottest, std::abs (v));
+    // Silence stays silent.
+    const auto quiet = run (makeAudio (2, length), full, 512);
+    float noise = 0.0f;
+    for (const auto& channel : quiet)
+        for (const float v : channel) noise = std::max (noise, std::abs (v));
+
+    const bool good = exact && blockDifference < 1.0e-7 && std::abs (subChange) < 0.3 && levelChange < 2.0 && levelChange > -2.0
+                    && hottest <= 0.981f && noise == 0.0f;
+    ok = ok && good;
+    std::cout << "SMASH " << sampleRate << " Hz: off is exact " << (exact ? "yes" : "no") << ", block 37 vs 1024 RMS difference "
+              << blockDifference << ", 40 Hz sub with SUB SAFE " << subChange << " dB, level change " << levelChange
+              << " dB, hot input peak " << hottest << ", silence " << noise << (good ? "" : "  FAILED") << '\n';
+    return ok;
+}
+
 bool checkModulators()
 {
     constexpr double sampleRate = 48000.0;
@@ -1058,6 +1266,20 @@ bool checkModulators()
 int main (int argc, char* argv[])
 {
     juce::String renderPath;
+    if (argc > 2 && std::string (argv[1]) == "--calibrate-drive")
+    {
+        juce::StringArray paths;
+        for (int i = 2; i < argc; ++i) paths.add (juce::String::fromUTF8 (argv[i]));
+        return drivelab::calibrateDrive (paths);
+    }
+    if (argc == 6 && std::string (argv[1]) == "--drive")
+        return drivelab::driveFile (juce::String::fromUTF8 (argv[2]), juce::String::fromUTF8 (argv[3]),
+                                    std::atoi (argv[4]), static_cast<float> (std::atof (argv[5])));
+    if (argc == 9 && std::string (argv[1]) == "--smash")
+        return drivelab::smashFile (juce::String::fromUTF8 (argv[2]), juce::String::fromUTF8 (argv[3]),
+                                    static_cast<float> (std::atof (argv[4])), static_cast<float> (std::atof (argv[5])),
+                                    static_cast<float> (std::atof (argv[6])), std::atoi (argv[7]) != 0,
+                                    static_cast<float> (std::atof (argv[8])));
     if (argc > 1)
     {
         if (argc != 3 || std::string (argv[1]) != "--render")
@@ -1089,9 +1311,11 @@ int main (int argc, char* argv[])
         passed = checkCompensationTransients (sampleRate) && passed;
         passed = checkTalk (sampleRate) && passed;
         passed = checkMouth (sampleRate) && passed;
+        passed = checkFinisher (sampleRate) && passed;
     }
     passed = checkClassicLowLatency() && passed;
     passed = checkAdaaDrive() && passed;
+    passed = checkDriveModels() && passed;
     passed = checkModulators() && passed;
 
     if (!renderPath.isEmpty())

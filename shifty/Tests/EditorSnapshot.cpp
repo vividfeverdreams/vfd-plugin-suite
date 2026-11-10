@@ -3,8 +3,10 @@
 #include "FeatureTests.h"
 #include "RedesignTests.h"
 #include "HostKeysTests.h"
+#include "SixZeroTests.h"
 #include "Compatibility.h"
 #include "VersionCompare.h"
+#include "ABRender.h"
 
 #include <juce_graphics/juce_graphics.h>
 #include <algorithm>
@@ -121,7 +123,7 @@ int checkVst3HostLatency(const juce::String& pluginPath) {
     std::cout << "Hosted VST3 latency of a new instance (TALK) before prepare: " << newInstanceLatency << ".\n";
 
     // The exported parameter list stays append-only: the 16 controls of 0.4.2 in order, then the 13
-    // controls added in 0.5.0. Since 0.5.4 the host bypass is SHIFTY's own Bypass (index 14, flagged
+    // controls added in 0.5.0 and the 4 added in 0.6.0. Since 0.5.4 the host bypass is SHIFTY's own Bypass (index 14, flagged
     // kIsBypass), so the wrapper no longer appends a "Bypass" of its own.
     const auto& parameters = hosted->getParameters();
     juce::StringArray names;
@@ -134,7 +136,8 @@ int checkVst3HostLatency(const juce::String& pluginPath) {
         "Sub Safe Frequency", "Output", "Motion Enabled", "Motion Shape", "Motion Rate", "Motion Depth",
         "Motion Sync", "Motion Free Rate", "Bypass", "Vowel Color",
         "Vowel Morph", "Voice", "Character", "Talk", "Envelope Amount", "Envelope Attack", "Envelope Release",
-        "Yoi Amount", "Yoi From", "Yoi To", "Yoi Time", "Yoi Shift", "Motion Target" };
+        "Yoi Amount", "Yoi From", "Yoi To", "Yoi Time", "Yoi Shift", "Motion Target",
+        "Drive Model", "Smash", "Smash Time", "Smash Up/Down" };
     const bool parameterListOk = names == expected && hostBypass != nullptr && parameters.size() > 14
                               && hostBypass == parameters[14] && hostBypass->isAutomatable();
 
@@ -226,7 +229,7 @@ int checkBypassState(const juce::String& oldPath, const juce::String& newPath) {
         const auto& before = old->getParameters();
         const auto& now = fresh->getParameters();
         const bool lists = before.size() == 30 && old->getBypassParameter() == before.getLast()
-                        && now.size() == 29 && fresh->getBypassParameter() != nullptr && fresh->getBypassParameter() == now[14];
+                        && now.size() == 33 && fresh->getBypassParameter() != nullptr && fresh->getBypassParameter() == now[14];
         std::cout << "VST3 parameters: 0.5.3 " << before.size() << ", host bypass the wrapper's own '"
                   << (old->getBypassParameter() != nullptr ? old->getBypassParameter()->getName(32) : juce::String("none"))
                   << "' at the end; this build " << now.size() << ", host bypass SHIFTY's '"
@@ -336,7 +339,7 @@ int checkAudioUnitInProcess(const juce::String& componentPath) {
     bool ok = types[0]->version == bundleVersion;
     if (!ok) std::cout << "Hosted AU is " << types[0]->version << ", the bundle is " << bundleVersion << ".\n";
 
-    // Parameters: the 29 SHIFTY controls (an AU's host bypass is a property, not a parameter). AU
+    // Parameters: the 33 SHIFTY controls (an AU's host bypass is a property, not a parameter). AU
     // parameter IDs are hashes of SHIFTY's string IDs, so hosts list them in hash order.
     juce::StringArray names;
     for (auto* parameter : hosted->getParameters()) names.add(parameter->getName(64));
@@ -344,7 +347,7 @@ int checkAudioUnitInProcess(const juce::String& componentPath) {
     shifty::ShiftyProcessor inProcess;
     bool allPresent = names.size() == inProcess.getParameters().size();
     for (auto* parameter : inProcess.getParameters()) allPresent = allPresent && names.contains(parameter->getName(64));
-    ok = ok && names.size() == 29 && allPresent;
+    ok = ok && names.size() == 33 && allPresent;
 
     // Latency per engine, through saved states as a host restores them.
     juce::MemoryBlock hostedState;
@@ -560,7 +563,7 @@ private:
         { "YOI to", Page::motion, Tab::yoi, {490, 416, 140, 55}, false, nullptr },
         { "Preset folder", Page::presets, Tab::lfo, {640, 204, 290, 38}, false, nullptr },
         { "Save folder", Page::presets, Tab::lfo, {728, 357, 112, 40}, true, nullptr },
-        { "LOCKS", Page::sound, Tab::lfo, {}, false, "Randomization locks" },
+        { "LOCKS", Page::sound, Tab::lfo, {}, false, "Locks" },
     };
 
     juce::Rectangle<int> screenAreaFor(const juce::Rectangle<float>& design) const {
@@ -591,6 +594,12 @@ private:
             before = desktopWindows();
             if (c.button != nullptr) {
                 auto* button = dynamic_cast<juce::Button*>(findComponent(*editor, c.button));
+                if (button == nullptr) {
+                    std::cout << "FAIL " << c.name << ": no button named " << c.button << "\n";
+                    ++failures;
+                    ++index;
+                    return;
+                }
                 anchor = button->getScreenBounds();
                 button->onClick(); // what a click runs, synchronously
             } else {
@@ -693,7 +702,7 @@ bool checkNoFocusRingAfterRandom(const juce::File& directory, const juce::File& 
     return ok;
 }
 
-int renderGallery(const juce::File& directory) {
+int renderGallery(const juce::File& directory, double scaleOverride = 0.0) {
     juce::ScopedJuceInitialiser_GUI gui;
     using shifty::EngineMode;
     using Page = shifty::ShiftyEditor::Page;
@@ -770,6 +779,19 @@ int renderGallery(const juce::File& directory) {
         // The engine locked out of RANDOM shows a padlock beside the selector.
         { "25-sound-engine-locked", EngineMode::mouth, false, Page::sound, Tab::lfo, 1.0,
           [](shifty::ShiftyProcessor& p) { p.setParameterLocked(shifty::ShiftyProcessor::engineLockId, true); }, {} },
+        // 0.6.0: the DRIVE page (models and SMASH detail) and SMASH in the strip.
+        { "26-drive-tube-default", EngineMode::talk, false, Page::drive, Tab::lfo, 1.0, {}, {} },
+        { "27-drive-fuzz-smash-heavy", EngineMode::talk, false, Page::drive, Tab::lfo, 1.0,
+          [set](shifty::ShiftyProcessor& p) { set(p, "driveModel", 3.0f); set(p, "drive", 0.7f); set(p, "smash", 1.0f);
+                                              set(p, "smashTime", 0.3f); set(p, "smashBalance", 0.4f); }, {} },
+        { "28-drive-tape-sub-safe-off", EngineMode::mouth, false, Page::drive, Tab::lfo, 1.0,
+          [set](shifty::ShiftyProcessor& p) { set(p, "driveModel", 1.0f); set(p, "drive", 0.5f); set(p, "subSafe", 0.0f);
+                                              set(p, "smashBalance", -0.5f); }, {} },
+        { "29-drive-soft-smash-off", EngineMode::classic, false, Page::drive, Tab::lfo, 1.0,
+          [set](shifty::ShiftyProcessor& p) { set(p, "driveModel", 0.0f); set(p, "drive", 0.3f); set(p, "smash", 0.0f); }, {} },
+        { "30-drive-original", EngineMode::original, false, Page::drive, Tab::lfo, 1.0, loadOriginal, {} },
+        { "31-drive-model-locked", EngineMode::talk, false, Page::drive, Tab::lfo, 1.0,
+          [](shifty::ShiftyProcessor& p) { p.setParameterLocked("driveModel", true); }, {} },
     };
     bool ok = classicOriginal >= 0;
     for (const auto& shot : shots) {
@@ -779,7 +801,7 @@ int renderGallery(const juce::File& directory) {
         if (shot.setupProcessor) shot.setupProcessor(processor);
         playGatedSaw(processor);
         shifty::ShiftyEditor editor(processor);
-        const auto size = shifty::ShiftyEditor::sizeFor(shot.scale);
+        const auto size = shifty::ShiftyEditor::sizeFor(scaleOverride > 0.0 ? scaleOverride : shot.scale);
         editor.setSize(size.x, size.y);
         editor.showPageForTesting(shot.page, shot.tab);
         if (shot.setupEditor) shot.setupEditor(editor);
@@ -805,8 +827,9 @@ int main(int argc, char* argv[]) {
         const int original = shifty::tests::runFeatureTests();
         const int redesign = shifty::tests::runRedesignTests();
         const int input = shifty::tests::runEditorInputTests();
+        const int sixZero = shifty::tests::runSixZeroTests();
         const int keys = shifty::tests::runHostKeysTests();
-        return original == 0 && redesign == 0 && input == 0 && keys == 0 ? 0 : 1;
+        return original == 0 && redesign == 0 && input == 0 && sixZero == 0 && keys == 0 ? 0 : 1;
     }
 
     // Host keys alone: the shared check (../shared/Tests/HostKeysTest.h) and SHIFTY's own, in an off-screen window.
@@ -828,6 +851,16 @@ int main(int argc, char* argv[]) {
             juce::String::fromUTF8(argv[6]).getDoubleValue(), juce::File(juce::String::fromUTF8(argv[7])));
     }
 
+    if (argc == 2 && juce::String::fromUTF8(argv[1]) == "--cpu") {
+        juce::ScopedJuceInitialiser_GUI gui;
+        return shifty::abrender::runCpu();
+    }
+
+    if (argc == 4 && juce::String::fromUTF8(argv[1]) == "--ab-batch") {
+        juce::ScopedJuceInitialiser_GUI gui;
+        return shifty::abrender::runBatch(juce::String::fromUTF8(argv[2]), juce::File(juce::String::fromUTF8(argv[3])));
+    }
+
     if (argc == 4 && juce::String::fromUTF8(argv[1]) == "--version-compare") {
         juce::ScopedJuceInitialiser_GUI gui;
         return shifty::versioncompare::runVersionCompare(juce::String::fromUTF8(argv[2]), juce::String::fromUTF8(argv[3]));
@@ -843,10 +876,11 @@ int main(int argc, char* argv[]) {
         return checkAudioUnitInProcess(juce::String::fromUTF8(argv[2]));
 #endif
 
-    if (argc == 3 && juce::String::fromUTF8(argv[1]) == "--gallery") {
+    if ((argc == 3 || argc == 4) && juce::String::fromUTF8(argv[1]) == "--gallery") {
         const auto path = juce::String::fromUTF8(argv[2]);
         if (!juce::File::isAbsolutePath(path)) { std::cerr << "Gallery directory must be absolute.\n"; return 2; }
-        return renderGallery(juce::File(path));
+        // An optional size (e.g. 1.5) renders every shot at that size.
+        return renderGallery(juce::File(path), argc == 4 ? juce::String::fromUTF8(argv[3]).getDoubleValue() : 0.0);
     }
 
     if (argc == 2 && juce::String::fromUTF8(argv[1]) == "--menu-placement") {

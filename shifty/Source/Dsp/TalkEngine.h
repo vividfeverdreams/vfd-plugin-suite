@@ -1,6 +1,7 @@
 #pragma once
 
 #include "DspCommon.h"
+#include "Drive.h"
 
 #include <array>
 #include <vector>
@@ -70,7 +71,7 @@ private:
         std::array<Formant, 5> formants;
         LinkwitzRiley4 split;      // original input: low band and its high band (dry all-pass)
         LinkwitzRiley4 drivenSplit; // driven input: high band into the bank
-        AdaaDrive drive;
+        DriveStage drive;
         float inputPower = 0.0f;
         float outputPower = 0.0f;
     };
@@ -95,6 +96,7 @@ private:
     float autoGainCoefficient_ = 0.0f;
     float referencePower_ = 1.0f;
     float lastSubCut_ = -1.0f;
+    int driveModel_ = 0;
     Display display_;
 };
 

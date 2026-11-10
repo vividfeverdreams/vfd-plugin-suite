@@ -101,6 +101,8 @@ void TalkEngine::prepare (double sampleRate, int maxBlockSize, int channels)
     powerCoefficient_ = static_cast<float> (1.0 - std::exp (-1.0 / (0.25 * sampleRate_)));
     autoGainCoefficient_ = static_cast<float> (1.0 - std::exp (-1.0 / (0.10 * sampleRate_)));
     channels_.resize (static_cast<size_t> (std::max (1, channels)));
+    for (auto& channel : channels_)
+        channel.drive.prepare (sampleRate_);
 
     // Reference: HUMAN "AH" at the default FOCUS. Every other vowel, shift and
     // bandwidth is normalised to the same sawtooth output power.
@@ -142,6 +144,7 @@ void TalkEngine::setParameters (const EngineParams& params) noexcept
     target_.subSafe = params.subSafe ? 1.0f : 0.0f;
     target_.character = clampFinite (params.character, 0.0f, 1.0f, 0.0f);
     target_.bypass = params.bypass ? 1.0f : 0.0f;
+    driveModel_ = juce::jlimit (0, driveModelCount - 1, params.driveModel);
     const int set = juce::jlimit (0, 2, params.voiceSet);
     for (int i = 0; i < 3; ++i)
         target_.setWeight[static_cast<size_t> (i)] = i == set ? 1.0f : 0.0f;
@@ -274,7 +277,7 @@ void TalkEngine::processBlock (juce::AudioBuffer<float>& buffer, const Modulatio
             auto& state = channels_[static_cast<size_t> (c)];
             float* data = buffer.getWritePointer (c);
             const float original = std::isfinite (data[n]) ? data[n] : 0.0f;
-            const float driven = state.drive.process (original, current_.drive);
+            const float driven = state.drive.process (original, current_.drive, driveModel_);
             float low, originalHigh, drivenLow, drivenHigh;
             state.split.process (original, low, originalHigh);
             state.drivenSplit.process (driven, drivenLow, drivenHigh);

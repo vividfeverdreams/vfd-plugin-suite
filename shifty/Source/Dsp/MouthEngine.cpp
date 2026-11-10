@@ -46,6 +46,7 @@ void MouthEngine::prepare (double sampleRate, int maxBlockSize, int channels)
         channel.input.assign (static_cast<size_t> (ringSize_), 0.0f);
         channel.original.assign (static_cast<size_t> (ringSize_), 0.0f);
         channel.output.assign (static_cast<size_t> (ringSize_), 0.0f);
+        channel.drive.prepare (sampleRate_);
     }
     weight_.assign (static_cast<size_t> (ringSize_), 0.0f);
     shiftRing_.assign (static_cast<size_t> (ringSize_), 0.0f);
@@ -108,6 +109,7 @@ void MouthEngine::setParameters (const EngineParams& params) noexcept
     target_.mix = clampFinite (params.mix, 0.0f, 1.0f, 1.0f);
     target_.subCut = clampFinite (params.subCutHz, 55.0f, 240.0f, 120.0f);
     target_.subSafe = params.subSafe ? 1.0f : 0.0f;
+    driveModel_ = juce::jlimit (0, driveModelCount - 1, params.driveModel);
     target_.bypass = params.bypass ? 1.0f : 0.0f;
     target_.character = clampFinite (params.character, 0.0f, 1.0f, 0.0f);
     target_.morph = clampFinite (params.vowelMorph, 0.0f, 4.0f, 2.0f);
@@ -301,7 +303,7 @@ void MouthEngine::processBlock (juce::AudioBuffer<float>& buffer, const Modulati
             auto& state = channels_[static_cast<size_t> (c)];
             const float* data = buffer.getReadPointer (c);
             const float original = std::isfinite (data[n]) ? data[n] : 0.0f;
-            float driven = state.drive.process (original, current_.drive);
+            float driven = state.drive.process (original, current_.drive, driveModel_);
             if (mouthAmount > 0.0001f)
             {
                 float resonance = 0.0f;

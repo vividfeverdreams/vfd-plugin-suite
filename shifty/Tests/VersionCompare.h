@@ -34,6 +34,25 @@ inline double effectDb(const std::vector<std::vector<float>>& out, const std::ve
     return db(std::sqrt(change / std::max(reference, 1e-20)));
 }
 
+inline juce::MemoryBlock hostedState(const juce::MemoryBlock& pluginState)
+{
+    juce::XmlElement hosted("VST3PluginState");
+    hosted.createNewChildElement("IComponent")->addTextElement(pluginState.toBase64Encoding());
+    juce::MemoryBlock wrapped;
+    juce::AudioProcessor::copyXmlToBinary(hosted, wrapped);
+    return wrapped;
+}
+
+inline float largestDifference(const std::vector<std::vector<float>>& a, const std::vector<std::vector<float>>& b)
+{
+    float largest = 0.0f;
+    for (size_t c = 0; c < a.size(); ++c)
+        for (size_t i = 0; i < a[c].size(); ++i) largest = std::max(largest, std::abs(a[c][i] - b[c][i]));
+    return largest;
+}
+
+// Every factory preset of this build, as a saved state (all fields, engine included, nothing locked), loaded into
+// both bundles and rendered on the probe signals. Classic presets must come out bit-identical.
 inline int runVersionCompare(const juce::String& oldPath, const juce::String& newPath)
 {
     juce::VST3PluginFormat format;
@@ -44,27 +63,24 @@ inline int runVersionCompare(const juce::String& oldPath, const juce::String& ne
     std::cout << "Old: " << oldTypes[0]->version << "  New: " << newTypes[0]->version << "\n";
 
     const auto signals = probes(1.6);
-    ShiftyProcessor reference;
-    const auto& own = reference.getParameters();
-    int differing = 0, presets = 0;
+    int differing = 0, presets = 0, classic = 0, classicIdentical = 0;
     double worst = -400.0, sumEffectOld = 0.0, sumEffectNew = 0.0;
     for (int index = 0; index < static_cast<int>(factoryBank().size()); ++index) {
+        ShiftyProcessor reference;
+        for (const auto& id : ShiftyProcessor::randomizableParameterIds()) reference.setParameterLocked(id, false);
+        reference.setParameterLocked(ShiftyProcessor::engineLockId, false);
         reference.loadFactoryPreset(index);
+        juce::MemoryBlock state;
+        reference.getStateInformation(state);
+        const auto wrapped = hostedState(state);
         juce::String error;
         auto oldOne = format.createInstanceFromDescription(*oldTypes[0], sampleRate, blockSize, error);
         auto newOne = format.createInstanceFromDescription(*newTypes[0], sampleRate, blockSize, error);
         if (!oldOne || !newOne) { std::cerr << "Could not open: " << error << "\n"; return 1; }
-        for (auto* instance : { oldOne.get(), newOne.get() }) {
-            instance->prepareToPlay(sampleRate, blockSize);
-            for (int p = 0; p < own.size() && p < instance->getParameters().size(); ++p)
-                instance->getParameters()[p]->setValueNotifyingHost(own[p]->getValue());
-            juce::AudioBuffer<float> silence(2, blockSize);
-            silence.clear();
-            juce::MidiBuffer midi;
-            instance->processBlock(silence, midi);
-            instance->releaseResources();
-        }
+        for (auto* instance : { oldOne.get(), newOne.get() })
+            instance->setStateInformation(wrapped.getData(), static_cast<int>(wrapped.getSize()));
         double presetWorst = -400.0, effectOld = 0.0, effectNew = 0.0;
+        float largest = 0.0f;
         for (const auto& probe : signals) {
             PlayingHost hostA, hostB;
             const auto a = render(*oldOne, probe, hostA);
@@ -76,31 +92,36 @@ inline int runVersionCompare(const juce::String& oldPath, const juce::String& ne
                     diff += (b[c][i] - a[c][i]) * (b[c][i] - a[c][i]);
                     level += a[c][i] * a[c][i];
                 }
+            largest = std::max(largest, largestDifference(a, b));
             presetWorst = std::max(presetWorst, db(std::sqrt(diff / std::max(level, 1e-20))));
             effectOld += effectDb(a, probe.audio, latencyA) / static_cast<double>(signals.size());
             effectNew += effectDb(b, probe.audio, latencyB) / static_cast<double>(signals.size());
             if (latencyA != latencyB)
                 std::cout << "  latency differs on " << factoryBank()[(size_t) index].name << ": " << latencyA << " vs " << latencyB << "\n";
         }
+        const bool isClassic = factoryBank()[(size_t) index].folder == "Classic";
+        classic += isClassic ? 1 : 0;
+        classicIdentical += isClassic && largest == 0.0f ? 1 : 0;
         ++presets;
         sumEffectOld += effectOld;
         sumEffectNew += effectNew;
         worst = std::max(worst, presetWorst);
-        const bool differs = presetWorst > -60.0;
+        const bool differs = largest != 0.0f;
         differing += differs ? 1 : 0;
-        std::cout << (differs ? "DIFF " : "same ") << std::fixed << std::setprecision(1) << std::setw(7) << presetWorst
-                  << " dB  effect old " << std::setw(6) << effectOld << " dB  new " << std::setw(6) << effectNew << " dB  "
-                  << factoryBank()[(size_t) index].name << "\n";
+        std::cout << (differs ? "DIFF " : "SAME ") << std::fixed << std::setprecision(1) << std::setw(7) << presetWorst
+                  << " dB  largest " << std::scientific << std::setprecision(2) << largest << std::fixed << std::setprecision(1)
+                  << "  effect old " << std::setw(6) << effectOld << " dB  new " << std::setw(6) << effectNew << " dB  "
+                  << factoryBank()[(size_t) index].folder << "/" << factoryBank()[(size_t) index].name << "\n";
     }
-    std::cout << "\n" << presets << " presets; " << differing << " differ by more than -60 dB; worst " << worst
-              << " dB; mean effect old " << sumEffectOld / presets << " dB, new " << sumEffectNew / presets << " dB\n";
-    return 0;
+    std::cout << "\n" << presets << " presets; " << differing << " differ; Classic bit-identical " << classicIdentical << "/" << classic
+              << "; mean effect old " << sumEffectOld / presets << " dB, new " << sumEffectNew / presets << " dB\n";
+    return classicIdentical == classic ? 0 : 1;
 }
 
 // --render-states old.vst3 new.vst3 <folder of saved SHIFTY states> in.f32 <sample rate> <out folder>
 // Loads each state (the plug-in's own state, as a DAW stores it) into both bundles, plays in.f32 (raw
 // interleaved stereo float32) through each with the transport running at 140 BPM, writes
-// <name>-0.5.3.f32 / <name>-0.5.4.f32 and reports the difference between the two.
+// <name>-old.f32 / <name>-new.f32 and reports the difference between the two (and whether it is bit-identical).
 inline int runRenderStates(const juce::String& oldPath, const juce::String& newPath, const juce::File& states,
                            const juce::File& input, double rate, const juce::File& outFolder)
 {
@@ -149,25 +170,32 @@ inline int runRenderStates(const juce::String& oldPath, const juce::String& newP
         instance->setPlayHead(nullptr);
         return out;
     };
+    int identical = 0, total = 0;
     for (const auto& file : states.findChildFiles(juce::File::findFiles, false, "*.state")) {
         juce::MemoryBlock state;
         file.loadFileAsData(state);
         const auto a = renderWith(*oldTypes[0], state);
         const auto b = renderWith(*newTypes[0], state);
-        double diff = 0.0, level = 0.0, change = 0.0;
+        double diff = 0.0, level = 0.0;
+        float largest = 0.0f;
         for (int c = 0; c < 2; ++c)
             for (int i = 0; i < length; ++i) {
                 const double d = b.getSample(c, i) - a.getSample(c, i);
                 diff += d * d;
+                largest = std::max(largest, static_cast<float>(std::abs(d)));
                 level += static_cast<double>(a.getSample(c, i)) * a.getSample(c, i);
             }
         const auto name = file.getFileNameWithoutExtension();
-        write(a, outFolder.getChildFile(name + "-0.5.3.f32"));
-        write(b, outFolder.getChildFile(name + "-0.5.4.f32"));
-        std::cout << std::fixed << std::setprecision(1) << std::setw(8) << db(std::sqrt(diff / std::max(level, 1e-20)))
-                  << " dB difference  " << name << "\n";
+        write(a, outFolder.getChildFile(name + "-old.f32"));
+        write(b, outFolder.getChildFile(name + "-new.f32"));
+        identical += largest == 0.0f ? 1 : 0;
+        ++total;
+        std::cout << (largest == 0.0f ? "BIT-IDENTICAL " : "DIFFERENT     ") << std::fixed << std::setprecision(1) << std::setw(8)
+                  << db(std::sqrt(diff / std::max(level, 1e-20))) << " dB difference, level " << db(std::sqrt(level / (2.0 * length)))
+                  << " dBFS RMS  " << name << "\n";
     }
-    return 0;
+    std::cout << identical << "/" << total << " saved states render bit-identical\n";
+    return identical == total ? 0 : 1;
 }
 
 } // namespace shifty::versioncompare

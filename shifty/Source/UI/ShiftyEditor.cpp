@@ -1,5 +1,6 @@
 #include "ShiftyEditor.h"
 #include "BinaryData.h"
+#include "../Dsp/Drive.h"
 #include <algorithm>
 #include <cmath>
 #include <cstring>
@@ -36,7 +37,10 @@ constexpr float outputSocketRadius = 39.0f, outputArcRadius = 33.0f, outputCapRa
 const juce::Rectangle<float> outputNameBounds {226, 1262, 144, 26};
 const juce::Rectangle<float> outputValueBounds {226, 1288, 144, 34};
 // Screen (dark LCD) layout, design coordinates. The screen interior spans x 141..981, y 171..507.
-const juce::Rectangle<float> pageTabs[] { {592, 116, 82, 42}, {674, 116, 82, 42}, {756, 116, 82, 42}, {838, 116, 80, 42} };
+// Five tabs in the moulded pill (x 589..915), each as wide as its name needs.
+constexpr int pageCount = 5;
+const juce::Rectangle<float> pageTabs[] { {591, 116, 62, 42}, {653, 116, 60, 42}, {713, 116, 60, 42},
+                                          {773, 116, 68, 42}, {841, 116, 75, 42} };
 const juce::Rectangle<float> engineSelectorBounds {540, 202, 400, 40};
 const juce::Rectangle<float> engineLockBounds {505, 200, 30, 44}; // centred between the star and the selector
 const juce::Rectangle<float> motionTabBounds {180, 202, 330, 40};
@@ -55,6 +59,20 @@ const juce::Rectangle<float> lfoCells[] { {170, 416, 160, 55}, {330, 416, 190, 5
 const juce::Rectangle<float> yoiCells[] { {170, 416, 180, 55}, {350, 416, 140, 55}, {490, 416, 140, 55},
                                           {630, 416, 170, 55}, {800, 416, 151, 55} };
 const juce::Rectangle<float> envCells[] { {170, 416, 270, 55}, {440, 416, 260, 55}, {700, 416, 251, 55} };
+// DRIVE page: the model selector and its curve on the left; SMASH's detail on the right.
+const juce::Rectangle<float> driveModelBounds {290, 256, 310, 40};
+const juce::Rectangle<float> driveCurveBounds {196, 316, 140, 140};
+const juce::Point<float> smashTimeCentre {722.0f, 414.0f}, smashBalanceCentre {872.0f, 414.0f};
+constexpr float smashDetailRadius = 28.0f;
+// The strip: SMASH (the finisher's amount) at its right end, after the meters, on every page.
+const juce::Point<float> stripSmashCentre {934.0f, 1057.0f};
+constexpr float stripSmashRadius = 31.0f;
+const juce::Rectangle<float> stripSmashLabelBounds {814, 1015, 86, 32};
+const juce::Rectangle<float> stripSmashValueBounds {808, 1050, 92, 36};
+constexpr int meterSegments = 15;
+constexpr float meterStart = 512.0f;
+const char* const driveModelNames[] { "SOFT", "TAPE", "TUBE", "FUZZ" };
+const char* const driveModelMenuNames[] { "Soft (the 0.5 drive)", "Tape", "Tube", "Fuzz" };
 
 /** The design-space control each screen dropdown hangs from. */
 juce::Rectangle<float> menuAnchor(const juce::String& menu) {
@@ -234,8 +252,11 @@ juce::String vowelLabel(float position) {
 
 bool isPercentage(const juce::String& id) {
     return id == "focus" || id == "bite" || id == "drive" || id == "mix" || id == "character"
-        || id == "talk" || id == "yoiAmount" || id == "envAmount";
+        || id == "talk" || id == "yoiAmount" || id == "envAmount" || id == "smash";
 }
+
+/** SMASH TIME: 0..1 is 0.25x .. 4x the standard attack and release. */
+float smashTimeFactor(float value) { return shifty::Finisher::timeFactor(value); }
 
 bool isTime(const juce::String& id) { return id == "envAttack" || id == "envRelease" || id == "yoiTime"; }
 bool isHertz(const juce::String& id) { return id == "subCut" || id == "motionFreeHz"; }
@@ -249,6 +270,8 @@ juce::String typingHint(const juce::String& id) {
     if (isHertz(id)) return " in Hz";
     if (isSemitones(id)) return " in semitones";
     if (id == "output") return " in dB";
+    if (id == "smashTime") return " as a speed, 0.25x to 4x (2x is twice as slow)";
+    if (id == "smashBalance") return ": UP, DOWN or BOTH, or a percentage (negative favours DOWN)";
     return {};
 }
 
@@ -271,6 +294,16 @@ juce::String formatValue(const juce::String& id, float value) {
     if (id == "envAttack") return (value < 10.0f ? juce::String(value, 1) : juce::String(juce::roundToInt(value))) + " ms";
     if (id == "envRelease" || id == "yoiTime") return juce::String(juce::roundToInt(value)) + " ms";
     if (id == "yoiShift") return (value > 0.0f ? "+" : "") + juce::String(value, 1) + " st";
+    if (id == "smash" && value < 0.0005f) return "OFF";
+    if (id == "smashTime") {
+        const float factor = smashTimeFactor(value);
+        return juce::String(factor, factor < 0.995f ? 2 : 1) + "x";
+    }
+    if (id == "smashBalance") {
+        const int percent = juce::roundToInt(std::abs(value) * 100.0f);
+        if (percent == 0) return "BOTH";
+        return (value < 0.0f ? "DOWN +" : "UP +") + juce::String(percent);
+    }
     return juce::String(juce::roundToInt(value * 100.0f)) + "%";
 }
 
@@ -366,7 +399,8 @@ juce::String ShiftyEditor::displayNameFor(const juce::String& id) {
         {"subCut", "Sub Safe frequency"}, {"output", "Output"}, {"motionDepth", "LFO depth"},
         {"motionFreeHz", "LFO rate"}, {"envAmount", "Envelope amount"}, {"envAttack", "Envelope attack"},
         {"envRelease", "Envelope release"}, {"yoiAmount", "YOI amount"}, {"yoiTime", "YOI sweep time"},
-        {"yoiShift", "YOI shift"}, {"vowelMorph", "Vowel"}, {"character", "Character"}, {"talk", "Talk"} };
+        {"yoiShift", "YOI shift"}, {"vowelMorph", "Vowel"}, {"character", "Character"}, {"talk", "Talk"},
+        {"smash", "Smash"}, {"smashTime", "Smash time"}, {"smashBalance", "Smash up/down"}, {"driveModel", "Drive model"} };
     for (const auto& [key, name] : names)
         if (id == key) return name;
     return id;
@@ -376,6 +410,20 @@ std::optional<double> ShiftyEditor::parseTypedValue(const juce::String& id, cons
     // Spaces and case don't matter ("1 s" = "1S"), and a decimal comma reads as a point.
     const auto text = typed.toLowerCase().removeCharacters(" \t").replaceCharacter(',', '.');
     if (text.isEmpty()) return std::nullopt;
+    if (id == "smashBalance") {
+        if (text == "both" || text == "even") return 0.0;
+        if (text == "up") return 1.0;
+        if (text == "down" || text == "dn") return -1.0;
+        // "UP +40" / "DOWN +40", as the value box shows them.
+        if (text.startsWith("up")) return juce::jlimit(0.0, 1.0, text.substring(2).trimCharactersAtStart("+").getDoubleValue() / 100.0);
+        if (text.startsWith("down")) return -juce::jlimit(0.0, 1.0, text.substring(4).trimCharactersAtStart("+").getDoubleValue() / 100.0);
+    }
+    if (id == "smashTime") {
+        const auto number = text.trimCharactersAtStart("x").trimCharactersAtEnd("x");
+        if (number.isEmpty() || (!juce::CharacterFunctions::isDigit(number[0]) && number[0] != '.')) return std::nullopt;
+        const double factor = juce::jlimit(0.25, 4.0, number.getDoubleValue());
+        return juce::jlimit(0.0, 1.0, 0.5 * (std::log(factor) / std::log(4.0) + 1.0));
+    }
     if (id == "vowelMorph") {
         const auto vowelIndex = [](const juce::String& name) {
             for (int v = 0; v <= 4; ++v)
@@ -419,6 +467,7 @@ std::optional<double> ShiftyEditor::parseTypedValue(const juce::String& id, cons
     }
     if (isSemitones(id)) return when(unitIs({"", "st", "semi", "semis", "semitone", "semitones"}));
     if (id == "output") return when(unitIs({"", "db"}));
+    if (id == "smashBalance") return when(unitIs({"", "%"}), 0.01);
     return when(unit.isEmpty());
 }
 
@@ -461,6 +510,14 @@ ShiftyEditor::ShiftyEditor(ShiftyProcessor& p)
     addControl("character", {682, 280, 76, 76}, {670, 384, 100, 26}, true, false, false);
     addControl("talk", {832, 280, 76, 76}, {820, 384, 100, 26}, true, false, false);
     control("vowelMorph")->label->setJustificationType(juce::Justification::centredLeft);
+    // SMASH: its amount in the strip (every page), its detail on the DRIVE page.
+    addControl("smash", juce::Rectangle<float>(2.0f * stripSmashRadius + 12.0f, 2.0f * stripSmashRadius + 12.0f).withCentre(stripSmashCentre),
+               stripSmashValueBounds, true, false, false);
+    control("smash")->label->setJustificationType(juce::Justification::centredLeft);
+    addControl("smashTime", juce::Rectangle<float>(76, 76).withCentre(smashTimeCentre),
+               {smashTimeCentre.x - 62.0f, 469, 124, 26}, true, false, false);
+    addControl("smashBalance", juce::Rectangle<float>(76, 76).withCentre(smashBalanceCentre),
+               {smashBalanceCentre.x - 62.0f, 469, 124, 26}, true, false, false);
 
     addSwitch("subSafe", {181, 1045, 103, 55});
     addSwitch("motionEnable", motionSwitchBounds);
@@ -621,7 +678,10 @@ void ShiftyEditor::addControl(const char* id, juce::Rectangle<float> hit,
     if (c.id == "shift") description = "Shift: move the formants lower (bigger, darker) or higher (smaller, brighter) while keeping the notes";
     else if (c.id == "focus") description = "Focus: TALK formant width, MOUTH grain length, CLASSIC envelope detail";
     else if (c.id == "bite") description = "Bite: TALK resonance and drive into the vowels, MOUTH pitch-synchronous buzz, CLASSIC contrast";
-    else if (c.id == "drive") description = "Drive: anti-aliased saturation before the formant engine";
+    else if (c.id == "drive") description = "Drive: analog-modelled saturation before the formant engine. Choose SOFT, TAPE, TUBE or FUZZ on the DRIVE page (or right-click here); the level stays about the same as you turn it up";
+    else if (c.id == "smash") description = "Smash: the finisher at the end of the chain. Three-band upward and downward compression, like the classic OTT setting: loud parts come down, quiet parts, tails and fizz come up. The level stays close to the input, and with SUB SAFE on the sub is left alone. TIME and UP/DOWN are on the DRIVE page";
+    else if (c.id == "smashTime") description = "Smash time: how fast SMASH grabs and lets go, from 0.25x (fast, punchy) to 4x (slow, smooth)";
+    else if (c.id == "smashBalance") description = "Smash up/down: turn left for only the downward part (loud parts down), right for only the upward part (quiet parts up), middle for both";
     else if (c.id == "mix") description = "Mix: blend in the formant effect; 100% gives the clearest change";
     else if (c.id == "output") description = "Output: SHIFTY's final level, from -24 to +6 dB";
     else if (c.id == "vowelMorph") description = "Vowel: morph OO, OH, AH, EH, EE (TALK) or the mouth shape (MOUTH)";
@@ -774,6 +834,7 @@ void ShiftyEditor::updatePage() {
         else if (c.id.startsWith("yoi")) visible = onMotion && motionTab == MotionTab::yoi && !original;
         else if (c.id == "vowelMorph") visible = onVoice && (engine == EngineMode::talk || engine == EngineMode::mouth);
         else if (c.id == "character" || c.id == "talk") visible = onVoice && !original;
+        else if (c.id == "smashTime" || c.id == "smashBalance") visible = page == Page::drive;
         c.slider->setVisible(visible);
         c.label->setVisible(visible);
     }
@@ -855,7 +916,8 @@ void ShiftyEditor::resized() {
         c.label->setBounds(scaled(c.value));
         float fontSize = c.id == "shift" ? 46.0f : c.id == "output" ? 25.0f : 31.0f;
         if (c.id.startsWith("motion") || c.id.startsWith("env") || c.id.startsWith("yoi")) fontSize = 22.0f;
-        if (c.id == "vowelMorph" || c.id == "character" || c.id == "talk") fontSize = 20.0f;
+        if (c.id == "vowelMorph" || c.id == "character" || c.id == "talk" || c.id == "smashTime" || c.id == "smashBalance") fontSize = 20.0f;
+        if (c.id == "smash") fontSize = 23.0f;
         c.label->setFont(juce::Font(juce::FontOptions(normalTypeface)
                                          .withHeight(fontSize * scale)));
         if (c.lockButton) c.lockButton->setBounds(scaled(knobLockBounds(c.id)));
@@ -960,6 +1022,7 @@ void ShiftyEditor::paint(juce::Graphics& g) {
     drawHeader(g);
     if (page == Page::sound) drawSoundScreen(g);
     else if (page == Page::voice) drawVoiceScreen(g);
+    else if (page == Page::drive) drawDriveScreen(g);
     else if (page == Page::motion) drawMotionScreen(g);
     else drawPresetsScreen(g);
     drawControlPanel(g);
@@ -967,14 +1030,14 @@ void ShiftyEditor::paint(juce::Graphics& g) {
 }
 
 void ShiftyEditor::drawHeader(juce::Graphics& g) {
-    const char* labels[] = {"SOUND", "VOICE", "MOTION", "PRESETS"};
-    for (int i = 0; i < 4; ++i) {
+    const char* labels[] = {"SOUND", "VOICE", "DRIVE", "MOTION", "PRESETS"};
+    for (int i = 0; i < pageCount; ++i) {
         const bool selected = static_cast<int>(page) == i;
         if (selected) {
             g.setColour(lime.withAlpha(0.86f));
             g.fillRoundedRectangle(pageTabs[i].reduced(2), 9.0f);
         }
-        drawText(g, labels[i], pageTabs[i], 16.5f, selected ? ink : screenText);
+        drawText(g, labels[i], pageTabs[i], 15.0f, selected ? ink : screenText);
     }
     if (glowLevel > 0.004f) {
         // The power LED blooms with the same light as the shell.
@@ -1118,6 +1181,8 @@ void ShiftyEditor::drawSoundScreen(juce::Graphics& g) {
         status = juce::String(engine == EngineMode::original ? "ORIGINAL 0.4" : "CLASSIC") + "  ENVELOPE  "
                + juce::String(live.shift, 1) + " ST";
     }
+    if (engine != EngineMode::original)
+        status << "  " << driveModelNames[juce::jlimit(0, shifty::driveModelCount - 1, juce::roundToInt(valueOf("driveModel")))];
     drawSpectrum(inputSpectrum, muted, 2.0f);
     drawSpectrum(outputSpectrum, neon, 2.6f);
     g.setColour(screenText.withAlpha(0.85f));
@@ -1146,8 +1211,11 @@ void ShiftyEditor::drawScreenKnob(juce::Graphics& g, const char* id, const char*
     g.setColour(juce::Colour(0xff1d5a3c));
     g.strokePath(track, juce::PathStrokeType(6.0f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
     const float angle = startAngle + fraction * (endAngle - startAngle);
-    if (fraction > 0.001f) {
-        arc.addCentredArc(centre.x, centre.y, radius, radius, 0.0f, startAngle, angle, true);
+    // A two-sided control (UP / DOWN) lights from its centre.
+    const bool bipolar = lo < 0.0f && hi > 0.0f;
+    const float from = bipolar ? 0.5f * (startAngle + endAngle) : startAngle;
+    if (std::abs(angle - from) > 0.01f) {
+        arc.addCentredArc(centre.x, centre.y, radius, radius, 0.0f, juce::jmin(from, angle), juce::jmax(from, angle), true);
         g.setColour(lime);
         g.strokePath(arc, juce::PathStrokeType(6.0f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
     }
@@ -1257,6 +1325,142 @@ void ShiftyEditor::drawVoiceScreen(juce::Graphics& g) {
     drawScreenKnob(g, "talk", "TALK", {870.0f, 318.0f}, 38.0f);
     g.setColour(screenLine.withAlpha(0.7f));
     g.drawVerticalLine(625, 262.0f, 470.0f);
+}
+
+void ShiftyEditor::drawDriveScreen(juce::Graphics& g) {
+    const auto engine = plugin.engineMode();
+    const bool original = engine == EngineMode::original;
+    const int model = juce::jlimit(0, shifty::driveModelCount - 1, juce::roundToInt(valueOf("driveModel")));
+    g.setFont(juce::Font(juce::FontOptions(displayTypeface).withHeight(32.0f)));
+    g.setColour(screenText);
+    g.drawFittedText("DRIVE", juce::Rectangle<int>(184, 202, 200, 42), juce::Justification::centredLeft, 1);
+    const float smash = valueOf("smash");
+    drawText(g, juce::String(original ? "ORIGINAL DRIVE" : driveModelNames[model]) + "  " + formatValue("drive", valueOf("drive"))
+                    + "    SMASH " + formatValue("smash", smash),
+             {500, 204, 440, 38}, 19.0f, lime, juce::Justification::centredRight);
+
+    // Left: the model and its curve.
+    drawText(g, "MODEL", {184, driveModelBounds.getY(), 104, driveModelBounds.getHeight()}, 21.0f, screenText,
+             juce::Justification::centredLeft);
+    // The original 0.4 sound keeps its own drive, so the selector is greyed out there.
+    if (original) g.beginTransparencyLayer(0.45f);
+    drawSegments(g, driveModelBounds, {"SOFT", "TAPE", "TUBE", "FUZZ"}, original ? -1 : model, 17.0f);
+    if (original) g.endTransparencyLayer();
+    if (plugin.isParameterLocked("driveModel"))
+        drawPadlock(g, {driveModelBounds.getRight() - 2.0f, driveModelBounds.getY() - 2.0f, 26.0f, 44.0f}, true, screenText,
+                    juce::Colour(0xff073828));
+
+    // The static curve at the current drive (CHARACTER adds drive, as in the engine).
+    const auto box = driveCurveBounds;
+    g.setColour(juce::Colour(0xff123f31));
+    g.fillRoundedRectangle(box, 8.0f);
+    g.setColour(juce::Colour(0xff236944).withAlpha(0.6f));
+    for (int i = 1; i < 4; ++i) {
+        g.drawVerticalLine(juce::roundToInt(box.getX() + box.getWidth() * i / 4.0f), box.getY() + 4.0f, box.getBottom() - 4.0f);
+        g.drawHorizontalLine(juce::roundToInt(box.getY() + box.getHeight() * i / 4.0f), box.getX() + 4.0f, box.getRight() - 4.0f);
+    }
+    g.setColour(screenLine);
+    g.drawRoundedRectangle(box, 8.0f, 1.4f);
+    const float drive = valueOf("drive");
+    const float effective = original ? drive : drive + valueOf("character") * 0.35f * (1.0f - drive);
+    juce::Path curve, line;
+    std::array<float, 97> ys {};
+    float peak = 1.0e-6f;
+    for (size_t i = 0; i < ys.size(); ++i) {
+        const float x = -1.0f + 2.0f * static_cast<float>(i) / static_cast<float>(ys.size() - 1);
+        ys[i] = shifty::DriveStage::transferCurve(original ? 0 : model, x, effective);
+        peak = juce::jmax(peak, std::abs(ys[i]));
+    }
+    // The shape at full height: the level is kept the same by the engine's compensation.
+    const float scale = 1.0f / peak;
+    for (size_t i = 0; i < ys.size(); ++i) {
+        const float x = box.getX() + 6.0f + (box.getWidth() - 12.0f) * static_cast<float>(i) / static_cast<float>(ys.size() - 1);
+        const float y = box.getCentreY() - (box.getHeight() * 0.5f - 6.0f) * juce::jlimit(-1.0f, 1.0f, ys[i] * scale);
+        if (i == 0) curve.startNewSubPath(x, y);
+        else curve.lineTo(x, y);
+    }
+    line.startNewSubPath(box.getX() + 6.0f, box.getBottom() - 6.0f);
+    line.lineTo(box.getRight() - 6.0f, box.getY() + 6.0f);
+    juce::Path dashed;
+    const float dashes[] = {5.0f, 5.0f};
+    juce::PathStrokeType(1.4f).createDashedStroke(dashed, line, dashes, 2);
+    g.setColour(muted.withAlpha(0.7f));
+    g.fillPath(dashed);
+    g.setColour(effective > 0.001f ? neon : muted);
+    g.strokePath(curve, juce::PathStrokeType(3.0f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+    drawText(g, "IN", {box.getRight() - 34.0f, box.getBottom() - 24.0f, 30.0f, 20.0f}, 14.0f, muted);
+    drawText(g, "OUT", {box.getX() + 4.0f, box.getY() + 3.0f, 36.0f, 20.0f}, 14.0f, muted);
+
+    static const char* descriptions[] = {
+        "The 0.5 drive: a gentle, even curve that gets louder as you turn it up.",
+        "Tape: highs saturate first and come back compressed. Smooth, glued, odd harmonics.",
+        "Tube: a triode stage. Clean lows, even harmonics in the mids; loud notes bloom and sag.",
+        "Fuzz: a mid push into diode and transistor clipping. The note squares up: growl and spit." };
+    g.setFont(juce::Font(juce::FontOptions(normalTypeface).withHeight(17.0f)));
+    g.setColour(muted);
+    g.drawFittedText(original ? juce::String("This original 0.4 sound keeps its own drive. VOICE > USE LATEST SOUND to use the models; SMASH works on every sound.")
+                              : juce::String(descriptions[model]) + " DRIVE sets how hard.",
+                     juce::Rectangle<int>(352, 314, 252, 146), juce::Justification::centredLeft, 6);
+
+    g.setColour(screenLine.withAlpha(0.7f));
+    g.drawVerticalLine(625, 262.0f, 470.0f);
+
+    // Right: SMASH, what each band is doing now.
+    const bool on = smash > 0.0005f;
+    drawText(g, "SMASH", {650, 254, 120, 30}, 21.0f, screenText, juce::Justification::centredLeft);
+    drawText(g, on ? "AMOUNT " + juce::String(juce::roundToInt(smash * 100.0f)) + "%" : juce::String("OFF: USE THE STRIP KNOB"),
+             {744, 254, 192, 30}, 15.0f, on ? lime : muted, juce::Justification::centredRight);
+    static const char* bandNames[] = {"LOW", "MID", "HIGH"};
+    const bool lowSafe = isOn("subSafe");
+    const float engaged = juce::jlimit(0.0f, 1.0f, live.smashEngaged);
+    for (size_t b = 0; b < 3; ++b) {
+        const float y = 290.0f + static_cast<float>(b) * 25.0f;
+        const juce::Rectangle<float> track {706.0f, y, 226.0f, 17.0f};
+        drawText(g, bandNames[b], {650.0f, y - 4.0f, 54.0f, 25.0f}, 16.0f, screenText, juce::Justification::centredLeft);
+        g.setColour(juce::Colour(0xff123f31));
+        g.fillRoundedRectangle(track, 8.5f);
+        g.setColour(screenLine);
+        g.drawRoundedRectangle(track, 8.5f, 1.2f);
+        if (b == 0 && lowSafe) {
+            drawText(g, "UNTOUCHED (SUB SAFE)", track, 13.0f, muted);
+            continue;
+        }
+        g.setColour(muted.withAlpha(0.8f));
+        g.drawVerticalLine(juce::roundToInt(track.getCentreX()), track.getY() + 2.0f, track.getBottom() - 2.0f);
+        const float gainDb = juce::jlimit(-12.0f, 12.0f, live.smashGain[b]) * engaged;
+        const float half = track.getWidth() * 0.5f - 3.0f;
+        const float width = half * std::abs(gainDb) / 12.0f;
+        if (width > 0.5f) {
+            const auto fill = gainDb > 0.0f ? juce::Rectangle<float>(track.getCentreX(), track.getY() + 3.0f, width, track.getHeight() - 6.0f)
+                                            : juce::Rectangle<float>(track.getCentreX() - width, track.getY() + 3.0f, width, track.getHeight() - 6.0f);
+            g.setColour(gainDb > 0.0f ? lime : juce::Colour(0xffff8f67));
+            g.fillRoundedRectangle(fill, 6.0f);
+        }
+    }
+    drawText(g, "DOWN", {708, 362, 80, 16}, 13.0f, juce::Colour(0xffff8f67), juce::Justification::centredLeft);
+    drawText(g, "0", {809, 362, 20, 16}, 13.0f, muted);
+    drawText(g, "UP", {850, 362, 80, 16}, 13.0f, lime, juce::Justification::centredRight);
+    drawScreenKnob(g, "smashTime", "TIME", smashTimeCentre, smashDetailRadius);
+    drawScreenKnob(g, "smashBalance", "UP / DOWN", smashBalanceCentre, smashDetailRadius);
+}
+
+void ShiftyEditor::drawStripSmash(juce::Graphics& g) {
+    // A thin moulded divider between the meters and SMASH.
+    g.setColour(screenLine.withAlpha(0.55f));
+    g.drawVerticalLine(800, 1020.0f, 1094.0f);
+    const float smash = valueOf("smash");
+    drawText(g, "SMASH", stripSmashLabelBounds, 23.0f, screenText, juce::Justification::centredLeft);
+    drawScreenKnob(g, "smash", "", stripSmashCentre, stripSmashRadius);
+    // The knob's hub lights with what SMASH is doing: the deepest band move right now.
+    if (smash > 0.0005f) {
+        float activity = 0.0f;
+        for (size_t b = 1; b < 3; ++b) activity = juce::jmax(activity, std::abs(live.smashGain[b]));
+        const float glow = juce::jlimit(0.0f, 1.0f, activity / 10.0f) * juce::jlimit(0.0f, 1.0f, live.smashEngaged);
+        if (glow > 0.01f) {
+            g.setColour(lime.withAlpha(0.18f + 0.5f * glow));
+            g.fillEllipse(juce::Rectangle<float>(9.0f + 8.0f * glow, 9.0f + 8.0f * glow).withCentre(stripSmashCentre));
+        }
+    }
 }
 
 void ShiftyEditor::drawMotionScreen(juce::Graphics& g) {
@@ -1668,11 +1872,11 @@ void ShiftyEditor::drawUtilityPanel(juce::Graphics& g) {
         g.fillEllipse(188.0f, 1052.0f, 43.0f, 43.0f);
     }
 
-    // OUTPUT is the knob beside INFO, so the meters take the rest of the strip.
-    constexpr int segments = 24;
+    // OUTPUT is the knob beside INFO; the meters share the strip with SMASH at its right end.
+    constexpr int segments = meterSegments;
     for (int channel = 0; channel < 2; ++channel) {
         const float y = channel == 0 ? 1025.0f : 1065.0f;
-        drawText(g, channel == 0 ? "L" : "R", {478.0f, y - 3.0f, 45.0f, 31.0f},
+        drawText(g, channel == 0 ? "L" : "R", {meterStart - 50.0f, y - 3.0f, 45.0f, 31.0f},
                  25.0f, screenText);
         const float peak = meterPeaks[static_cast<size_t>(channel)];
         for (int segment = 0; segment < segments; ++segment) {
@@ -1681,10 +1885,11 @@ void ShiftyEditor::drawUtilityPanel(juce::Graphics& g) {
                                   segment < segments * 6 / 7 ? juce::Colour(0xff79f1e7) :
                                                                juce::Colour(0xffff8f67);
             g.setColour(lit ? colour : juce::Colour(0xff104d37).withAlpha(0.7f));
-            g.fillRect(juce::Rectangle<float>(529.0f + segment * 18.0f, y,
+            g.fillRect(juce::Rectangle<float>(meterStart + segment * 18.0f, y,
                                                14.0f, 22.0f));
         }
     }
+    drawStripSmash(g);
     drawOutputKnob(g);
 
     // The footer plate, its bays and dividers are moulded into the shell art.
@@ -2112,11 +2317,19 @@ void ShiftyEditor::showParameterLockMenu(const juce::String& id, juce::Component
         menu.addSectionHeader(parameter->getName(80));
     menu.addItem(1, "Lock (RANDOM and presets leave it alone)", true, plugin.isParameterLocked(id));
     menu.addItem(2, "All randomization locks...");
+    if (id == "drive") {
+        // The DRIVE knob also offers its model, so it can be changed from any page.
+        menu.addSectionHeader("Drive model");
+        const int model = juce::roundToInt(valueOf("driveModel"));
+        for (int m = 0; m < shifty::driveModelCount; ++m)
+            menu.addItem(10 + m, driveModelMenuNames[m], true, model == m);
+    }
     menu.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(target).withMousePosition(),
         [safe = juce::Component::SafePointer<ShiftyEditor>(this), id](int result) {
             if (safe == nullptr) return;
             if (result == 1) safe->plugin.setParameterLocked(id, !safe->plugin.isParameterLocked(id));
             else if (result == 2) safe->showLocksMenu();
+            else if (result >= 10 && result < 10 + shifty::driveModelCount) safe->setParameter("driveModel", static_cast<float>(result - 10));
             safe->repaint();
         });
 }
@@ -2137,15 +2350,28 @@ void ShiftyEditor::showEngineLockMenu() {
 }
 
 void ShiftyEditor::showLocksMenu() {
+    // Two columns, grouped like the device, so every lock is one click away and the menu fits above LOCKS.
     juce::PopupMenu menu;
-    menu.addSectionHeader("Keep these values through RANDOM and preset changes");
     auto ids = ShiftyProcessor::randomizableParameterIds();
     ids.insert(0, ShiftyProcessor::engineLockId);
-    for (int i = 0; i < ids.size(); ++i)
-        if (ids[i] == ShiftyProcessor::engineLockId)
-            menu.addItem(i + 1, "Engine (TALK / MOUTH / CLASSIC)", true, plugin.isParameterLocked(ids[i]));
-        else if (auto* parameter = plugin.parameters().getParameter(ids[i]))
-            menu.addItem(i + 1, parameter->getName(80), true, plugin.isParameterLocked(ids[i]));
+    const auto add = [&](const char* id) {
+        const int index = ids.indexOf(id);
+        if (index < 0) return;
+        if (ids[index] == ShiftyProcessor::engineLockId)
+            menu.addItem(index + 1, "Engine (TALK / MOUTH / CLASSIC)", true, plugin.isParameterLocked(ids[index]));
+        else if (auto* parameter = plugin.parameters().getParameter(ids[index]))
+            menu.addItem(index + 1, parameter->getName(80), true, plugin.isParameterLocked(ids[index]));
+    };
+    const auto group = [&](const char* title, std::initializer_list<const char*> members) {
+        menu.addSectionHeader(title);
+        for (const auto* id : members) add(id);
+    };
+    group("Sound", { ShiftyProcessor::engineLockId, "shift", "focus", "bite", "drive", "mix", "output", "bypass", "subSafe", "subCut" });
+    group("Drive and Smash", { "driveModel", "smash", "smashTime", "smashBalance" });
+    group("Voice", { "vowelMorph", "voiceSet", "character", "talk", "vowel" });
+    menu.addColumnBreak();
+    group("Motion", { "motionEnable", "motionShape", "motionRate", "motionDepth", "motionSync", "motionFreeHz", "motionTarget" });
+    group("Envelope and YOI", { "envAmount", "envAttack", "envRelease", "yoiAmount", "yoiFrom", "yoiTo", "yoiTime", "yoiShift" });
     menu.addSeparator();
     menu.addItem(1001, "Lock all");
     menu.addItem(1002, "Unlock all");
@@ -2170,11 +2396,12 @@ void ShiftyEditor::mouseDown(const juce::MouseEvent& e) {
     // else on the shell a control does not claim: editor size.
     if (e.mods.isPopupMenu()) {
         if (page == Page::sound && engineSelectorBounds.contains(p)) showEngineLockMenu();
+        else if (page == Page::drive && driveModelBounds.contains(p)) showParameterLockMenu("driveModel", this);
         else showSizeMenu();
         return;
     }
-    if (p.y >= 115.0f && p.y <= 161.0f && p.x >= pageTabs[0].getX() && p.x < pageTabs[3].getRight()) {
-        for (int i = 0; i < 4; ++i)
+    if (p.y >= 115.0f && p.y <= 161.0f && p.x >= pageTabs[0].getX() && p.x < pageTabs[pageCount - 1].getRight()) {
+        for (int i = 0; i < pageCount; ++i)
             if (pageTabs[i].contains(p.x, juce::jlimit(pageTabs[i].getY(), pageTabs[i].getBottom() - 1.0f, p.y)))
                 page = static_cast<Page>(i);
         updatePage();
@@ -2209,6 +2436,13 @@ void ShiftyEditor::mouseDown(const juce::MouseEvent& e) {
             repaint();
             return;
         }
+    }
+    if (page == Page::drive && driveModelBounds.contains(p)) {
+        if (engine == EngineMode::original) return;
+        setParameter("driveModel", static_cast<float>(juce::jlimit(0, shifty::driveModelCount - 1,
+            static_cast<int>((p.x - driveModelBounds.getX()) / (driveModelBounds.getWidth() / static_cast<float>(shifty::driveModelCount))))));
+        repaint();
+        return;
     }
     if (page == Page::motion) {
         if (motionTabBounds.contains(p)) {

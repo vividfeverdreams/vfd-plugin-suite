@@ -137,6 +137,7 @@ void FormantEngine::prepare (double sampleRate, int maxBlockSize, int channels)
         state.cepstrum.resize (static_cast<size_t> (analysisSize_));
         state.spectrum.resize (static_cast<size_t> (fftSize_));
         state.originalSpectrum.resize (static_cast<size_t> (fftSize_));
+        state.drive.prepare (sampleRate_);
     }
 
     reset();
@@ -193,6 +194,7 @@ void FormantEngine::setParameters (const EngineParams& params) noexcept
     targetSubCut_.store (clampFinite (params.subCutHz, 55.0f, 240.0f, 120.0f), std::memory_order_relaxed);
     targetSubSafe_.store (params.subSafe, std::memory_order_relaxed);
     targetVowel_.store (params.vowel, std::memory_order_relaxed);
+    targetDriveModel_.store (juce::jlimit (0, driveModelCount - 1, params.driveModel), std::memory_order_relaxed);
 }
 
 void FormantEngine::analyseReal (std::vector<Complex>& data) const noexcept
@@ -632,6 +634,7 @@ void FormantEngine::processBlock (juce::AudioBuffer<float>& buffer, const float*
     target.subCut = targetSubCut_.load (std::memory_order_relaxed);
     target.subSafe = targetSubSafe_.load (std::memory_order_relaxed) ? 1.0f : 0.0f;
     target.vowel = targetVowel_.load (std::memory_order_relaxed) ? 1.0f : 0.0f;
+    const int driveModel = targetDriveModel_.load (std::memory_order_relaxed);
 
     for (int sample = 0; sample < buffer.getNumSamples(); ++sample)
     {
@@ -663,7 +666,7 @@ void FormantEngine::processBlock (juce::AudioBuffer<float>& buffer, const float*
             const float input = std::isfinite (data[sample]) ? data[sample] : 0.0f;
             state.originalRing[static_cast<size_t> (inputPosition_)] = input;
             state.inputRing[static_cast<size_t> (inputPosition_)] =
-                original ? originalDrive (input, current_.drive) : state.drive.process (input, current_.drive);
+                original ? originalDrive (input, current_.drive) : state.drive.process (input, current_.drive, driveModel);
         }
 
         if (frameDue)

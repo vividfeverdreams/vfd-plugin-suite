@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.22)
-project(Shifty VERSION 0.5.4 LANGUAGES C CXX)
+project(Shifty VERSION 0.6.0 LANGUAGES C CXX)
 
 if (APPLE)
     enable_language(OBJCXX)
@@ -17,6 +17,8 @@ endif()
 add_subdirectory("${JUCE_SOURCE_DIR}" "${CMAKE_BINARY_DIR}/JUCE")
 
 set(SHIFTY_DSP_SOURCES
+    Source/Dsp/Drive.cpp
+    Source/Dsp/Finisher.cpp
     Source/Dsp/FormantEngine.cpp
     Source/Dsp/TalkEngine.cpp
     Source/Dsp/MouthEngine.cpp)

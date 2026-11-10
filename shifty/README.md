@@ -1,8 +1,24 @@
-# SHIFTY 0.5.4
+# SHIFTY 0.6.0
 
 SHIFTY is a formant effect for bass. It changes the "mouth" of a sound (its resonances: bigger and darker, or smaller and brighter, or a different vowel) while the notes stay where they are. Put it after a bass synth or on an audio track. It accepts mono or stereo audio and makes no sound on its own.
 
 This build is a **VST3 and Audio Unit (AU) effect for Apple Silicon Macs running macOS 12 or later**.
+
+## What's new in 0.6.0
+
+- **DRIVE has four characters.** Pick one on the new **DRIVE** page (or right-click the DRIVE knob):
+  - **SOFT**: the 0.5 drive, exactly as before. Every project and preset made before 0.6.0 uses it.
+  - **TAPE**: the highs saturate first and come back compressed, like recording hot to tape. Smooth and glued.
+  - **TUBE**: a triode stage. The lows stay clean while the mids pick up warm even harmonics, and loud notes bloom and sag the way a tube amp does.
+  - **FUZZ**: a mid push into diode and transistor clipping. The note squares up into a dense growl.
+  The three new ones are modelled on how those circuits behave (emphasis filters around the clipping stage, asymmetric curves for even harmonics, a bias that shifts and a supply that sags with loud notes, tape's magnetic memory), anti-aliased (they work at twice the sample rate), and keep your level steady as you turn DRIVE up, so DRIVE changes the tone and the bite instead of just making it louder. TALK still has no latency.
+- **SMASH, a finisher at the end of the chain.** Three-band upward and downward compression in the spirit of the classic "OTT" setting: loud parts come down, quiet parts, tails and fizz come up, so the bass sounds denser and more upfront. Its knob is in the strip under the screen, beside the meters, on every page. **TIME** (how fast it grabs and lets go) and **UP / DOWN** (only down, only up, or both) are on the DRIVE page, with live meters for each band.
+  - It keeps your level close to the input (within about 1 dB on our tests), and it never goes over 0 dBFS.
+  - With **SUB SAFE** on, everything below the SUB SAFE frequency passes untouched. With it off, the lows only get gentle downward compression, never upward, so they can't pump or swell.
+- **The factory presets are re-voiced** with the new drives and SMASH: on our test basses they are as loud as before on average, denser and about 2 dB brighter. The **Classic** folder is untouched: its 24 originals sound exactly as before.
+- **New instances open on a fuller Rubber Throat**: TALK with TUBE drive and SMASH at 55%.
+- **RANDOM picks a drive model and SMASH settings too.** Like every new control they are not locked; right-click one (or use **LOCKS**) to keep it through RANDOM and preset changes. **LOCKS** now lists the controls in two grouped columns.
+- **Your projects sound exactly as before.** A project or preset saved with 0.5.4 or older opens with the SOFT drive and SMASH off, and renders bit for bit as it did (checked on 14 of your own saved SHIFTY devices). The 4 new controls are added after the 29 old ones, so automation keeps working.
 
 ## What's new in 0.5.4
 
@@ -67,9 +83,10 @@ A plain sawtooth has no resonances of its own, so CLASSIC and MOUTH change it on
 | **SHIFT** (−12 to +12 st) | Scales the vowel. Down = bigger, darker. Up = smaller, brighter. | Resizes the sound's own resonances. | Moves the detected envelope. |
 | **FOCUS** | Width of the resonances: broad to narrow. | Grain length: smoother to tighter. | Detail of the detected envelope. |
 | **BITE** | Resonance and drive into the vowel bank. | Pitch-synchronous buzz. | Contrast of the shift. |
-| **DRIVE** | Anti-aliased saturation before the engine. | Same. | Same. |
+| **DRIVE** | Saturation before the engine, in the model chosen on the DRIVE page (SOFT, TAPE, TUBE, FUZZ). | Same. | Same. |
 | **MIX** | Dry/wet. 100% gives the clearest effect. | Same. | Same. |
 | **SUB SAFE** + frequency | Keeps everything below the frequency (60–200 Hz) untouched, through a phase-matched crossover. | Same. | Restores the original lows inside the engine, as in 0.4. |
+| **SMASH** | The finisher after the engine: three-band upward and downward compression. 0 is off. | Same. | Same. |
 | **OUTPUT** | Final level, −24 to +6 dB. | Same. | Same. |
 | **BYPASS** | Passes the input, keeping the reported latency. It is also your DAW's bypass. | Same. | Same. |
 
@@ -80,6 +97,11 @@ On the **VOICE** page:
 - **CHARACTER** macro: more resonance, bite and drive. On MOUTH it adds the chosen vowel's mouth shape.
 - **TALK** macro: more movement from ENV, YOI and the LFO.
 - **CLASSIC** shows **LOW LATENCY** and **VOWEL COLOR** (the optional 0.4 vowel contour).
+
+On the **DRIVE** page:
+
+- **MODEL**: SOFT, TAPE, TUBE or FUZZ, with the model's curve drawn at the current DRIVE (CHARACTER adds drive, and the curve shows it). The original 0.4 sound keeps its own drive, so there the selector is greyed out.
+- **SMASH**: what each band (LOW, MID, HIGH) is doing right now, down in orange, up in lime. **TIME** runs from 0.25x (fast, punchy) to 4x (slow, smooth). **UP / DOWN** at the left keeps only the downward part, at the right only the upward part; the middle does both. SMASH's amount is the knob in the strip.
 
 Drag a knob to change it, double-click to reset, double-click a value to type it. **UNDO** and **REDO** are at the bottom of the device.
 
@@ -96,6 +118,7 @@ ENV and YOI need the latest engines. They do nothing on the original 0.4.2 sound
 
 ## Your existing projects
 
+- A project or preset saved with SHIFTY 0.5.4 or older has no DRIVE model or SMASH stored, so it opens with the SOFT drive and SMASH off and renders bit for bit as before.
 - A project or preset saved with SHIFTY 0.4.2 or older has no engine stored, so it opens on the **original 0.4.2 sound**. It renders the same audio as 0.4.2 (measured within 0.0000025, about −112 dB) at the same latency (2,048 samples at 48 kHz). Your automation keeps working: the 16 original parameters keep their IDs and order, and the 13 new ones are added after them.
 - **VOICE** shows **ORIGINAL SOUND PRESERVED**, and the SOUND page shows **ORIGINAL SOUND**. Press **USE LATEST SOUND** to switch that instance to the fixed CLASSIC engine. All your settings stay as they are. It is one UNDO step.
 - A few fixes apply even to the original sound, because they fix behaviour rather than the sound:
@@ -112,7 +135,7 @@ ENV and YOI need the latest engines. They do nothing on the original 0.4.2 sound
 
 ## Make quick variations
 
-**RANDOM** creates a new variation from every unlocked parameter. Its ranges favour useful sounds: SHIFT stays at least 2 st from zero, MIX stays between 70% and 100%, and so on. RANDOM also picks the engine (TALK, MOUTH or CLASSIC). **OUTPUT** and **BYPASS** start locked. Click a padlock beside a main knob, right-click any control (including the engine selector), or open **LOCKS** to choose what RANDOM may change. A locked control also keeps its value when you change presets (list, arrows or die), and a locked engine keeps its engine and latency; UNDO and reopening a project still restore everything exactly. UNDO brings back the previous sound.
+**RANDOM** creates a new variation from every unlocked parameter. Its ranges favour useful sounds: SHIFT stays at least 2 st from zero, MIX stays between 70% and 100%, and so on. RANDOM also picks the engine (TALK, MOUTH or CLASSIC), a DRIVE model (an analog one nine times in ten) and SMASH settings (amount 15-85%). **OUTPUT** and **BYPASS** start locked. Click a padlock beside a main knob, right-click any control (including the engine selector), or open **LOCKS** to choose what RANDOM may change. A locked control also keeps its value when you change presets (list, arrows or die), and a locked engine keeps its engine and latency; UNDO and reopening a project still restore everything exactly. UNDO brings back the previous sound.
 
 ## Presets
 
@@ -166,7 +189,7 @@ cmake -S . -B build -DJUCE_SOURCE_DIR=/absolute/path/to/JUCE -DCMAKE_BUILD_TYPE=
 cmake --build build --target Shifty_VST3 Shifty_AU --parallel 4
 ```
 
-The plug-ins are `build/Shifty_artefacts/Release/VST3/SHIFTY.vst3` and `build/Shifty_artefacts/Release/AU/SHIFTY.component`. The AU identity is type `aufx`, subtype `Shf1`, manufacturer `Yoib`, bundle ID `com.yoiboi.shifty`. The build does not install anything. Pass version `0.5.4` to the installer build script.
+The plug-ins are `build/Shifty_artefacts/Release/VST3/SHIFTY.vst3` and `build/Shifty_artefacts/Release/AU/SHIFTY.component`. The AU identity is type `aufx`, subtype `Shf1`, manufacturer `Yoib`, bundle ID `com.yoiboi.shifty`. The build does not install anything. Pass version `0.6.0` to the installer build script.
 
 The editor's shell art, `Assets/DeviceShell-editor.png`, and its glow mask, `Assets/ShellGlow.png`, are baked from the generated device photo `Assets/DeviceShell-fullbleed.png`. To rebuild them (Python 3 with numpy and Pillow):
 
@@ -185,4 +208,10 @@ Test targets: `ShiftyDspTests`, `ShiftyImpactTests` and `ShiftyEditorSnapshot`:
 | `ShiftyEditorSnapshot --preset-audit` | Every factory preset on three test sounds. |
 | `ShiftyEditorSnapshot --host-latency <SHIFTY.vst3>` | Latency per engine and the parameter list, through the VST3. |
 | `ShiftyEditorSnapshot --au <SHIFTY.component>` | The AU from the build folder, without installing it. |
-| `ShiftyEditorSnapshot --gallery <folder>` | Renders every page and state as PNGs, including the glow at low and high SHIFT and bypassed, and checks that clicking RANDOM leaves no focus ring. |
+| `ShiftyEditorSnapshot --gallery <folder> [size]` | Renders every page and state as PNGs, including the glow at low and high SHIFT and bypassed and the DRIVE page, and checks that clicking RANDOM leaves no focus ring. An optional size (e.g. `1.5`) renders every shot at that size. |
+| `ShiftyEditorSnapshot --version-compare <old SHIFTY.vst3> <new SHIFTY.vst3>` | Every factory preset as a saved state (engine included) in both bundles; the Classic folder must come out bit-identical. |
+| `ShiftyEditorSnapshot --render-states <old.vst3> <new.vst3> <states folder> <in.f32> <rate> <out folder>` | Saved SHIFTY states (as a DAW stores them) through both bundles on real audio; reports which are bit-identical. |
+| `ShiftyEditorSnapshot --ab-batch <old.vst3> <jobs.txt>` | Renders audio files through this build or the old bundle, for A/B listening (see `Tests/ABRender.h`). |
+| `ShiftyEditorSnapshot --cpu` | CPU per instance for each engine, with the 0.5 drive and with each analog model plus SMASH. |
+| `ShiftyDspTests --calibrate-drive <wav>...` | Measures the DRIVE models' level compensation tables on bass samples. |
+| `ShiftyDspTests --drive` / `--smash` | Runs a WAV through one DRIVE model or through SMASH alone. |

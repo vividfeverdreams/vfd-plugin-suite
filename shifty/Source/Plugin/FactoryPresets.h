@@ -29,6 +29,9 @@ struct FactoryPreset {
     float character = 0.0f, talk = 0.0f;
     float envAmount = 0.0f, envAttack = 5.0f, envRelease = 150.0f;
     float yoiAmount = 0.0f, yoiFrom = 0.0f, yoiTo = 4.0f, yoiTime = 200.0f, yoiShift = 0.0f;
+    // 0.6.0: 0 Soft (the 0.5 drive), 1 Tape, 2 Tube, 3 Fuzz; SMASH off unless set.
+    int driveModel = 0;
+    float smash = 0.0f, smashTime = 0.5f, smashBalance = 0.0f;
 
     // Builder helpers keep the bank readable.
     FactoryPreset& sh(float v) { shift = v; return *this; }
@@ -51,6 +54,10 @@ struct FactoryPreset {
     }
     FactoryPreset& yoi(float amount, float from, float to, float timeMs, float shiftSt = 0.0f) {
         yoiAmount = amount; yoiFrom = from; yoiTo = to; yoiTime = timeMs; yoiShift = shiftSt; return *this;
+    }
+    FactoryPreset& model(int driveModelIndex) { driveModel = driveModelIndex; return *this; }
+    FactoryPreset& smashed(float amount, float time = 0.5f, float balance = 0.0f) {
+        smash = amount; smashTime = time; smashBalance = balance; return *this;
     }
     FactoryPreset& lowLat() { lowLatency = true; return *this; }
     FactoryPreset& colour() { vowelColor = true; return *this; }

@@ -474,8 +474,8 @@ inline int runHostKeysTests()
 
                 // The arrows browse on every page: right and down are next, left and up previous.
                 bool everyPage = true;
-                for (const auto page : { ShiftyEditor::Page::sound, ShiftyEditor::Page::voice, ShiftyEditor::Page::motion,
-                                         ShiftyEditor::Page::presets }) {
+                for (const auto page : { ShiftyEditor::Page::sound, ShiftyEditor::Page::voice, ShiftyEditor::Page::drive,
+                                         ShiftyEditor::Page::motion, ShiftyEditor::Page::presets }) {
                     editor.showPageForTesting(page);
                     const int start = listIndex();
                     const int count = editor.presetCountForTesting();
@@ -485,7 +485,32 @@ inline int runHostKeysTests()
                     const bool left = press(juce::KeyPress::leftKey) && listIndex() == start;
                     everyPage = everyPage && start >= 0 && right && down && up && left;
                 }
-                expect(everyPage, "on SOUND, VOICE, MOTION and PRESETS, right/down load the next preset and left/up the previous");
+                expect(everyPage, "on SOUND, VOICE, DRIVE, MOTION and PRESETS, right/down load the next preset and left/up the previous");
+
+                // 0.6.0's controls never take the keyboard: SMASH in the strip, the DRIVE page's model selector and
+                // its TIME and UP/DOWN knobs. Each click leaves only the editor focused; space and Return stay the host's.
+                {
+                    editor.showPageForTesting(ShiftyEditor::Page::drive);
+                    const auto before = loadedKey(processor);
+                    bool keysFree = true;
+                    juce::StringArray grabbers;
+                    for (const auto spot : { editorPoint(editor, 934.0f, 1057.0f),   // SMASH (strip)
+                                             editorPoint(editor, 561.0f, 276.0f),    // DRIVE model selector: FUZZ
+                                             editorPoint(editor, 722.0f, 414.0f),    // SMASH TIME
+                                             editorPoint(editor, 872.0f, 414.0f) }) { // SMASH UP / DOWN
+                        click(editor, spot);
+                        if (focused() != &editor) grabbers.add(spot.toString());
+                        keysFree = keysFree && !press(juce::KeyPress::spaceKey) && !press(juce::KeyPress::returnKey);
+                    }
+                    const bool picked = juce::roundToInt(processor.parameters().getRawParameterValue("driveModel")->load()) == 3;
+                    expect(grabbers.isEmpty() && keysFree && picked,
+                           "SMASH, the DRIVE model selector and SMASH TIME and UP/DOWN leave only the editor focused; space and Return reach the host"
+                               + (grabbers.isEmpty() ? juce::String() : " (focus taken at " + grabbers.joinIntoString(", ") + ")"));
+                    const bool arrows = press(juce::KeyPress::rightKey) && loadedKey(processor) != before;
+                    press(juce::KeyPress::leftKey);
+                    expect(arrows, "after clicking them the arrows still browse presets");
+                    click(editor, blank);
+                }
 
                 // Modified arrows are the host's.
                 const auto shown = loadedKey(processor);

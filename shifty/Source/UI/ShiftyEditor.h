@@ -36,7 +36,7 @@ public:
     /** A control's name in plain English, as its tooltips and value boxes use it. */
     static juce::String displayNameFor(const juce::String& id);
 
-    enum class Page { sound, voice, motion, presets };
+    enum class Page { sound, voice, drive, motion, presets };
     enum class MotionTab { lfo, envelope, yoi };
 
     /** Editor sizes offered by the right-click menu, as a fraction of 650 px wide. */
@@ -110,6 +110,8 @@ private:
     void drawHeader(juce::Graphics&);
     void drawSoundScreen(juce::Graphics&);
     void drawVoiceScreen(juce::Graphics&);
+    void drawDriveScreen(juce::Graphics&);
+    void drawStripSmash(juce::Graphics&);
     void drawMotionScreen(juce::Graphics&);
     void drawLfoTab(juce::Graphics&);
     void drawEnvelopeTab(juce::Graphics&);

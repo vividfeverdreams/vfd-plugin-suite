@@ -17,6 +17,54 @@ Validated on Apple Silicon, macOS 14.5, on 2026-10-05. Release build, arm64, JUC
 | pluginval / auval on the AU | **Not run**: needs the AU installed (see below) |
 | Editor snapshots (default, Motion on, Vowel on, INFO, 21-image gallery) | Pass |
 
+## 0.6.0 additions (2026-11-03)
+
+DRIVE models (SOFT / TAPE / TUBE / FUZZ) and the SMASH finisher. Release build, arm64, JUCE 9.0.2, from `build/`. Full numbers, the per-preset table and the listening files: `review/shifty-0.6.0/` (`measurements.md`, `audio/`, `snapshots/`).
+
+| Check | Result |
+| --- | --- |
+| `ShiftyDspTests` (44.1/48/96 kHz): all earlier checks, plus each DRIVE model and SMASH | Pass |
+| `ShiftyImpactTests` | 22/22 |
+| `--feature-tests`: the 0.4, 0.5.0, 0.5.4 and new 0.6.0 sets, and the host-keys run | Pass |
+| `--host-keys`: shared check and SHIFTY's own, now with the DRIVE page and the new controls | Pass (69 checks) |
+| `--host-latency`: 33 parameters, append-only; latency per engine unchanged; host bypass is Bypass (index 14) | Pass |
+| `--au` (in process, from the build folder) | Pass |
+| `--menu-placement` | Pass (8 menus). It crashed on 0.5.4's code (it looked up a LOCKS button by an old name); fixed. LOCKS is now two grouped columns so it fits above its key. |
+| `--preset-audit`: 114 presets on a raw saw, an FM growl and a Reese | Pass |
+| `--version-compare` against the signed 0.5.4 VST3 (state with engine) | Classic folder 24/24 **bit-identical**; the other 90 differ by design |
+| `--render-states`: 14 SHIFTY states saved in two real Ableton Live projects, signed 0.5.4 vs 0.6.0, on three inputs | **42/42 bit-identical** |
+| `check_text_literals.py` | Clean |
+| Gallery at 100% and 150% | Rendered; no focus ring after RANDOM |
+| pluginval | Not run here (run once at the end, per user) |
+
+**Old projects.** The 4 new parameters are appended with version hint 3, and their defaults are the old sound: Drive Model = Soft (the 0.5 curve, bit-for-bit), Smash 0 (the buffer is not touched at all), Smash Time 50%, Smash Up/Down 0. JUCE gives a parameter missing from a saved state its default, and `setStateInformation` fills them in explicitly, so a 0.5.4 project opens SOFT with SMASH off even into an instance that started on the new default. Locks: `randomLockMask` keeps bits 0-29 exactly as before (29 controls + the engine), and the new controls' bits are saved separately as `randomLockMask2` (`randomLockVersion` 3). A 0.5.4 state has no `randomLockMask2`: its new controls start unlocked, unless every old control and the engine were locked, in which case they lock too and RANDOM stays inert.
+
+**DRIVE** (`Source/Dsp/Drive.*`). SOFT runs the 0.5 `AdaaDrive` unchanged (and keeps running underneath, so switching back is clean). TAPE, TUBE and FUZZ: pre-emphasis, gain, 2x up (polyphase IIR half-band), nonlinearity with first-order ADAA, 2x down, de-emphasis, DC block, calibrated level compensation. TALK still reports 0 latency (the half-bands add about 1.5 samples of low-frequency group delay to the driven path only). DRIVE 0 is exact in every model; a model change crossfades over 10 ms.
+
+```
+DRIVE SOFT: DRIVE 0 exact yes, level change at 25..100% 1.03 .. 5.65 dB, aliasing at full drive: 4.1 kHz -33.1 dB, 7.3 kHz -36.3 dB, 110 Hz -97.5 dB re fundamental
+DRIVE TAPE: DRIVE 0 exact yes, level change at 25..100% 0.29 .. 0.90 dB, aliasing at full drive: 4.1 kHz -55.0 dB, 7.3 kHz -41.1 dB, 110 Hz -96.7 dB re fundamental
+DRIVE TUBE: DRIVE 0 exact yes, level change at 25..100% -0.36 .. 0.59 dB, aliasing at full drive: 4.1 kHz -37.9 dB, 7.3 kHz -39.3 dB, 110 Hz -97.7 dB re fundamental
+DRIVE FUZZ: DRIVE 0 exact yes, level change at 25..100% 0.86 .. 1.38 dB, aliasing at full drive: 4.1 kHz -32.1 dB, 7.3 kHz -30.1 dB, 110 Hz -90.6 dB re fundamental
+DRIVE model switches (every 250 ms): largest sample step 0.810, models alone 0.810
+```
+
+**SMASH** (`Source/Dsp/Finisher.*`), after the engine and before OUTPUT, on every engine. At 0 the buffer is untouched. Thresholds sit relative to a slow gated RMS of the input; a 2 s trim on the worked bands keeps the level within about +1.6 dB of the input; a soft ceiling holds the output at 0.98.
+
+```
+SMASH 48000 Hz: off is exact yes, block 37 vs 1024 RMS difference 0, 40 Hz sub with SUB SAFE -0.058 dB, level change 0.40 dB, hot input peak 0.98, silence 0
+```
+
+Through the whole processor (`--feature-tests`, 0.6.0 set): SMASH 0 ignores TIME and UP/DOWN (exact output); SMASH 100% on Basement Growl stays within 2 dB; a +12 dB input through SMASH peaks at or below 0.981; TALK reports 0 latency with every model and SMASH on; BYPASS passes the input exactly with SMASH on; locked DRIVE MODEL / SMASH controls hold through 40 RANDOM presses, all 114 factory presets and a user preset; unlocked, RANDOM reaches all four.
+
+**Presets** (5 pack-bass inputs at -10 LUFS, 90 re-voiced presets): mean loudness vs input -0.3 dB in 0.5.4, 0.0 dB in 0.6.0 (preset means -0.7 to +0.8 dB; loudest single render +1.8 dB). 0.5.4 went over 0 dBFS on 388 of 450 renders (up to +8.4 dBFS); 0.6.0 on none. Short-term spread above 150 Hz 9.5 -> 7.1 dB (denser); 2.5-8 kHz -3.4 -> -1.0 dB, above 8 kHz -8.5 -> -5.6 dB (brighter).
+
+**Post-engine saturation:** measured and not added. A TUBE stage after the engine cut the vowel (formant) contrast by 10% and the mids by about 1 dB for about 1 dB less crest; SMASH alone gave more density and 9% more vowel contrast.
+
+**CPU** (stereo, 48 kHz, 64-sample buffers): TALK 1.6% with the 0.5 drive and SMASH off, 3.1-3.4% with an analog model and SMASH 50%; CLASSIC 3.0% / 4.3-4.9%. Table in `measurements.md`.
+
+**Not verified:** a real session in Ableton Live or Logic (the new page, SMASH automation, saving and reopening); `auval` and pluginval on the installed AU/VST3; listening by ear (the A/B files are for the user). The 0.4.2 `--compat` run needs the 0.4.2 payload, which is no longer on this Mac; 0.4.2 projects are covered transitively (their ORIGINAL-engine states render bit-identically through 0.5.4 and 0.6.0, two of the user's saved states among them).
+
 ## 0.5.4 additions (2026-10-21)
 
 Release build, arm64, JUCE 9.0.2, from `build/`.

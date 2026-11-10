@@ -5,6 +5,7 @@
 #include <atomic>
 #include <memory>
 #include <optional>
+#include "../Dsp/Finisher.h"
 #include "../Dsp/FormantEngine.h"
 #include "../Dsp/Modulators.h"
 #include "../Dsp/MouthEngine.h"
@@ -107,6 +108,10 @@ public:
         float envelope = 0.0f;  // 0..1
         float yoi = 1.0f;       // sweep position 0..1
         bool motionRunning = false;
+        // SMASH (the finisher): gain per band (low, mid, high) in dB, band level
+        // against the program reference in dB, and how far it is switched in (0..1).
+        std::array<float, 3> smashGain {}, smashLevel {};
+        float smashEngaged = 0.0f;
     };
     Display display() const noexcept;
 
@@ -129,7 +134,9 @@ public:
     /** Test hook: replaces ~/Library (the user data root) for preset storage. */
     void setUserDataRootForTesting(const juce::File& root);
 
-    static constexpr size_t parameterCount = 29;
+    static constexpr size_t parameterCount = 33;
+    /** The parameters before 0.6.0 (the engine's lock bit sits after them). */
+    static constexpr size_t legacyParameterCount = 29;
 
 private:
     struct ParameterSnapshot {
@@ -169,6 +176,7 @@ private:
     FormantEngine originalEngine, classicEngine, classicLowLatencyEngine;
     TalkEngine talkEngine;
     MouthEngine mouthEngine;
+    Finisher finisher;
     EnvelopeFollower envelopeFollower;
     YoiSweep yoiSweep;
     std::atomic<int> engineModeValue { static_cast<int>(EngineMode::talk) };
@@ -188,9 +196,16 @@ private:
     int analyzerOutputWrite = 0;
     std::unique_ptr<juce::dsp::FFT> analyzerFft;
     std::array<float, 2048> fftScratch {};
-    // One lock bit per parameter, then the engine's.
-    static constexpr uint32_t engineLockBit = 1u << parameterCount;
-    static constexpr uint32_t allRandomLocks = (engineLockBit << 1) - 1u;
+    // Lock bits: the 29 parameters before 0.6.0 (bits 0-28), the engine (bit 29),
+    // then the parameters added in 0.6.0 (bits 30 on). Saved as randomLockMask
+    // (bits 0-29, as before) and randomLockMask2 (the 0.6.0 bits, shifted down).
+    static constexpr uint64_t engineLockBit = uint64_t { 1 } << legacyParameterCount;
+    static constexpr uint64_t allRandomLocks = (uint64_t { 1 } << (parameterCount + 1)) - 1u;
+    static constexpr uint64_t legacyLockBits = (engineLockBit << 1) - 1u;
+    static constexpr uint64_t lockBit(size_t index) noexcept
+    {
+        return uint64_t { 1 } << (index < legacyParameterCount ? index : index + 1);
+    }
     std::array<std::atomic<float>*, parameterCount> paramValues {};
     juce::AudioProcessorParameter* bypassParameter = nullptr; // "bypass", the host's bypass too
 
@@ -214,6 +229,8 @@ private:
     std::atomic<float> displayShift { 0.0f }, displayMorph { 2.0f }, displayLfoPhase { 0.0f }, displayLfoValue { 0.0f };
     std::atomic<float> displayEnvelopeLevel { 0.0f }, displayYoi { 1.0f };
     std::atomic<bool> displayMotionRunning { false };
+    std::array<std::atomic<float>, 3> displaySmashGain {}, displaySmashLevel {};
+    std::atomic<float> displaySmashEngaged { 0.0f };
 
     int undoSuppression = 0;
     int activeGestures = 0;
@@ -223,9 +240,9 @@ private:
     mutable bool presetMigrationChecked = false;
     // Output and Bypass. Before 0.5.3 Vowel Color was locked too, and the
     // engine was never randomized.
-    static constexpr uint32_t defaultRandomLocks = (1u << 7) | (1u << 14);
-    static constexpr uint32_t legacyDefaultRandomLocks = defaultRandomLocks | (1u << 15);
-    std::atomic<uint32_t> randomLocks { defaultRandomLocks };
+    static constexpr uint64_t defaultRandomLocks = (uint64_t { 1 } << 7) | (uint64_t { 1 } << 14);
+    static constexpr uint64_t legacyDefaultRandomLocks = defaultRandomLocks | (uint64_t { 1 } << 15);
+    std::atomic<uint64_t> randomLocks { defaultRandomLocks };
     std::atomic<double> editorScaleValue { 1.0 };
     juce::Random variationRandom;
     mutable juce::CriticalSection presetNameMutex;

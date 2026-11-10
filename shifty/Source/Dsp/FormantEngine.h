@@ -1,6 +1,7 @@
 #pragma once
 
 #include "DspCommon.h"
+#include "Drive.h"
 
 #include <atomic>
 #include <complex>
@@ -65,7 +66,7 @@ private:
         std::vector<int> peakDistances;
         bool frameActive = false;
         bool envelopeSeeded = false;
-        AdaaDrive drive;
+        DriveStage drive;
         // juce::dsp::FFT work areas: analysis buffers hold analysisSize_
         // complex values, the synthesis buffer fftSize_.
         std::vector<Complex> analysis;
@@ -124,6 +125,7 @@ private:
     std::atomic<float> targetSubCut_ { 120.0f };
     std::atomic<bool> targetSubSafe_ { true };
     std::atomic<bool> targetVowel_ { false };
+    std::atomic<int> targetDriveModel_ { 0 };
 
     SmoothedParams current_;
     double sampleRate_ = 48000.0;

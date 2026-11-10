@@ -25,6 +25,7 @@ struct EngineParams
     int voiceSet = 0;        // 0 Human, 1 Growl, 2 Wow
     float character = 0.0f;  // CHARACTER macro, 0..1
     bool bypass = false;     // crossfade to the untouched input (zero-latency engines)
+    int driveModel = 0;      // DRIVE model (Drive.h); 0 = the 0.5 curve
 };
 
 /** Per-sample modulation handed to an engine for one processBlock call. */
