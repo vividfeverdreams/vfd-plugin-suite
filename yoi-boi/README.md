@@ -1,6 +1,10 @@
-# YOI-BOI 0.2.4
+# YOI-BOI 0.2.5
 
 YOI-BOI is a monophonic talking-bass synthesizer for Apple Silicon macOS, built as a **VST3 instrument**, an **Audio Unit instrument** and a **standalone app**. Play a MIDI phrase, press **NEW YOI**, and shape the result with Mouth, Size, Bite, Dirt, Length and Sub.
+
+## What's new in 0.2.5
+
+- **Release is back on screen.** The MOD page's ATTACK column is now **ATTACK / RELEASE**, with a **Release** bar under Level: how long a note rings after you let go, from 5 ms to 2 s. 75 ms is the original; go lower for tighter, choppier notes. It works on every engine-4 sound and is greyed out on the twelve Classic sounds, which keep their original release. It saves with your presets and stays automatable from your host.
 
 ## What's new in 0.2.4
 
@@ -28,7 +32,7 @@ YOI-BOI is a monophonic talking-bass synthesizer for Apple Silicon macOS, built 
   - **Pitch:** **Bend** range from ±1 to ±24 semitones. **Glide** can be Always (as before) or **Legato** (only between connected notes). **Drop / Rise** starts each note up to two octaves away and settles onto it over **Drop Time**, for dives and risers. The pitch wheel follows instantly even with long glide.
   - **Tone:** a **Shaper** choice for Dirt: Classic (the original), Diode, Fold or Crush. It works inside the 4× oversampled path. **Squash** is a three-band upward/downward compressor on the talking body, in the spirit of OTT. **Width** spreads the body in stereo above 180 Hz while the sub stays mono. **SUB RESET** restarts the sub's cycle on every note for an identical punch. The final ceiling is now a smooth oversampled limit instead of a hard clip.
   - **Attack:** an **Onset** glide into the first vowel from a **W** ("wah") or **Y** ("yoi") mouth, and an optional **Consonant** burst (**T**, **K** or **CH**) with its own level.
-  - **Feel:** **Velocity** can soften Mouth, Bite and Dirt on quieter notes. Amplitude **Attack** and **Release** are adjustable; 3 ms and 75 ms are the original values. (Since 0.2.2 these are host parameters only.)
+  - **Feel:** **Velocity** can soften Mouth, Bite and Dirt on quieter notes. Amplitude **Attack** and **Release** are adjustable; 3 ms and 75 ms are the original values. (Since 0.2.2 Attack is a host parameter only; since 0.2.5 Release is on the MOD page again.)
 - **More vowels:** besides EE, EH, AH, OH and OO, engine 4 adds **IH, UH, AE and ER**. Pick them on the SHAPE page or drag the points in the motion graph.
 - **Separate Sub output:** YOI-BOI has an optional second stereo output called **Sub**, off by default. When your host enables it, the dedicated sub plays there instead of in the main output, ready for its own processing or sidechain. With it off, nothing changes.
 - **75 new and reworked factory sounds** in folders: Yoi, Riddim, Talk, Growl, Squelch, Wobble, Reese, Sub, Space and Leads/FX. The twelve original sounds are still in **Classic**, unchanged; reworked engine-4 versions with a "II" suffix are in **Yoi**. See [FACTORY-PRESETS.md](FACTORY-PRESETS.md).

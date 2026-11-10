@@ -1123,7 +1123,9 @@ public:
             "A short consonant burst at the start of each note.");
         setupModSlider(consonantLevelSlider, "Consonant level", "consonant_level", [](double v) { return juce::String(juce::roundToInt(v * 100)) + "%"; },
             "Loudness of the consonant burst.", false, 0.01);
-        // Velocity amounts and the amp envelope stay parameters (host automation, presets) but have no
+        setupModSlider(releaseSlider, "Release", "release_ms", [](double v) { return juce::String(juce::roundToInt(v)) + " MS"; },
+            "How long a note rings after you let go. Lower is tighter; 75 ms is the original.");
+        // Velocity amounts and the amp attack stay parameters (host automation, presets) but have no
         // MOD controls: the macro knobs already cover how the sound feels.
 
         // ---- A/B compare (PLAY page)
@@ -1572,12 +1574,12 @@ public:
         if (page == modPage)
         {
             text(g, patchName.toUpperCase() + "  /  MOD", { 104, 116, 330, 20 }, 17, cyan, true);
-            const std::array<const char*, modColumns> titles { "TALK", "PITCH", "TONE", "ATTACK" };
+            const std::array<const char*, modColumns> titles { "TALK", "PITCH", "TONE", "ATTACK / RELEASE" };
             const std::array<std::array<const char*, 4>, modColumns> captions {{
                 {{ "MOTION", "RATE", "FEEL", "BARS" }},
                 {{ "BEND", "GLIDE", "DROP / RISE", "DROP TIME" }},
                 {{ "SHAPER", "SQUASH", "WIDTH", "SUB" }},
-                {{ "ONSET", "CONSONANT", "LEVEL", "" }} }};
+                {{ "ONSET", "CONSONANT", "LEVEL", "RELEASE" }} }};
             for (int column = 0; column < modColumns; ++column)
             {
                 const int x = modColumnX(column);
@@ -1717,7 +1719,7 @@ public:
         place(talkModeBox, 0, 0); place(talkRateBox, 0, 1); place(talkFeelBox, 0, 2); place(meterBarsToggle, 0, 3);
         place(bendSlider, 1, 0); place(glideModeBox, 1, 1); place(dropSlider, 1, 2); place(dropTimeSlider, 1, 3);
         place(shaperBox, 2, 0); place(squashSlider, 2, 1); place(widthSlider, 2, 2); place(subResetToggle, 2, 3);
-        place(onsetBox, 3, 0); place(consonantBox, 3, 1); place(consonantLevelSlider, 3, 2);
+        place(onsetBox, 3, 0); place(consonantBox, 3, 1); place(consonantLevelSlider, 3, 2); place(releaseSlider, 3, 3);
         subMode.setBounds(137, 372, 108, 23); lowCut.setBounds(257, 371, 145, 25);
         lengthFeel.setBounds(486, 372, 135, 23);
         if (infoButton) infoButton->setBounds(492, 668, 96, 38);
@@ -2138,7 +2140,7 @@ public:
     struct ModCombo { ParameterCombo* box; juce::String id; int count; };
     struct ModToggle { ParameterButton* button; juce::String id; };
     ParameterCombo talkModeBox, talkRateBox, talkFeelBox, glideModeBox, shaperBox, onsetBox, consonantBox;
-    FocusedSlider bendSlider, dropSlider, dropTimeSlider, squashSlider, widthSlider, consonantLevelSlider;
+    FocusedSlider bendSlider, dropSlider, dropTimeSlider, squashSlider, widthSlider, consonantLevelSlider, releaseSlider;
     ParameterButton meterBarsToggle, subResetToggle;
     std::vector<ModCombo> modCombos;
     std::vector<ModToggle> modToggles;

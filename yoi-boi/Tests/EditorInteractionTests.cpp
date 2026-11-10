@@ -677,6 +677,29 @@ public:
             }
         }
 
+        beginTest ("MOD shows the amp Release on engine-4 sounds and greys it out on the originals");
+        {
+            YoiBoiProcessor synth;
+            auto callbacks = synth.makeEditorCallbacks();
+            std::unique_ptr<juce::AudioProcessorEditor> editor (synth.createEditor());
+            expect (clickControl (*editor, "MOD"));
+            auto* release = findControl<juce::Slider> (*editor, "Release");
+            expect (release != nullptr, "Release is missing from the MOD page");
+            if (release != nullptr)
+            {
+                expectEquals (release->getProperties()["parameterId"].toString(), juce::String ("release_ms"));
+                expect (release->isVisible(), "Release shows on the MOD page");
+                expect (callbacks.soundEngine() >= 4, "The default sound uses the latest engine");
+                expect (release->isEnabled(), "Release is editable on an engine-4 sound");
+                expectEquals (release->getTextFromValue (75.0), juce::String ("75 MS"));
+                release->setValue (20.0, juce::sendNotificationSync);
+                expectWithinAbsoluteError (synth.parameters().getRawParameterValue ("release_ms")->load(), 20.0f, 0.5f);
+                expectWithinAbsoluteError (static_cast<float> (release->getValueFromText ("120 ms")), 120.0f, 0.01f);
+                callbacks.loadPreset ("factory:0"); // an original (engine 3) sound keeps its fixed release
+                expect (waitForEditor ([&] { return ! release->isEnabled(); }), "Release is greyed out on an original sound");
+            }
+        }
+
         beginTest ("Generating variations does not populate the preset Library");
         {
             YoiBoiProcessor synth;
