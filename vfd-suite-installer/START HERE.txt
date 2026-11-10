@@ -1,13 +1,17 @@
 VIVID FEVER DREAMS SUITE 1.6.4 - BETA INSTALL
 
 Includes YOI-BOI 0.2.5, THROW-UP 0.2.4, BACK-SCRATCH 0.11.4,
-SHIFTY 0.5.4, ENERGY HARVESTER 0.4.4, and STUTTER-STEP 0.4.3.
+SHIFTY 0.6.0, ENERGY HARVESTER 0.4.4, and STUTTER-STEP 0.5.0.
 
 NEW IN 1.6.4
-YOI-BOI: the amp Release is back on screen. Open MOD and find it
-under ATTACK / RELEASE to set how long notes ring after you let go
-(75 ms is the original; lower is tighter). It works on every sound
-except the twelve Classic ones, which keep their original release.
+SHIFTY 0.6.0: four DRIVE characters (SOFT, TAPE, TUBE, FUZZ) on a
+new DRIVE page, and SMASH, a three-band OTT-style finisher at the
+end of the chain. Factory presets are re-voiced; Classic is untouched.
+STUTTER-STEP 0.5.0: GATE | SLAP, NUDGE and DOTTED | TRIPLET under the
+step lane, 32 new SIMPLE and HATS grooves, and no dark window corners.
+YOI-BOI 0.2.5: the amp Release is back on screen. Open MOD and find it
+under ATTACK / RELEASE (75 ms is the original; lower is tighter).
+Old projects open and sound exactly as before.
 Also new since 1.6.2: duplicating a track keeps its preset in
 THROW-UP and BACK-SCRATCH, BACK-SCRATCH's screen follows your changes
 while it's switched off, and preset menus work in Bitwig on Linux

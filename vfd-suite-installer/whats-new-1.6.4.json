@@ -21,11 +21,12 @@
     "A locked phrase keeps its length and timing when you change presets too; each preset's pattern fits that length."
   ],
   "SHIFTY": [
+    "DRIVE has four characters on the new DRIVE page: SOFT (the 0.5 drive, exactly as before), TAPE, TUBE and FUZZ.",
+    "SMASH: a three-band OTT-style finisher at the end of the chain, with TIME and UP/DOWN. It keeps your level and never clips.",
+    "Factory presets re-voiced with the new drives and SMASH; the 24 Classic sounds are untouched. RANDOM picks a model and SMASH too.",
+    "Your projects and saved presets from 0.5.4 and older load on SOFT with SMASH off, so they sound exactly as before.",
     "Your DAW keeps its keys, Cmd-Z included. The arrow keys browse the PRESETS list, as filtered, from any page.",
-    "Typed values understand units (\"1 s\", \"2 kHz\") and vowel names. Tooltips use plain names.",
-    "The preset list scrolls smoothly with a trackpad. The star is off for sounds that aren't saved yet.",
-    "The plug-in's BYPASS and your DAW's bypass are now one switch.",
-    "Locked controls, and a locked engine, stay put when you change presets. OUTPUT and BYPASS start locked; unlock them to let presets set them."
+    "Typed values understand units (\"1 s\", \"2 kHz\") and vowel names. Tooltips use plain names."
   ],
   "ENERGY HARVESTER": [
     "Your DAW keeps its keys. The arrow keys browse presets; they no longer nudge a fader you clicked.",
@@ -33,10 +34,11 @@
     "The STOP>START mode has one name everywhere."
   ],
   "STUTTER-STEP": [
+    "New tool row: GATE | SLAP edits the slap sends (with levels), NUDGE moves the groove a step, DOTTED | TRIPLET changes the step length.",
+    "32 new grooves: SIMPLE (quarter chugs to triplets) and HATS (8th and 16th hats, shuffles, rolls), plus a HATS family in ROLL FROM.",
+    "DRAG MIDI writes dotted and triplet grooves as whole 4/4 bars. The window shows only the device: no dark corners.",
+    "Projects and grooves from 0.4.3 and older open and sound exactly as before.",
     "New DRAG MIDI key: drag it onto a MIDI track to drop the groove as a MIDI clip, swing and ghosts included.",
-    "Your DAW keeps its keys: Return can't re-roll NEW GROOVE and Tab reaches your DAW. The arrow keys browse grooves, factory then USER.",
-    "The TIME knob shows long LOCK echoes correctly.",
-    "A groove name you're typing survives clicking into your DAW.",
-    "Hosts show the groove you're hearing. Changing SUB SAFE no longer clicks."
+    "Your DAW keeps its keys: Return can't re-roll NEW GROOVE and Tab reaches your DAW. The arrow keys browse grooves, factory then USER."
   ]
 }

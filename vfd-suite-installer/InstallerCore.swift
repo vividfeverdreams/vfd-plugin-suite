@@ -151,11 +151,11 @@ enum SuiteCatalog {
                          audioUnit: AudioUnitIdentity(type: "aumf", subtype: "Thr1", manufacturer: "Yoib")), // MIDI-controlled effect: Logic sends MIDI throws only to aumf
         PluginDefinition(name: "BACK-SCRATCH", bundleIdentifier: "com.yoiboi.backscratch", version: "0.11.4",
                          audioUnit: AudioUnitIdentity(type: "aufx", subtype: "Bsc1", manufacturer: "Yoib")),
-        PluginDefinition(name: "SHIFTY", bundleIdentifier: "com.yoiboi.shifty", version: "0.5.4",
+        PluginDefinition(name: "SHIFTY", bundleIdentifier: "com.yoiboi.shifty", version: "0.6.0",
                          audioUnit: AudioUnitIdentity(type: "aufx", subtype: "Shf1", manufacturer: "Yoib")),
         PluginDefinition(name: "ENERGY HARVESTER", bundleIdentifier: "com.yoiboi.energyharvester", version: "0.4.4",
                          audioUnit: AudioUnitIdentity(type: "aufx", subtype: "Enh1", manufacturer: "Yoib")),
-        PluginDefinition(name: "STUTTER-STEP", bundleIdentifier: "com.yoiboi.stutterstep", version: "0.4.3",
+        PluginDefinition(name: "STUTTER-STEP", bundleIdentifier: "com.yoiboi.stutterstep", version: "0.5.0",
                          audioUnit: AudioUnitIdentity(type: "aufx", subtype: "Stp1", manufacturer: "Yoib"))
     ]
     /// Canonical order: each plug-in's VST3, then its AU.
