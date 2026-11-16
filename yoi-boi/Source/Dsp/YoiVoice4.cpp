@@ -1,6 +1,7 @@
 #include "YoiVoice4.h"
 
 #include <algorithm>
+#include <bit>
 #include <cmath>
 
 namespace yoiboi::dsp
@@ -169,6 +170,7 @@ void YoiVoice4::prepare (double newSampleRate)
     decorrelateA.buffer.assign (decorrelateA.length, 0.0f);
     decorrelateB.buffer.assign (decorrelateB.length, 0.0f);
     squash.prepare (internalRate);
+    finisher.prepare (internalRate);
     configureConsonant();
     reset();
 }
@@ -184,6 +186,9 @@ void YoiVoice4::reset() noexcept
         line->position = 0;
     }
     squash.reset();
+    finisher.reset();
+    lowestTarget = lowestSmoothed = static_cast<float> (currentNote);
+    trackCountdown = 0;
     for (auto& d : decimate4x) d.reset();
     for (auto& d : decimate2x) d.reset();
     dcInput.fill (0.0f); dcOutput.fill (0.0f);
@@ -222,6 +227,20 @@ void YoiVoice4::setControls (const LatestControls& next) noexcept
     controls.sub = finiteClamp (next.sub, 0.0f, 1.0f, controls.sub);
     controls.subMode = std::clamp (next.subMode, 0, 2);
     controls.lowCut = next.lowCut;
+    controls.finish = finiteClamp (next.finish, 0.f, 1.f, 0.f);
+    controls.subBalance = finiteClamp (next.subBalance, 0.f, 2.f, 1.f);
+    controls.loudnessTrim = finiteClamp (next.loudnessTrim, -24.f, 36.f, 0.f);
+    controls.subOnNote = next.subOnNote; controls.lowCutTrack = next.lowCutTrack;
+    finisher.set (controls.finish, controls.loudnessTrim);
+    if (wasTracking != controls.lowCutTrack)
+    {
+        wasTracking = controls.lowCutTrack; trackCountdown = 0;
+        if (!wasTracking)
+        {
+            bodyHighPass[0].configure (110.f, .5411961f, internalRate);
+            bodyHighPass[1].configure (110.f, 1.3065630f, internalRate);
+        }
+    }
     controls.output = finiteClamp (next.output, 0.0f, 2.0f, controls.output);
     controls.lengthSeconds = finiteClamp (next.lengthSeconds, 0.01f, 18.0f, controls.lengthSeconds);
     controls.bodyTime = finiteClamp (next.bodyTime, 0.2f, 0.8f, controls.bodyTime);
@@ -298,8 +317,18 @@ void YoiVoice4::noteOn (int midiNote, float noteVelocity, float glideMs, bool re
         dcInput.fill (0.0f); dcOutput.fill (0.0f);
         crushHeld = 0.0f; crushCountdown = 0;
         noiseState = 0x9e3779b9u;
+        if (controls.finish > 0.f)
+        {
+            smoothedFmIndex = controls.fmIndex; smoothedFmRatio = controls.fmRatio; smoothedResonance = controls.resonance;
+            smoothedDirt = controls.dirt; smoothedBite = controls.bite; smoothedBodyGain = controls.output;
+            smoothedSubGain = controls.sub; smoothedWidth = controls.width; smoothedSquash = controls.squash;
+            smoothedDirectMix = controls.subMode == 1 ? 1.f : 0.f;
+            smoothedDrivenMix = controls.subMode == 2 ? 1.f : 0.f; smoothedLowCut = controls.lowCut ? 1.f : 0.f;
+        }
     }
     currentNote = std::clamp (midiNote, 0, 127);
+    lowestTarget = static_cast<float> (currentNote);
+    if (!wasAudible) { lowestSmoothed = lowestTarget; finisher.reset(); }
     velocity = finiteClamp (noteVelocity, 0.0f, 1.0f, 1.0f);
     velocityGain = std::sqrt (velocity);
     targetSemitones = static_cast<float> (currentNote);
@@ -423,6 +452,24 @@ YoiVoice4::Frame YoiVoice4::renderFrame() noexcept
     }
     const float frequency = std::min (midiFrequency (noteSemitones + bendSmoothed + envelopeOffset),
                                       static_cast<float> (sampleRate * 0.45));
+    if (controls.lowCutTrack)
+    {
+        lowestSmoothed += (lowestTarget - lowestSmoothed) * std::min (glideCoefficient, controlSmoothingAmount);
+        if (--trackCountdown <= 0)
+        {
+            trackedHz = std::clamp (1.41421356237f * midiFrequency (lowestSmoothed + bendSmoothed), 35.f, 350.f);
+            bodyHighPass[0].configure (trackedHz, .5411961f, internalRate);
+            bodyHighPass[1].configure (trackedHz, 1.3065630f, internalRate);
+            trackCountdown = 16;
+        }
+    }
+    const double subStep = controls.subOnNote ? static_cast<double> (midiFrequency (noteSemitones + bendSmoothed)) / internalRate : 0.0;
+    // Below 30 Hz, ease the sub out rather than moving its musical pitch.
+    // The factory phrase is unchanged; very low user MIDI cannot accumulate
+    // an infrasonic sine. Legacy sub mode bypasses this protection exactly.
+    const float subHz = static_cast<float> (subStep * internalRate);
+    const float ratio = 30.f / std::max (subHz, 1.f), ratio2 = ratio * ratio, ratio4 = ratio2 * ratio2;
+    const float subSafeGain = controls.finish > 0.f && controls.subOnNote ? 1.f / std::sqrt (1.f + ratio4 * ratio4) : 1.f;
     const double carrierStep = static_cast<double> (frequency) / internalRate;
     const double modulatorStep = std::min (static_cast<double> (frequency * smoothedFmRatio), internalRate * 0.45) / internalRate;
     const float articulation = 0.78f + 0.22f * std::exp (-noteAgeSeconds / 0.035f);
@@ -454,7 +501,10 @@ YoiVoice4::Frame YoiVoice4::renderFrame() noexcept
     }
     else --poseUpdateCountdown;
 
-    const float q = 2.8f + smoothedResonance * 7.2f;
+    float q = 2.8f + smoothedResonance * 7.2f;
+    // A small resonance emphasis counters the final density stage's masking
+    // of vowel peaks. Only the new voicing changes; legacy FINISH-off is exact.
+    if (controls.finish > 0.f) q *= 1.15f;
     for (std::size_t i = 0; i < 3; ++i)
     {
         formantFrequency[i] += (formantTargets[i] - formantFrequency[i]) * formantSmoothingAmount;
@@ -473,7 +523,8 @@ YoiVoice4::Frame YoiVoice4::renderFrame() noexcept
     {
         carrierPhase += carrierStep;
         modulatorPhase += modulatorStep;
-        subPhase += carrierStep * 0.5;
+        subPhase += controls.subOnNote ? subStep
+                                      : carrierStep * 0.5;
         if (carrierPhase >= 1.0) carrierPhase -= 1.0;
         if (modulatorPhase >= 1.0) modulatorPhase -= 1.0;
         if (subPhase >= 1.0) subPhase -= 1.0;
@@ -510,12 +561,13 @@ YoiVoice4::Frame YoiVoice4::renderFrame() noexcept
         bodyHighPass[0].process (body, low1, band1, high1);
         bodyHighPass[1].process (high1, low2, band2, high2);
         const float lowCutBody = body + smoothedLowCut * (high2 - body);
-        const float squashed = smoothedSquash > 0.0005f ? squash.process (lowCutBody, smoothedSquash) : lowCutBody;
+        const float squashedRaw = smoothedSquash > 0.0005f ? squash.process (lowCutBody, smoothedSquash) : lowCutBody;
 
+        const float squashed = controls.finish > 0.f ? finisher.body (squashedRaw) : squashedRaw;
         const auto subSine = static_cast<float> (std::sin (tau * subPhase));
         const float drivenSub = std::tanh (subSine * (1.0f + 5.0f * smoothedDirt)) * smoothedSubGain * 0.25f * subEnvelope * smoothedDrivenMix;
         const float directSub = subSine * smoothedSubGain * 0.28f * subEnvelope * smoothedDirectMix;
-        const float subSignal = drivenSub + directSub;
+        const float subSignal = (drivenSub + directSub) * (controls.finish > 0.f ? controls.subBalance * subSafeGain : 1.f);
 
         float side = 0.0f;
         if (smoothedWidth > 0.0005f)
@@ -531,6 +583,15 @@ YoiVoice4::Frame YoiVoice4::renderFrame() noexcept
                                          controls.separateSub ? subSignal * smoothedBodyGain : 0.0f };
         for (std::size_t c = 0; c < 3; ++c)
         {
+            if (controls.finish > 0.f)
+            {
+                if (c == 1 && std::bit_cast<std::uint32_t> (raw[0]) == std::bit_cast<std::uint32_t> (raw[1]))
+                { oversampled[c][k] = oversampled[0][k]; finisher.copyChannel (0, 1); continue; }
+                if (c == 2 && !controls.separateSub) { oversampled[c][k] = 0; continue; }
+                // Ceiling then DC blocker, both at 4x before reconstruction.
+                oversampled[c][k] = finisher.dc (finisher.glue (raw[c] * finisher.gain(), static_cast<unsigned> (c)), static_cast<unsigned> (c));
+                continue;
+            }
             const float blocked = raw[c] - dcInput[c] + dcPole * dcOutput[c];
             dcInput[c] = raw[c];
             dcOutput[c] = std::abs (blocked) > 1.0e-15f ? blocked : 0.0f;
@@ -544,7 +605,8 @@ YoiVoice4::Frame YoiVoice4::renderFrame() noexcept
     {
         const float first = decimate4x[c].process (oversampled[c][0], oversampled[c][1]);
         const float second = decimate4x[c].process (oversampled[c][2], oversampled[c][3]);
-        *outputs[c] = std::clamp (decimate2x[c].process (first, second), -0.99f, 0.99f);
+        const float down = decimate2x[c].process (first, second);
+        *outputs[c] = controls.finish > 0.f ? Finisher::guard (down) : std::clamp (down, -0.99f, 0.99f);
     }
 
     noteAgeSeconds = std::min (noteAgeSeconds + 1.0f / static_cast<float> (sampleRate), 10.0f);

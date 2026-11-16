@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Plugin/YoiBoiProcessor.h"
+#include "Dsp/IntegratedLoudness.h"
 #include <juce_audio_formats/juce_audio_formats.h>
 #include <cmath>
 #include <iomanip>
@@ -37,37 +38,9 @@ inline juce::String describeSystems (const Patch& p)
 struct DemoStats
 {
     float peak = 0.0f;
-    double rms = 0.0, dc = 0.0, loudness = -120.0; // loudness: K-weighted, ungated, LUFS-like
+    double rms = 0.0, dc = 0.0, loudness = -120.0; // loudness: BS.1770 gated integrated
     int clippedSamples = 0;
     bool finite = true;
-};
-
-// ITU-R BS.1770 K-weighting (pre-filter shelf + RLB high-pass) as two biquads,
-// integrated without gating: a "LUFS-ish" figure for comparing presets.
-class KWeighting
-{
-public:
-    explicit KWeighting (double sampleRate)
-    {
-        // Coefficients from BS.1770-4 for 48 kHz.
-        juce::ignoreUnused (sampleRate);
-        a = { { { 1.53512485958697, -2.69169618940638, 1.19839281085285, -1.69065929318241, 0.73248077421585 },
-                { 1.0, -2.0, 1.0, -1.99004745483398, 0.99007225036621 } } };
-    }
-    double process (double x)
-    {
-        for (std::size_t s = 0; s < 2; ++s)
-        {
-            const auto& c = a[s];
-            const double y = c[0] * x + c[1] * x1[s] + c[2] * x2[s] - c[3] * y1[s] - c[4] * y2[s];
-            x2[s] = x1[s]; x1[s] = x; y2[s] = y1[s]; y1[s] = y;
-            x = y;
-        }
-        return x;
-    }
-private:
-    std::array<std::array<double, 5>, 2> a {};
-    std::array<double, 2> x1 {}, x2 {}, y1 {}, y2 {};
 };
 
 inline bool renderFactoryDemos (const juce::File& folder, bool writeAudio = true)
@@ -109,7 +82,7 @@ inline bool renderFactoryDemos (const juce::File& folder, bool writeAudio = true
             .withSampleRate (sampleRate).withNumChannels (2).withBitsPerSample (24));
         return writer != nullptr && writer->writeFromAudioSampleBuffer (audio, 0, audio.getNumSamples());
     };
-    std::cout << "folder\tpreset\tengine\tpeak\tpeak_dBFS\tLUFSish\tRMS_dB\tDC\tclipped\tsystems\n";
+    std::cout << "folder\tpreset\tengine\tpeak\tpeak_dBFS\tLUFS_I\tRMS_dB\tDC\tclipped\tsystems\n";
     int index = 0;
     bool allSane = true;
     for (const auto& item : patches)
@@ -125,8 +98,7 @@ inline bool renderFactoryDemos (const juce::File& folder, bool writeAudio = true
         constexpr Note notes[] { { 0.0, .38, 43 }, { .57, .77, 43 },
                                  { .86, 1.07, 46 }, { 1.28, 1.86, 43 } };
         DemoStats stats;
-        KWeighting left (sampleRate), right (sampleRate);
-        double weightedSum = 0.0;
+        dsp::IntegratedLoudness meter;
         for (int start = 0; start < framesPerPreset; start += blockSize)
         {
             const int count = juce::jmin (blockSize, framesPerPreset - start);
@@ -154,14 +126,13 @@ inline bool renderFactoryDemos (const juce::File& folder, bool writeAudio = true
                 stats.clippedSamples += (std::abs (l) > 0.985f) + (std::abs (r) > 0.985f);
                 stats.rms += 0.5 * (l * l + r * r);
                 stats.dc += 0.5 * (l + r);
-                const double kl = left.process (l), kr = right.process (r);
-                weightedSum += kl * kl + kr * kr;
+                meter.push (l, r);
             }
         }
         stats.rms = std::sqrt (stats.rms / framesPerPreset);
         stats.dc /= framesPerPreset;
         // The demo phrase sounds for about 2 of the 3 seconds; integrate over the whole render.
-        stats.loudness = weightedSum > 0.0 ? -0.691 + 10.0 * std::log10 (weightedSum / framesPerPreset) : -120.0;
+        stats.loudness = meter.integrated();
         const bool sane = stats.finite && stats.peak > 0.01f && stats.peak <= 0.99f && std::abs (stats.dc) < 0.005;
         allSane = allSane && sane;
         if (writeAudio)

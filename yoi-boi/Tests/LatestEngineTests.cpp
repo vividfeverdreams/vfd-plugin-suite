@@ -109,6 +109,10 @@ void neutralLatest (YoiBoiProcessor& synth)
     auto callbacks = synth.makeEditorCallbacks();
     callbacks.loadPreset ("factory:0");
     callbacks.useLatestSoundEngine();
+    // Isolate the original 0.2.0 features below. FINISH/on-note/tracking and
+    // their modern defaults have separate console-only coverage.
+    set (synth, "finish", 0.f); set (synth, "loudness_trim", 0.f);
+    set (synth, "sub_on_note", 0.f); set (synth, "low_cut_track", 0.f); set (synth, "sub_balance", 1.f);
 }
 } // namespace
 
@@ -172,6 +176,7 @@ public:
             TempRoot root;
             YoiBoiProcessor older (root.path);
             older.makeEditorCallbacks().loadPreset ("factory:3");
+            set (older, "finish", 0.f); set (older, "loudness_trim", 0.f);
             juce::MemoryBlock data;
             older.getStateInformation (data);
             auto tree = juce::ValueTree::fromXml (*juce::AudioProcessor::getXmlFromBinary (data.getData(), static_cast<int> (data.getSize())));
@@ -183,7 +188,7 @@ public:
             for (const auto* property : { "talkMode", "talkDivision", "talkFeel", "bendRange", "glideMode", "pitchEnvSemitones",
                                           "pitchEnvMilliseconds", "width", "subPhaseReset", "shaper", "squash", "vowelStart", "vowelBody",
                                           "vowelEnd", "onsetGlide", "consonant", "consonantLevel", "velocityToMouth", "velocityToBite",
-                                          "velocityToDirt", "attackMilliseconds", "releaseMilliseconds", "meterBars" })
+                                          "velocityToDirt", "attackMilliseconds", "releaseMilliseconds", "meterBars", "finish", "loudnessTrim", "subOnNote", "lowCutTrack", "subBalance" })
                 patch.removeProperty (property, nullptr);
             juce::MemoryBlock legacy;
             juce::AudioProcessor::copyXmlToBinary (*tree.createXml(), legacy);
@@ -484,7 +489,9 @@ public:
             int silentGaps = 0; // the steps are separate notes: the level dips between them
             for (int start = 0; start + 2400 <= 72000; start += 2400) silentGaps += rms (audio, 0, start, start + 2400) < 0.004;
             juce::ignoreUnused (silentGaps);
-            expectLessThan (rms (audio, 0, 91000, 96000), 0.003, "and its tail dies away");
+            // Relative to the phrase: FINISH plays everything about 13 dB louder, so an
+            // absolute floor no longer says whether the release has finished.
+            expectLessThan (rms (audio, 0, 91000, 96000) / rms (audio, 0, 0, 72000), 0.03, "and its tail dies away (30 dB under the phrase)");
             synth.setPlayHead (nullptr);
         }
 
@@ -632,7 +639,7 @@ public:
             expectGreaterOrEqual (latest, 72);
             for (const auto* folder : { "Classic", "Yoi", "Riddim", "Talk", "Growl", "Squelch", "Wobble", "Reese", "Sub", "Space", "Leads/FX" })
                 expectGreaterOrEqual (folders[folder], 6, juce::String (folder) + " has at least six sounds");
-            // The originals are byte-for-byte the 0.1.3-0.1.6 recipes.
+            // The original synthesis recipes/ids remain; the backend FINISH voicing is new.
             const auto& tape = bank[0];
             expectEquals (tape.name, juce::String ("Tape Bounce"));
             expectEquals (tape.mouth, .94f); expectEquals (tape.size, .54f); expectEquals (tape.bite, .62f);

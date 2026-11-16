@@ -408,6 +408,9 @@ Patch sanitizedPatch (Patch patch)
     patch.velocityToDirt = bounded (patch.velocityToDirt, 0.0f, 1.0f, 0.0f);
     patch.attackMilliseconds = bounded (patch.attackMilliseconds, 0.5f, 200.0f, fallback.attackMilliseconds);
     patch.releaseMilliseconds = bounded (patch.releaseMilliseconds, 5.0f, 2000.0f, fallback.releaseMilliseconds);
+    patch.finish = bounded (patch.finish, 0.f, 1.f, 0.f);
+    patch.subBalance = bounded (patch.subBalance, 0.f, 2.f, 1.f);
+    patch.loudnessTrim = bounded (patch.loudnessTrim, -24.f, 36.f, 0.f);
     return patch;
 }
 
@@ -547,6 +550,8 @@ const std::array<Patch, 12>& factoryPresets()
             // with, so sessions and Favorites that reference them recall exactly.
             p.soundEngine = 3;
             p.randomizerVersion = 2;
+            p.outputDecibels = -6.f; p.finish = 0.f; p.loudnessTrim = 0.f; p.subBalance = 1.f;
+            p.subOnNote = p.lowCutTrack = false;
             p.folder = "Classic";
             p.tags = juce::StringArray { "Classic", familyName (p.family) };
             result[i].presetId = "factory:" + juce::String (static_cast<int> (i));
@@ -620,6 +625,8 @@ juce::ValueTree toValueTree (const Patch& source)
     set ("attackMilliseconds", patch.attackMilliseconds);
     set ("releaseMilliseconds", patch.releaseMilliseconds);
     set ("meterBars", patch.meterBars ? 1 : 0);
+    set ("finish", patch.finish); set ("loudnessTrim", patch.loudnessTrim); set ("subBalance", patch.subBalance);
+    set ("subOnNote", patch.subOnNote ? 1 : 0); set ("lowCutTrack", patch.lowCutTrack ? 1 : 0);
     return tree;
 }
 
@@ -660,7 +667,7 @@ std::optional<Patch> fromValueTree (const juce::ValueTree& tree)
     patch.lengthDivision = readInt (tree, "lengthDivision", nearestDivision (patch.lengthSeconds));
     patch.lengthFeel = readInt (tree, "lengthFeel", 0);
     patch.glideMilliseconds = readFloat (tree, "glideMilliseconds", patch.glideMilliseconds);
-    patch.outputDecibels = readFloat (tree, "outputDecibels", patch.outputDecibels);
+    patch.outputDecibels = readFloat (tree, "outputDecibels", -6.f);
     patch.startPose = readInt (tree, "startPose", patch.startPose);
     patch.bodyPose = readInt (tree, "bodyPose", patch.bodyPose);
     patch.endPose = readInt (tree, "endPose", patch.endPose);
@@ -693,6 +700,11 @@ std::optional<Patch> fromValueTree (const juce::ValueTree& tree)
     patch.attackMilliseconds = readFloat (tree, "attackMilliseconds", patch.attackMilliseconds);
     patch.releaseMilliseconds = readFloat (tree, "releaseMilliseconds", patch.releaseMilliseconds);
     patch.meterBars = readInt (tree, "meterBars", 0) != 0;
+    patch.finish = readFloat (tree, "finish", 0.f);
+    patch.subBalance = readFloat (tree, "subBalance", 1.f);
+    patch.loudnessTrim = readFloat (tree, "loudnessTrim", 0.f);
+    patch.subOnNote = readInt (tree, "subOnNote", 0) != 0;
+    patch.lowCutTrack = readInt (tree, "lowCutTrack", 0) != 0;
     return sanitizedPatch (std::move (patch));
 }
 } // namespace yoiboi

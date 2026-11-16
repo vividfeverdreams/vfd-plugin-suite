@@ -9,6 +9,7 @@
 #include <iostream>
 #include <limits>
 #include <memory>
+#include <map>
 #include <vector>
 
 namespace yoiboi
@@ -266,9 +267,9 @@ struct ParameterSnapshot
 inline std::vector<ParameterSnapshot> snapshotParameters (juce::AudioPluginInstance& plugin)
 {
     std::vector<ParameterSnapshot> result;
-    for (const auto* name : soundParameterNames)
-        if (auto* parameter = parameterNamed (plugin, name))
-            result.push_back ({ name, parameterId (*parameter), parameter->getParameterIndex(),
+    for (auto* parameter : plugin.getParameters())
+        if (parameter->getName (128) != "Bypass")
+            result.push_back ({ parameter->getName (128), parameterId (*parameter), parameter->getParameterIndex(),
                                 parameter->getNumSteps(), parameter->getValue() });
     return result;
 }
@@ -276,12 +277,21 @@ inline std::vector<ParameterSnapshot> snapshotParameters (juce::AudioPluginInsta
 inline bool verifyParameters (const std::vector<ParameterSnapshot>& original, juce::AudioPluginInstance& restored)
 {
     bool passed = true;
+    std::map<juce::String, juce::AudioProcessorParameter*> byName;
+    for (auto* parameter : restored.getParameters()) byName.emplace (parameter->getName (128), parameter);
     for (const auto& before : original)
     {
-        auto* after = parameterNamed (restored, before.name);
+        const auto found = byName.find (before.name);
+        auto* after = found != byName.end() ? found->second : nullptr;
+        // The headless JUCE host appends virtual MIDI CC entries after the
+        // instrument controls. Appending real controls moves those host-only
+        // indices; their IDs/steps/values still must stay stable. All original
+        // synth parameter indices remain a strict compatibility contract.
+        const bool sameIndex = before.name.startsWith ("MIDI CC ")
+                            || (after != nullptr && before.index == after->getParameterIndex());
         const bool matches = after != nullptr && before.id.isNotEmpty()
             && before.id == parameterId (*after)
-            && before.index == after->getParameterIndex()
+            && sameIndex
             && before.steps == after->getNumSteps()
             && std::abs (before.value - after->getValue()) < 1.0e-6f;
         if (! matches)
@@ -296,7 +306,7 @@ inline bool verifyParameters (const std::vector<ParameterSnapshot>& original, ju
 }
 } // namespace compatibility
 
-inline bool testPluginCompatibility (const juce::String& oldPath, const juce::String& newPath)
+inline bool testPluginCompatibility (const juce::String& oldPath, const juce::String& newPath, bool bitExact025 = false)
 {
     using namespace compatibility;
     juce::MessageManager::getInstance();
@@ -327,8 +337,11 @@ inline bool testPluginCompatibility (const juce::String& oldPath, const juce::St
         return result;
     };
 
+    if (bitExact025 && oldDescriptions[0]->version != "0.2.5")
+    { std::cerr << "--check-025 requires real 0.2.5 VST3\n"; return false; }
     int passed = 0, failed = 0;
     double worst = 0.0;
+    for (int forcedEngine = bitExact025 ? 1 : 0; forcedEngine <= (bitExact025 ? 4 : 0); ++forcedEngine)
     for (int fixture = 0; fixture < 4; ++fixture)
         for (const auto rate : { 44100.0, 48000.0, 96000.0 })
             for (const auto block : { 64, 257, 1024 })
@@ -344,6 +357,20 @@ inline bool testPluginCompatibility (const juce::String& oldPath, const juce::St
                 {
                     std::cerr << "Historical binary did not return readable real processor state\n";
                     return false;
+                }
+                if (bitExact025)
+                {
+                    // Deliver the same genuine 0.2.5 serialized state to both
+                    // binaries with each permanent saved engine identifier.
+                    auto payload = processorState (historicalState);
+                    payload.getChildWithName ("YoiBoiPatch").setProperty ("soundEngine", forcedEngine, nullptr);
+                    auto outer = juce::AudioProcessor::getXmlFromBinary (historicalState.getData(), static_cast<int> (historicalState.getSize()));
+                    juce::MemoryBlock inner;
+                    juce::AudioProcessor::copyXmlToBinary (*payload.createXml(), inner);
+                    auto* component = outer->getChildByName ("IComponent");
+                    if (!component) return false;
+                    component->deleteAllTextElements(); component->addTextElement (inner.toBase64Encoding());
+                    juce::AudioProcessor::copyXmlToBinary (*outer, historicalState);
                 }
                 // Reopen the reference too: compare how the very same saved
                 // project plays in its original release and after updating.
@@ -378,7 +405,7 @@ inline bool testPluginCompatibility (const juce::String& oldPath, const juce::St
                 const auto fromNewSave = render (*reopened, rate, block, automate, tempo);
                 // Engine 3: compare up to the CC123 frame, then require a release.
                 const auto cc123Frame = static_cast<std::size_t> (juce::roundToInt (allNotesOffSeconds * rate));
-                const auto comparedFrames = expectedEngine >= 3 ? cc123Frame : reference.samples.size();
+                const auto comparedFrames = expectedEngine >= 3 && !bitExact025 ? cc123Frame : reference.samples.size();
                 const auto initialDifference = compare (reference, updated, comparedFrames);
                 const auto reopenedDifference = compare (reference, fromNewSave, comparedFrames);
                 const auto peakIn = [] (const RenderedAudio& audio, std::size_t begin, std::size_t end)
@@ -401,7 +428,8 @@ inline bool testPluginCompatibility (const juce::String& oldPath, const juce::St
                     releaseOk = releasePeak <= preReleasePeak * 1.25 + 1.0e-6 && lastTail <= preReleasePeak + 1.0e-6;
                 }
                 const bool ok = firstParameterCheck && secondParameterCheck && engineSaved && engineReopened
-                    && initialDifference.passed && reopenedDifference.passed && releaseOk;
+                    && initialDifference.passed && reopenedDifference.passed && releaseOk
+                    && (!bitExact025 || (initialDifference.maximum <= 0 && reopenedDifference.maximum <= 0));
                 ok ? ++passed : ++failed;
                 worst = std::max ({ worst, initialDifference.maximum, reopenedDifference.maximum });
                 std::cout << (ok ? "PASS" : "FAIL") << " fixture=" << fixture << " rate=" << rate
@@ -423,6 +451,6 @@ inline bool testPluginCompatibility (const juce::String& oldPath, const juce::St
             }
     std::cout << "Historical compatibility result: " << passed << " passed, " << failed
               << " failed; worst sample error=" << std::scientific << worst << std::defaultfloat << '\n';
-    return passed == 36 && failed == 0;
+    return passed == (bitExact025 ? 144 : 36) && failed == 0;
 }
 } // namespace yoiboi

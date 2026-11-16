@@ -56,7 +56,7 @@ struct Patch
     int lengthDivision = 1;
     int lengthFeel = 0; // Straight, triplet, dotted; division indices stay stable.
     float glideMilliseconds = 24.0f;
-    float outputDecibels = -6.0f;
+    float outputDecibels = 0.0f;
 
     // Vowel poses are EE, EH, AH, OH, OO = 0..4, matching YoiVoice.
     int startPose = 4;
@@ -87,6 +87,10 @@ struct Patch
     float velocityToMouth = 0.0f, velocityToBite = 0.0f, velocityToDirt = 0.0f;
     float attackMilliseconds = 3.0f, releaseMilliseconds = 75.0f;
     bool meterBars = false;    // opt-in: "1 Bar" follows the host time signature
+
+    // 0.3.0: appended permanent controls. Missing fields load legacy values.
+    float finish = .25f, loudnessTrim = 12.0f, subBalance = .75f;
+    bool subOnNote = true, lowCutTrack = true;
 
     // Library metadata for factory sounds; not part of the sound or saved state.
     juce::String folder;

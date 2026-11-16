@@ -2,6 +2,7 @@
 
 #include <array>
 #include "HalfbandDecimator.h"
+#include "Finisher.h"
 
 namespace yoiboi::dsp
 {
@@ -28,6 +29,7 @@ struct VoiceControls
     int bodyPose = 3;
     int endPose = 0;
     bool loop = false;
+    float finish = 0.0f, loudnessTrim = 0.0f, subBalance = 1.0f; // neutral for direct/legacy DSP callers
 };
 
 class YoiVoice final
@@ -80,6 +82,7 @@ private:
     std::array<float, 24> directSubDelay {};
     unsigned subDelayPosition = 0;
     VoiceControls controls {};
+    Finisher finisher;
     double sampleRate = 48000.0;
     double carrierPhase = 0.0;
     double modulatorPhase = 0.0;

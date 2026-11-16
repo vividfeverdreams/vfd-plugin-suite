@@ -58,7 +58,7 @@ juce::ValueTree historicalEngineState (YoiBoiProcessor& synth, int engine)
     for (const auto* property : { "talkMode", "talkDivision", "talkFeel", "bendRange", "glideMode", "pitchEnvSemitones",
                                   "pitchEnvMilliseconds", "width", "subPhaseReset", "shaper", "squash", "vowelStart", "vowelBody",
                                   "vowelEnd", "onsetGlide", "consonant", "consonantLevel", "velocityToMouth", "velocityToBite",
-                                  "velocityToDirt", "attackMilliseconds", "releaseMilliseconds", "meterBars" })
+                                  "velocityToDirt", "attackMilliseconds", "releaseMilliseconds", "meterBars", "finish", "loudnessTrim", "subOnNote", "lowCutTrack", "subBalance" })
         patch.removeProperty (property, nullptr);
     if (engine < 3)
     {

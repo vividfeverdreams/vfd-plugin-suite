@@ -55,6 +55,8 @@ ParameterValues parameterValuesFor (const Patch& patch)
     v[pAttackMs] = patch.attackMilliseconds;
     v[pReleaseMs] = patch.releaseMilliseconds;
     v[pMeterBars] = flag (patch.meterBars);
+    v[pFinish] = patch.finish; v[pSubOnNote] = flag (patch.subOnNote);
+    v[pLowCutTrack] = flag (patch.lowCutTrack); v[pLoudnessTrim] = patch.loudnessTrim; v[pSubBalance] = patch.subBalance;
     return v;
 }
 
@@ -90,6 +92,8 @@ dsp::LatestControls controlsFor (const ParameterValues& v, const HostTiming& tim
             * beats * lengthFeelMultiplier (v[pLengthFeel]), .01f, 18.0f);
     }
     else c.lengthSeconds = v[pLengthMs] * 0.001f;
+    c.finish = v[pFinish]; c.loudnessTrim = v[pLoudnessTrim]; c.subBalance = v[pSubBalance];
+    c.subOnNote = v[pSubOnNote] > .5f; c.lowCutTrack = v[pLowCutTrack] > .5f;
     if (! latest) return c;
 
     c.talkMode = std::clamp (static_cast<int> (v[pTalkMode]), 0, 3);

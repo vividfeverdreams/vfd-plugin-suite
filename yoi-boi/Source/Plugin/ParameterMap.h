@@ -17,6 +17,8 @@ enum ParameterIndex : int
     pTalkMode, pTalkRate, pTalkFeel, pBendRange, pGlideMode, pPitchEnv, pPitchEnvMs, pWidth, pSubReset,
     pShaper, pSquash, pVowelStart, pVowelBody, pVowelEnd, pOnsetGlide, pConsonant, pConsonantLevel,
     pVelocityMouth, pVelocityBite, pVelocityDirt, pAttackMs, pReleaseMs, pMeterBars,
+    // 0.3.0, always append.
+    pFinish, pSubOnNote, pLowCutTrack, pLoudnessTrim, pSubBalance,
     parameterCount
 };
 constexpr int originalParameterCount = 19;
@@ -27,7 +29,8 @@ inline constexpr std::array<const char*, parameterCount> parameterIds {
     "sub_mode", "low_cut", "length_feel",
     "talk_mode", "talk_rate", "talk_feel", "bend_range", "glide_mode", "pitch_env", "pitch_env_ms", "width",
     "sub_reset", "shaper", "squash", "vowel_start", "vowel_body", "vowel_end", "onset_glide", "consonant",
-    "consonant_level", "vel_mouth", "vel_bite", "vel_dirt", "attack_ms", "release_ms", "meter_bars"
+    "consonant_level", "vel_mouth", "vel_bite", "vel_dirt", "attack_ms", "release_ms", "meter_bars",
+    "finish", "sub_on_note", "low_cut_track", "loudness_trim", "sub_balance"
 };
 
 using ParameterValues = std::array<float, parameterCount>;

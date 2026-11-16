@@ -1,3 +1,22 @@
+<!-- 0.3.0 FINISH VALIDATION -->
+# YOI-BOI 0.3.0 console validation — 2026-11-11
+
+All 87 factory sounds measure -10.020 to -9.982 LUFS integrated, maximum true peak -1.144 dBTP. Vowel/formant contrast median increases 1.13%; no preset loses more than 9.42%. All 200 fresh-default rolls pass −10 ±2 LU and −1 dBTP.
+
+FINISH, tracked low cut, on-note sub, compatibility migration and measured trims are covered by console-only modes. The full results, callback CPU, exact old-state checks and every executed test/iteration are recorded in `../../outputs/yoi-boi-0.3.0/measurements.md`. The Release AU/VST3/Standalone/test targets build with `COPY_PLUGIN_AFTER_BUILD` OFF. No plug-in installation, GUI/window/editor construction, AU hosting, Standalone execution or pluginval occurred in this sandbox.
+
+The pre-existing executable was actually 0.2.4; it was preserved before rebuilding. A 0.2.5 reference was built from e11fd98 for strict compatibility. Reported latency is unchanged from 0.2.5 (engines 1/2: 0, engines 3/4: their 24-sample reconstruction delay); FINISH adds no delay. Legacy states keep their exact rendering.
+
+Claude still needs to run the unrestricted full suite, GUI/editor and host-key tests, AU host check, and pluginval outside this sandbox. The meter keeps its existing −60..0 dB scale and will occupy more upper cyan segments.
+
+---
+
+## Historical 0.2.0 validation (not rerun as a full suite for 0.3.0)
+
+The results below are historical. Their old ungated level claims and “unchanged factory output” statements are superseded by the 0.3.0 measurements above. Their GUI/pluginval/AU successes are not claims about this sandbox run.
+
+<!-- 0.2.0 HISTORICAL CONTENT -->
+
 # YOI-BOI 0.2.0 validation
 
 Apple Silicon macOS Release build, JUCE 9.0.2. Checked 5 October 2026.

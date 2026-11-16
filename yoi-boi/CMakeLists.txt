@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.22)
-project(YoiBoi VERSION 0.2.5 LANGUAGES C CXX)
+project(YoiBoi VERSION 0.3.0 LANGUAGES C CXX)
 
 if (APPLE)
     enable_language(OBJCXX)
@@ -46,9 +46,11 @@ juce_add_plugin(YoiBoi
 
 target_sources(YoiBoi PRIVATE
     Source/Plugin/YoiBoiProcessor.cpp
+    Source/Plugin/LoudnessVoicing.cpp
     Source/Plugin/ParameterMap.cpp
     Source/Plugin/BounceRenderer.cpp
     Source/Patch/FactoryPresets.cpp
+    Source/Dsp/Finisher.cpp
     Source/Dsp/YoiVoice4.cpp
     Source/Dsp/YoiVoice.cpp
     Source/Dsp/Legacy/YoiVoice010.cpp
@@ -108,10 +110,12 @@ if (YOIBOI_BUILD_TESTS)
         Tests/EditorInteractionTests.cpp
         Tests/RegressionTests.cpp
         Tests/LatestEngineTests.cpp
-        Source/Plugin/ParameterMap.cpp
+        Source/Plugin/LoudnessVoicing.cpp
+    Source/Plugin/ParameterMap.cpp
         Source/Plugin/BounceRenderer.cpp
         Source/Patch/FactoryPresets.cpp
-        Source/Dsp/YoiVoice4.cpp
+        Source/Dsp/Finisher.cpp
+    Source/Dsp/YoiVoice4.cpp
         Source/Dsp/YoiVoice.cpp
         Source/Dsp/Legacy/YoiVoice010.cpp
         Source/Dsp/Legacy/YoiVoice012.cpp

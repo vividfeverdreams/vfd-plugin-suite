@@ -1,12 +1,11 @@
 #include "Patch.h"
+#include "FactoryFinish.h"
 
 #include <algorithm>
 
-// The 0.2.0 factory bank. The twelve originals (factory:0..11, engine 3) come
-// first and never change; every sound below uses engine 4 and gets the next id.
-// Recipes are authored settings, not randomizer seeds. Output trims were set
-// from objective renders (see FACTORY-PRESETS.md) so the bank sits within a
-// few dB of itself without touching the protective ceiling.
+// Stable factory recipes/ids: twelve engine-3 originals, then engine 4.
+// The 0.3.0 backend voicing/level table is applied when the bank is assembled.
+// Saved legacy patches keep their own resolved fields and bypass that table.
 namespace yoiboi
 {
 namespace
@@ -283,6 +282,14 @@ const std::vector<Patch>& allFactoryPresets()
     {
         std::vector<Patch> result (factoryPresets().begin(), factoryPresets().end());
         for (auto& patch : latestBank()) result.push_back (std::move (patch));
+        for (std::size_t i = 0; i < result.size(); ++i)
+        {
+            if (result[i].name == "Space Bass Cadet") result[i].resonance = .95f;
+            result[i].subBalance = factorySubBalance[i];
+            result[i].finish = factoryFinishAmount[i]; result[i].outputDecibels = 0.f;
+            result[i].loudnessTrim = factoryFinishTrim[i];
+            result[i].subOnNote = result[i].lowCutTrack = true;
+        }
         return result;
     }();
     return presets;

@@ -97,6 +97,7 @@ void YoiVoice::prepare (double newSampleRate) noexcept
     subReleaseAmount = onePoleAmount (0.085f, sampleRate);
     controlSmoothingAmount = onePoleAmount (0.006f, sampleRate);
     formantSmoothingAmount = onePoleAmount (0.004f, sampleRate);
+    finisher.prepare (sampleRate * 4.0);
     decimate4x.prepare();
     decimate2x.prepare();
     bodyHighPass[0].configure (110.0f, 0.5411961f, sampleRate * 4.0);
@@ -110,6 +111,7 @@ void YoiVoice::reset() noexcept
         band.reset();
     for (auto& band : bodyHighPass)
         band.reset();
+    finisher.reset();
     decimate4x.reset();
     decimate2x.reset();
     directSubDelay.fill (0.0f);
@@ -151,6 +153,10 @@ void YoiVoice::setControls (const VoiceControls& next) noexcept
     controls.sub = finiteClamp (next.sub, 0.0f, 1.0f, controls.sub);
     controls.subMode = std::clamp (next.subMode, 0, 2);
     controls.lowCut = next.lowCut;
+    controls.finish = std::clamp (next.finish, 0.f, 1.f);
+    controls.subBalance = finiteClamp (next.subBalance, 0.f, 2.f, 1.f);
+    controls.loudnessTrim = std::clamp (next.loudnessTrim, -24.f, 36.f);
+    finisher.set (controls.finish, controls.loudnessTrim);
     controls.output = finiteClamp (next.output, 0.0f, 2.0f, controls.output);
     controls.lengthSeconds = finiteClamp (next.lengthSeconds, 0.01f, 18.0f,
                                           controls.lengthSeconds);
@@ -171,6 +177,20 @@ void YoiVoice::setControls (const VoiceControls& next) noexcept
 void YoiVoice::noteOn (int midiNote, float velocity, float glideMs, bool retrigger) noexcept
 {
     const auto wasAudible = isAudible();
+    if (!wasAudible && controls.finish > 0.f)
+    {
+        // New FINISH sounds start reproducibly. A stale smoothed FM ratio
+        // otherwise changes the persistent modulator/carrier phase relation
+        // depending on the preceding preset, invalidating a baked level trim.
+        carrierPhase = modulatorPhase = subPhase = 0;
+        smoothedFmIndex = controls.fmIndex; smoothedFmRatio = controls.fmRatio;
+        smoothedResonance = controls.resonance; smoothedDirt = controls.dirt; smoothedBite = controls.bite;
+        smoothedBodyGain = controls.output; smoothedSubGain = controls.sub;
+        smoothedDirectMix = controls.subMode == 1 ? 1.f : 0.f;
+        smoothedDrivenMix = controls.subMode == 2 ? 1.f : 0.f;
+        smoothedLowCut = controls.lowCut ? 1.f : 0.f;
+        finisher.reset();
+    }
     currentNote = std::clamp (midiNote, 0, 127);
     velocityGain = std::sqrt (finiteClamp (velocity, 0.0f, 1.0f, 1.0f));
     targetFrequency = frequencyForCurrentNote();
@@ -356,7 +376,13 @@ float YoiVoice::renderSample() noexcept
         const float drivenSub = std::tanh (static_cast<float> (std::sin (tau * subPhase))
                                 * (1.0f + 5.0f * smoothedDirt))
                                 * smoothedSubGain * 0.25f * subEnvelope * smoothedDrivenMix;
-        sample = lowCutBody + drivenSub;
+        if (controls.finish > 0.f)
+        {
+            const float direct = static_cast<float> (std::sin (tau * subPhase)) * smoothedSubGain * .28f * subEnvelope * smoothedDirectMix;
+            const float mixed = (finisher.body (lowCutBody) + (drivenSub + direct) * controls.subBalance) * smoothedBodyGain * finisher.gain();
+            sample = finisher.dc (finisher.glue (mixed, 0), 0);
+        }
+        else sample = lowCutBody + drivenSub;
     }
     const auto firstPair = decimate4x.process (oversampled[0], oversampled[1]);
     const auto secondPair = decimate4x.process (oversampled[2], oversampled[3]);
@@ -388,6 +414,6 @@ float YoiVoice::renderSample() noexcept
     dcPreviousOutput = std::abs (dcRemoved) > 1.0e-15f ? dcRemoved : 0.0f;
     // A DC blocker can momentarily overshoot its input peak after a sudden
     // offset change. Keep the host output bounded even at the +6 dB setting.
-    return std::clamp (dcRemoved, -0.98f, 0.98f);
+    return controls.finish > 0.f ? Finisher::guard (bodyAndDrivenSub) : std::clamp (dcRemoved, -0.98f, 0.98f);
 }
 } // namespace yoiboi::dsp

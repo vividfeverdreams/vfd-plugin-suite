@@ -1,7 +1,9 @@
 #include <juce_audio_processors/juce_audio_processors.h>
 #include "Plugin/YoiBoiProcessor.h"
 #include "PresetRender.h"
+#include "FinishConsole.h"
 #include "CompatibilityFixtures.h"
+#include "FinishBenchmark.h"
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
@@ -271,6 +273,41 @@ int main (int argc, char* argv[])
     if (argc >= 3 && juce::String::fromUTF8(argv[1]) == "--check-au")
         return checkAudioUnit (juce::String::fromUTF8 (argv[2])) ? 0 : 1;
 #endif
+    // Audited console-only routes: pure DSP or WAV I/O, no editor/window.
+    if (argc >= 3 && juce::String::fromUTF8(argv[1]) == "--finish-candidates")
+        return yoiboi::finishCandidates (juce::File (juce::String::fromUTF8 (argv[2]))) ? 0 : 1;
+    if (argc >= 4 && juce::String::fromUTF8(argv[1]) == "--bench-finish")
+        return yoiboi::benchmarkFinish (juce::String::fromUTF8(argv[2]), juce::String::fromUTF8(argv[3])) ? 0 : 1;
+    if (argc >= 2 && juce::String::fromUTF8(argv[1]) == "--check-core")
+    {
+        // These three files have no editor/window constructors. Keep the
+        // allow-list explicit: the general category includes GUI tests.
+        juce::Array<juce::UnitTest*> selected;
+        for (auto* test : juce::UnitTest::getAllTests())
+            if (test->getName() == "YOI-BOI instrument integration"
+                || test->getName() == "YOI-BOI patch state and randomization"
+                || test->getName() == "YOI-BOI saved engine compatibility") selected.add (test);
+        juce::UnitTestRunner runner; runner.setAssertOnFailure (false); runner.runTests (selected, 12345);
+        int failures = 0, passes = 0;
+        for (int i = 0; i < runner.getNumResults(); ++i)
+        {
+            const auto* result = runner.getResult (i); failures += result->failures; passes += result->passes;
+            std::cout << result->unitTestName << " / " << result->subcategoryName << ": " << result->passes << " passed, " << result->failures << " failed\n";
+            for (const auto& message : result->messages) std::cout << "  " << message << '\n';
+        }
+        std::cout << "CORE " << passes << " passed, " << failures << " failed\n";
+        return selected.size() == 3 && failures == 0 ? 0 : 1;
+    }
+    if (argc >= 2 && juce::String::fromUTF8(argv[1]) == "--check-finish")
+        return yoiboi::checkFinishDSP() ? 0 : 1;
+    if (argc >= 4 && juce::String::fromUTF8(argv[1]) == "--check-025")
+        return yoiboi::testPluginCompatibility (juce::String::fromUTF8(argv[2]), juce::String::fromUTF8(argv[3]), true) ? 0 : 1;
+    if (argc >= 3 && juce::String::fromUTF8(argv[1]) == "--bake-finish")
+        return yoiboi::bakeFinish (juce::File (juce::String::fromUTF8 (argv[2]))) ? 0 : 1;
+    if (argc >= 3 && juce::String::fromUTF8(argv[1]) == "--measure-wavs")
+        return yoiboi::measureWavs (juce::File (juce::String::fromUTF8 (argv[2]))) ? 0 : 1;
+    if (argc >= 3 && juce::String::fromUTF8(argv[1]) == "--roll-stats")
+        return yoiboi::rollStats (juce::String::fromUTF8 (argv[2]).getIntValue()) ? 0 : 1;
     if (argc >= 3 && juce::String::fromUTF8(argv[1]) == "--preset-stats")
         return yoiboi::renderFactoryDemos (juce::File (juce::String::fromUTF8 (argv[2])), false) ? 0 : 1;
     if (argc >= 4 && juce::String::fromUTF8(argv[1]) == "--check-compat")

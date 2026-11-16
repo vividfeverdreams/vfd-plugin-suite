@@ -29,6 +29,7 @@ struct LatestControls : VoiceControls
     float consonantLevel = 0.5f;
     float velocityToMouth = 0.0f, velocityToBite = 0.0f, velocityToDirt = 0.0f;
     float attackSeconds = 0.003f, releaseSeconds = 0.075f;
+    bool subOnNote = false, lowCutTrack = false; // old controls remain neutral
     bool separateSub = false;     // the host enabled the "Sub" output bus
 };
 
@@ -47,6 +48,8 @@ public:
     void noteOn (int midiNote, float velocity, float glideMs, bool retrigger = true) noexcept;
     void noteOff() noexcept;
     void setPitchBend (float semitones) noexcept;
+    void setLowestHeldNote (int note) noexcept { lowestTarget = static_cast<float> (std::clamp (note, 0, 127)); }
+    float trackedCutoff() const noexcept { return trackedHz; }
     void setTalkScrub (float position) noexcept; // 0..1 from mod wheel or aftertouch
     Frame renderFrame() noexcept;
     float renderSample() noexcept { return renderFrame().left; }
@@ -93,6 +96,10 @@ private:
     Svf sideHighPass, consonantFilter;
     Allpass decorrelateA, decorrelateB;
     Squash squash;
+    Finisher finisher;
+    float lowestTarget = 45, lowestSmoothed = 45, trackedHz = 110;
+    bool wasTracking = false;
+    int trackCountdown = 0;
     std::array<HalfbandDecimator, 3> decimate4x, decimate2x; // left, right, sub
     std::array<float, 3> dcInput {}, dcOutput {};
     LatestControls controls {};

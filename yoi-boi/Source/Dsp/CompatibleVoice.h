@@ -5,6 +5,7 @@
 #include <utility>
 
 #include "YoiVoice.h"
+#include "LegacyFinisher.h"
 #include "YoiVoice4.h"
 #include "Legacy/YoiVoice010.h"
 #include "Legacy/YoiVoice012.h"
@@ -44,7 +45,17 @@ class CompatibleVoice final
         old.loop = c.loop;
         return old;
     }
-    void resetEngine (int selected) noexcept { withEngine (selected, [] (auto& voice) { voice.reset(); }); }
+    template <typename Fn> void withBody (int selected, Fn&& fn)
+    {
+        if (selected == 1) fn (body010);
+        if (selected == 2) fn (body012);
+    }
+    void resetEngine (int selected) noexcept
+    {
+        withEngine (selected, [] (auto& v) { v.reset(); });
+        withBody (selected, [] (auto& v) { v.reset(); });
+        if (selected < 3) legacyFinish.reset();
+    }
     void cancelFade() noexcept
     {
         if (fadeSamplesLeft > 0) resetEngine (fadingEngine);
@@ -54,7 +65,13 @@ class CompatibleVoice final
     {
         if (selected == 4) return latest.renderFrame();
         // Engines 1-3 are mono: the very same sample on both sides, no sub bus.
-        const float sample = withEngine (selected, [] (auto& voice) { return voice.renderSample(); });
+        float sample = withEngine (selected, [] (auto& voice) { return voice.renderSample(); });
+        if (selected < 3)
+        {
+            float body = 0;
+            withBody (selected, [&] (auto& v) { body = v.renderSample(); });
+            if (finishAmount > 0.f) sample = legacyFinish.process (body, (sample - body) * subBalance);
+        }
         return { sample, sample, 0.0f };
     }
 public:
@@ -65,6 +82,10 @@ public:
     {
         classic010.prepare (sampleRate); classic012.prepare (sampleRate); current.prepare (sampleRate);
         latest.prepare (sampleRate);
+        legacy010::VoiceControls b1; b1.sub = 0; body010.setControls (b1);
+        legacy012::VoiceControls b2; b2.sub = 0; body012.setControls (b2);
+        body010.prepare (sampleRate); body012.prepare (sampleRate);
+        legacyFinish.prepare (sampleRate);
         held = false; bend = 0.0f;
         const auto rate = std::isfinite (sampleRate) && sampleRate >= 8000.0 ? sampleRate : 48000.0;
         fadeLength = std::max (1, static_cast<int> (std::lround (rate * fadeSeconds)));
@@ -74,6 +95,8 @@ public:
     {
         // Keep historical reset behavior, including classic010's bend handling.
         withVoice ([] (auto& voice) { voice.reset(); });
+        withBody (engine, [] (auto& v) { v.reset(); });
+        legacyFinish.reset();
         held = false;
         if (engine != 1) bend = 0.0f;
         cancelFade(); // A hard reset silences an outgoing engine's tail too.
@@ -113,22 +136,36 @@ public:
         else if (engine == 2) classic012.setControls (historicalControls<legacy012::VoiceControls> (c));
         else if (engine == 4) latest.setControls (c);
         else current.setControls (c);
+        finishAmount = std::clamp (std::isfinite (c.finish) ? c.finish : 0.f, 0.f, 1.f);
+        subBalance = std::clamp (std::isfinite (c.subBalance) ? c.subBalance : 1.f, 0.f, 2.f);
+        legacyFinish.set (c.finish, c.loudnessTrim);
+        auto bodyControls = c; bodyControls.sub = 0;
+        if (engine == 1) body010.setControls (historicalControls<legacy010::VoiceControls> (bodyControls));
+        if (engine == 2) body012.setControls (historicalControls<legacy012::VoiceControls> (bodyControls));
         if (switched)
         {
+            withBody (engine, [] (auto& v) { v.reset(); });
             withVoice ([&] (auto& voice) { voice.setPitchBend (bend); });
-            if (held) withVoice ([&] (auto& voice) { voice.noteOn (note, velocity, glide, true); });
+            withBody (engine, [&] (auto& v) { v.setPitchBend (bend); });
+            if (held)
+            {
+                withVoice ([&] (auto& voice) { voice.noteOn (note, velocity, glide, true); });
+                withBody (engine, [&] (auto& v) { v.noteOn (note, velocity, glide, true); });
+            }
         }
     }
     void noteOn (int pitch, float amount, float glideMs, bool retrigger = true) noexcept
     {
         note = pitch; velocity = amount; glide = glideMs; held = true;
         withVoice ([&] (auto& voice) { voice.noteOn (pitch, amount, glideMs, retrigger); });
+        withBody (engine, [&] (auto& v) { v.noteOn (pitch, amount, glideMs, retrigger); });
     }
-    void noteOff() noexcept { held = false; withVoice ([] (auto& voice) { voice.noteOff(); }); }
+    void noteOff() noexcept { held = false; withVoice ([] (auto& voice) { voice.noteOff(); }); withBody (engine, [] (auto& v) { v.noteOff(); }); }
     void setPitchBend (float semitones) noexcept
     {
         bend = semitones;
         withVoice ([&] (auto& voice) { voice.setPitchBend (semitones); });
+        withBody (engine, [&] (auto& v) { v.setPitchBend (semitones); });
     }
     // Mono output (the left side). For engines 1-3 it is their own sample.
     float renderSample() noexcept { return renderFrame().left; }
@@ -146,6 +183,7 @@ public:
     }
     // Mod wheel / aftertouch position for engine 4's scrubbed talk modes.
     void setTalkScrub (float position) noexcept { latest.setTalkScrub (position); }
+    void setLowestHeldNote (int lowest) noexcept { latest.setLowestHeldNote (lowest); }
     bool isAudible() const noexcept
     {
         return fadeSamplesLeft > 0 || withVoice ([] (const auto& voice) { return voice.isAudible(); });
@@ -158,6 +196,10 @@ public:
     static constexpr double fadeSeconds = 0.005;
 
 private:
+    legacy010::YoiVoice body010;
+    legacy012::YoiVoice body012;
+    LegacyFinisher legacyFinish;
+    float finishAmount = 0, subBalance = 1;
     legacy010::YoiVoice classic010;
     legacy012::YoiVoice classic012;
     YoiVoice current;

@@ -1,4 +1,5 @@
 #include "YoiBoiProcessor.h"
+#include "LoudnessVoicing.h"
 
 #include <algorithm>
 #include <cmath>
@@ -95,7 +96,8 @@ bool sameSound (const Patch& a, const Patch& b) noexcept
         && close (a.consonantLevel, b.consonantLevel) && close (a.velocityToMouth, b.velocityToMouth)
         && close (a.velocityToBite, b.velocityToBite) && close (a.velocityToDirt, b.velocityToDirt)
         && close (a.attackMilliseconds, b.attackMilliseconds) && close (a.releaseMilliseconds, b.releaseMilliseconds)
-        && a.meterBars == b.meterBars;
+        && a.meterBars == b.meterBars && close (a.finish, b.finish) && close (a.loudnessTrim, b.loudnessTrim) && close (a.subBalance, b.subBalance)
+        && a.subOnNote == b.subOnNote && a.lowCutTrack == b.lowCutTrack;
 }
 
 const Patch* factoryByName (const juce::String& name)
@@ -178,7 +180,7 @@ APVTS::ParameterLayout YoiBoiProcessor::createParameterLayout()
     p.add (std::make_unique<Bool> (juce::ParameterID { "sync", 1 }, "Sync", true));
     p.add (std::make_unique<Bool> (juce::ParameterID { "loop", 1 }, "Loop", false));
     p.add (std::make_unique<Float> (juce::ParameterID { "glide_ms", 1 }, "Glide", juce::NormalisableRange<float> (0.0f, 500.0f, 1.0f, 0.5f), 24.0f));
-    p.add (std::make_unique<Float> (juce::ParameterID { "output_db", 1 }, "Output", juce::NormalisableRange<float> (-24.0f, 6.0f, 0.1f), -6.0f));
+    p.add (std::make_unique<Float> (juce::ParameterID { "output_db", 1 }, "Output", juce::NormalisableRange<float> (-24.0f, 6.0f, 0.1f), 0.0f));
     p.add (std::make_unique<Choice> (juce::ParameterID { "start_pose", 1 }, "Start Vowel", poseChoices(), initial.startPose));
     p.add (std::make_unique<Choice> (juce::ParameterID { "body_pose", 1 }, "Body Vowel", poseChoices(), initial.bodyPose));
     p.add (std::make_unique<Choice> (juce::ParameterID { "end_pose", 1 }, "End Vowel", poseChoices(), 0));
@@ -214,6 +216,11 @@ APVTS::ParameterLayout YoiBoiProcessor::createParameterLayout()
     p.add (std::make_unique<Float> (juce::ParameterID { "attack_ms", 1 }, "Attack", ms (0.5f, 200.0f, 0.35f, 0.1f), initial.attackMilliseconds));
     p.add (std::make_unique<Float> (juce::ParameterID { "release_ms", 1 }, "Release", ms (5.0f, 2000.0f, 0.35f, 1.0f), initial.releaseMilliseconds));
     p.add (std::make_unique<Bool> (juce::ParameterID { "meter_bars", 1 }, "Bars Follow Meter", initial.meterBars));
+    p.add (std::make_unique<Float> (juce::ParameterID { "finish", 1 }, "Finish", normal, initial.finish));
+    p.add (std::make_unique<Bool> (juce::ParameterID { "sub_on_note", 1 }, "Sub On Note", initial.subOnNote));
+    p.add (std::make_unique<Bool> (juce::ParameterID { "low_cut_track", 1 }, "Low Cut Track", initial.lowCutTrack));
+    p.add (std::make_unique<Float> (juce::ParameterID { "loudness_trim", 1 }, "Loudness Trim", juce::NormalisableRange<float> (-24.f, 36.f, .001f), initial.loudnessTrim));
+    p.add (std::make_unique<Float> (juce::ParameterID { "sub_balance", 1 }, "Finish Sub Balance", juce::NormalisableRange<float> (0.f, 2.f, .001f), initial.subBalance));
     return p;
 }
 
@@ -325,6 +332,10 @@ void YoiBoiProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Midi
         // the host: a dropped note-off here would leave a stuck note.
         for (const auto metadata : midi)
             if (metadata.numBytes <= 3) handleMidi (metadata.getMessage());
+        if (soundEngine.load (std::memory_order_acquire) >= Patch::firstExtendedEngine)
+            for (int note = 0; note < 128; ++note)
+                if (pressed[static_cast<std::size_t> (note)] || sustained[static_cast<std::size_t> (note)])
+                { voice.setLowestHeldNote (note); break; }
         midi.clear();
         return;
     }
@@ -409,6 +420,10 @@ void YoiBoiProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Midi
         const int eventSample = std::clamp (metadata.samplePosition, cursor, numSamples);
         render (cursor, eventSample);
         if (metadata.numBytes <= 3) handleMidi (metadata.getMessage());
+        if (latest)
+            for (int note = 0; note < 128; ++note)
+                if (pressed[static_cast<size_t> (note)] || sustained[static_cast<size_t> (note)])
+                { voice.setLowestHeldNote (note); break; }
         cursor = eventSample;
     }
     render (cursor, numSamples);
@@ -667,6 +682,9 @@ Patch YoiBoiProcessor::livePatch() const
     patch.attackMilliseconds = rawAt (pAttackMs);
     patch.releaseMilliseconds = rawAt (pReleaseMs);
     patch.meterBars = rawAt (pMeterBars) > 0.5f;
+    patch.subBalance = rawAt (pSubBalance);
+    patch.finish = rawAt (pFinish); patch.loudnessTrim = rawAt (pLoudnessTrim);
+    patch.subOnNote = rawAt (pSubOnNote) > .5f; patch.lowCutTrack = rawAt (pLowCutTrack) > .5f;
     return sanitizedPatch (std::move (patch));
 }
 
@@ -787,8 +805,12 @@ void YoiBoiProcessor::newYoi()
             family = static_cast<Family> (i);
     auto next = yoiboi::newYoi (old, currentLocks, seed, family);
     preserveExcludedParameters (next, old);
-    if (sameSound (next, old))
+    auto comparison = next;
+    comparison.subBalance = old.subBalance; comparison.finish = old.finish; comparison.loudnessTrim = old.loudnessTrim;
+    comparison.subOnNote = old.subOnNote; comparison.lowCutTrack = old.lowCutTrack;
+    if (sameSound (comparison, old))
     { const juce::ScopedLock lock (stateMutex); status = "Unlock a control to generate"; return; }
+    voiceGeneratedPatch (next);
     applyPatch (next, true, currentLocks[4]);
     const juce::ScopedLock lock (stateMutex); status = "New sound ready";
 }
@@ -802,8 +824,12 @@ void YoiBoiProcessor::mutate()
     { const juce::ScopedLock lock (stateMutex); status = "Unlock a control to mutate"; return; }
     auto next = mutatePatch (old, currentLocks, seed);
     preserveExcludedParameters (next, old);
-    if (sameSound (next, old))
+    auto comparison = next;
+    comparison.subBalance = old.subBalance; comparison.finish = old.finish; comparison.loudnessTrim = old.loudnessTrim;
+    comparison.subOnNote = old.subOnNote; comparison.lowCutTrack = old.lowCutTrack;
+    if (sameSound (comparison, old))
     { const juce::ScopedLock lock (stateMutex); status = "Unlock a control to mutate"; return; }
+    voiceGeneratedPatch (next);
     applyPatch (next, true, currentLocks[4]);
     const juce::ScopedLock lock (stateMutex); status = "Variation applied";
 }
@@ -1036,7 +1062,14 @@ void YoiBoiProcessor::loadPreset (const juce::String& id)
           || ! userPresets[static_cast<size_t> (index)].available) return;
       patch = userPresets[static_cast<size_t> (index)].patch; }
     else return;
+    const auto authoredValues = parameterValuesFor (patch);
     keepLockedSettings (patch, livePatch());
+    // A player lock can change a preset's duration/vowel journey or sub balance.
+    // Revoice that resolved factory variant; old user files remain untouched.
+    if (prefix == "factory" && patch.finish > 0.f && parameterValuesFor (patch) != authoredValues)
+    {
+        voicePatch (patch, true);
+    }
     applyPatch (std::move (patch), true);
 }
 
@@ -1131,6 +1164,7 @@ bool YoiBoiProcessor::startBounce (int count, bool useMutate, juce::File folder)
         const auto seed = (baseSeed ^ UINT64_C (0xb0b0b0b0b0b0b0b0)) + UINT64_C (0x9e3779b97f4a7c15) * static_cast<std::uint64_t> (i + 1);
         auto next = useMutate ? mutatePatch (base, currentLocks, seed) : yoiboi::newYoi (base, currentLocks, seed, family);
         preserveExcludedParameters (next, base);
+        voiceGeneratedPatch (next);
         variants.push_back (next);
     }
     BounceRenderer::Request request;
@@ -1291,6 +1325,7 @@ void YoiBoiProcessor::setStateInformation (const void* data, int size)
         const auto* parameter = apvts.getParameter (id);
         auto fallback = parameter->convertFrom0to1 (parameter->getDefaultValue());
         if (static_cast<int> (index) >= originalParameterCount) fallback = patchValues[index];
+        if (std::strcmp (id, "output_db") == 0) fallback = -6.f;
         if (std::strcmp (id, "sub_mode") == 0) fallback = static_cast<float> (parsed->subMode);
         if (std::strcmp (id, "low_cut") == 0) fallback = parsed->lowCut ? 1.f : 0.f;
         if (std::strcmp (id, "length_feel") == 0) fallback = static_cast<float> (parsed->lengthFeel);
