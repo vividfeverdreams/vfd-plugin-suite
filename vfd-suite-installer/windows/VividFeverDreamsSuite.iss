@@ -1,9 +1,9 @@
 ; Vivid Fever Dreams Suite for Windows: the six VST3 plug-ins, chosen one by one.
 ; Built by .github/workflows/windows.yml with Inno Setup 6:
-;   ISCC.exe /DSuiteVersion=1.6.4 /DSourceDir=<folder of .vst3 bundles> VividFeverDreamsSuite.iss
+;   ISCC.exe /DSuiteVersion=1.6.5 /DSourceDir=<folder of .vst3 bundles> VividFeverDreamsSuite.iss
 
 #ifndef SuiteVersion
-  #define SuiteVersion "1.6.4"
+  #define SuiteVersion "1.6.5"
 #endif
 #ifndef SourceDir
   #define SourceDir "..\..\dist\VST3"
@@ -46,7 +46,7 @@ Name: "full"; Description: "All six plug-ins"
 Name: "custom"; Description: "Choose plug-ins"; Flags: iscustom
 
 [Components]
-Name: "yoiboi"; Description: "YOI-BOI 0.2.5  -  talking bass synth (instrument)"; Types: full
+Name: "yoiboi"; Description: "YOI-BOI 0.3.0  -  talking bass synth (instrument)"; Types: full
 Name: "throwup"; Description: "THROW-UP 0.2.4  -  mid-bass reverb throws"; Types: full
 Name: "backscratch"; Description: "BACK-SCRATCH 0.11.4  -  tempo-synced scratch patterns"; Types: full
 Name: "shifty"; Description: "SHIFTY 0.6.0  -  formant shifter for bass"; Types: full

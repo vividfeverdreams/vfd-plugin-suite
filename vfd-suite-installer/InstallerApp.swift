@@ -186,7 +186,7 @@ final class InstallerDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate
                  size: 12, weight: .semibold, color: NSColor(white: 0.72, alpha: 1), to: content)
         addLabel("The complete suite", frame: NSRect(x: 120, y: 222 + Self.rowsHeight, width: 520, height: 44),
                  size: 30, weight: .bold, color: .white, to: content)
-        let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.6.4"
+        let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.6.5"
        #if arch(x86_64)
         let chip = "INTEL"
        #else

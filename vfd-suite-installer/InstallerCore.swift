@@ -145,7 +145,7 @@ struct ItemKey: Hashable, Codable, Comparable {
 enum SuiteCatalog {
     static let installerIdentifier = "xyz.vividfeverdreams.suite.installer"
     static let plugins = [
-        PluginDefinition(name: "YOI-BOI", bundleIdentifier: "com.yoiboi.synth", version: "0.2.5",
+        PluginDefinition(name: "YOI-BOI", bundleIdentifier: "com.yoiboi.synth", version: "0.3.0",
                          audioUnit: AudioUnitIdentity(type: "aumu", subtype: "YB01", manufacturer: "YBoi")),
         PluginDefinition(name: "THROW-UP", bundleIdentifier: "com.yoiboi.throwup", version: "0.2.4",
                          audioUnit: AudioUnitIdentity(type: "aumf", subtype: "Thr1", manufacturer: "Yoib")), // MIDI-controlled effect: Logic sends MIDI throws only to aumf
