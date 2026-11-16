@@ -103,8 +103,31 @@ final class InstallerDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         installMainMenu()
+       #if arch(x86_64)
+        // The Intel installer on an Apple Silicon Mac (under Rosetta) would put Intel-only plug-ins where the
+        // native Apple Silicon ones live, and a native host couldn't load them. Send people to the right download.
+        if Self.runningUnderRosetta {
+            NSApp.activate(ignoringOtherApps: true)
+            let alert = NSAlert()
+            alert.messageText = "This is the Intel version"
+            alert.informativeText = "This Mac has Apple Silicon, so it needs the Apple Silicon installer (the download that ends in -Install.zip). Nothing was installed or changed."
+            alert.addButton(withTitle: "Open the downloads page"); alert.addButton(withTitle: "Quit")
+            if alert.runModal() == .alertFirstButtonReturn,
+               let page = URL(string: "https://github.com/vividfeverdreams/vfd-plugin-suite/releases/latest") {
+                NSWorkspace.shared.open(page)
+            }
+            NSApp.terminate(nil)
+            return
+        }
+       #endif
         prepareWindow(present: true)
         refresh(firstLoad: true)
+    }
+    /// True when this process is Intel code translated by Rosetta on an Apple Silicon Mac.
+    static var runningUnderRosetta: Bool {
+        var translated: Int32 = 0
+        var size = MemoryLayout<Int32>.size
+        return sysctlbyname("sysctl.proc_translated", &translated, &size, nil, 0) == 0 && translated == 1
     }
     private func installMainMenu() {
         let mainMenu = NSMenu()
@@ -164,7 +187,12 @@ final class InstallerDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate
         addLabel("The complete suite", frame: NSRect(x: 120, y: 222 + Self.rowsHeight, width: 520, height: 44),
                  size: 30, weight: .bold, color: .white, to: content)
         let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.6.4"
-        addLabel("MACOS 12+   /   APPLE SILICON   /   VST3 + AUDIO UNIT   /   SUITE \(version)",
+       #if arch(x86_64)
+        let chip = "INTEL"
+       #else
+        let chip = "APPLE SILICON"
+       #endif
+        addLabel("MACOS 12+   /   \(chip)   /   VST3 + AUDIO UNIT   /   SUITE \(version)",
                  frame: NSRect(x: 44, y: 190 + Self.rowsHeight, width: 614, height: 18), size: 10, weight: .medium,
                  color: NSColor(white: 0.57, alpha: 1), to: content)
         buildRows()

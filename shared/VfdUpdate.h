@@ -69,10 +69,15 @@ inline Platform thisPlatform()
    #endif
 }
 
-/** The suite installer for a platform: the Mac "...-Install.zip" or the Windows "...-Setup.exe". */
+/** The suite installer for a platform: the Apple Silicon Mac "...-Install.zip", the Intel Mac "...-Intel-Mac.zip"
+    or the Windows "...-Setup.exe". The Intel name deliberately doesn't end in "-Install.zip", so Apple Silicon
+    builds (including every one shipped before the Intel installer existed) never pick it. */
 inline bool isInstallerAsset(const juce::String& name, Platform platform)
 {
     if (name.isEmpty() || name != juce::File::createLegalFileName(name) || name.startsWithChar('.')) return false;
+   #if JUCE_MAC && defined(__x86_64__)
+    if (platform == Platform::mac) return name.endsWithIgnoreCase("-Intel-Mac.zip");
+   #endif
     if (platform == Platform::mac) return name.endsWithIgnoreCase("-Install.zip") && ! name.containsIgnoreCase("Windows");
     if (platform == Platform::windows) return name.endsWithIgnoreCase("-Setup.exe");
     return false;

@@ -17,6 +17,14 @@ if [[ -n "$installer_notary_profile" && "$installer_identity" == "-" ]]; then
     printf 'Notarization needs a Developer ID identity: set VFD_SIGN_IDENTITY.\n' >&2; exit 1
 fi
 installer_names=("YOI-BOI" "THROW-UP" "BACK-SCRATCH" "SHIFTY" "ENERGY HARVESTER" "STUTTER-STEP")
+# VFD_INSTALLER_ARCH=x86_64 builds the separate Intel installer (see release-mac-intel.sh); the default is Apple Silicon.
+# The installer app and every payload binary must be that one architecture.
+installer_arch="${VFD_INSTALLER_ARCH:-arm64}"
+case "$installer_arch" in
+    arm64) installer_chip=AppleSilicon ;;
+    x86_64) installer_chip=Intel ;;
+    *) printf 'VFD_INSTALLER_ARCH must be arm64 or x86_64.\n' >&2; exit 1 ;;
+esac
 if [[ $# -ne 15 ]]; then
     printf 'Usage: %s <VST3> <AU> for YOI-BOI, THROW-UP, BACK-SCRATCH, SHIFTY, ENERGY HARVESTER and STUTTER-STEP (in that order), then /absolute/output-directory 1.5.0 /absolute/whats-new.json\n' "$0" >&2
     exit 1
@@ -45,6 +53,11 @@ for installer_index in "${!installer_names[@]}"; do
             printf 'Expected the built %s.%s bundle, got: %s\n' "$installer_name" "$installer_kind" "$installer_payload" >&2; exit 1
         fi
         installer_payload="$(cd "$installer_payload" && pwd -P)"
+        for installer_binary in "$installer_payload"/Contents/MacOS/*; do
+            if [[ "$(/usr/bin/lipo -archs "$installer_binary")" != "$installer_arch" ]]; then
+                printf '%s is %s; this installer needs %s only.\n' "$installer_binary" "$(/usr/bin/lipo -archs "$installer_binary")" "$installer_arch" >&2; exit 1
+            fi
+        done
         if [[ "$installer_kind" == vst3 ]]; then installer_vst3[$installer_index]="$installer_payload"; else installer_au[$installer_index]="$installer_payload"; fi
     done
 done
@@ -64,7 +77,7 @@ installer_swift_sources=(InstallerCore.swift InstallerMaintenance.swift Installe
 installer_swift_paths=()
 for installer_file in "${installer_swift_sources[@]}"; do installer_swift_paths+=("$installer_source_dir/$installer_file"); done
 mkdir -p "$installer_app/Contents/MacOS" "$installer_resources/Payload"
-xcrun swiftc -O -target arm64-apple-macosx12.0 -module-cache-path "$installer_work/module-cache" \
+xcrun swiftc -O -target "$installer_arch-apple-macosx12.0" -module-cache-path "$installer_work/module-cache" \
     "${installer_swift_paths[@]}" -framework AppKit -framework CryptoKit -o "$installer_app/Contents/MacOS/VFD-Suite-Installer"
 xcrun swiftc -O -target arm64-apple-macosx12.0 -module-cache-path "$installer_work/module-cache" \
     "$installer_source_dir/MakeAssets.swift" -framework AppKit -o "$installer_work/make-assets"
@@ -126,7 +139,7 @@ fi
 # until all of them exist, so a failed step never leaves a half-finished release that blocks a rerun.
 installer_stage="$installer_work/release"
 mkdir -p "$installer_stage"
-installer_app_zip="Vivid-Fever-Dreams-Suite-v$installer_version-macOS-AppleSilicon.zip"
+installer_app_zip="Vivid-Fever-Dreams-Suite-v$installer_version-macOS-$installer_chip.zip"
 installer_source_zip="VFD-Suite-Installer-Source-v$installer_version.zip"
 installer_helper="Prepare VFD Beta.command"
 # The beta helper pins the SHA-256 of the signed installer executable, so it is generated after signing.
@@ -134,6 +147,12 @@ installer_hash="$(/usr/bin/shasum -a 256 "$installer_app/Contents/MacOS/VFD-Suit
 installer_hash="${installer_hash%% *}"
 sed -e "s/@SUITE_VERSION@/$installer_version/g" -e "s/@INSTALLER_SHA256@/$installer_hash/g" \
     "$installer_helper_template" > "$installer_stage/$installer_helper"
+if [[ "$installer_arch" == x86_64 ]]; then
+    # The template's check requires Apple Silicon; the Intel helper requires the opposite.
+    /usr/bin/perl -0pi -e 's/if \[\[ "\$\(\/usr\/bin\/uname -m\)" != arm64 \]\]; then\n.*?\nfi\n/[[ "\$(\/usr\/sbin\/sysctl -n hw.optional.arm64 2>\/dev\/null || printf "0")" != 1 ]] || fail "This is the Intel beta. This Mac has Apple Silicon: use the Apple Silicon download."\n/s' \
+        "$installer_stage/$installer_helper"
+    grep -q 'This is the Intel beta' "$installer_stage/$installer_helper" || { printf 'Could not adapt the beta helper for Intel.\n' >&2; exit 1; }
+fi
 chmod 755 "$installer_stage/$installer_helper"
 if grep -q '@[A-Z_0-9]*@' "$installer_stage/$installer_helper"; then
     printf 'The beta helper template has unfilled placeholders.\n' >&2; exit 1

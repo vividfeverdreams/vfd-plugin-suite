@@ -24,6 +24,7 @@ juce::String releaseJson(const juce::String& tag, bool draft = false, bool prere
            "{\"name\":\"SHA256SUMS.txt\",\"size\":356,\"browser_download_url\":\"" + prefix + "SHA256SUMS.txt\"},"
            "{\"name\":\"Vivid-Fever-Dreams-Suite-v9.9.9-Beta-Windows-VST3.zip\",\"size\":7,\"browser_download_url\":\"" + prefix + "Vivid-Fever-Dreams-Suite-v9.9.9-Beta-Windows-VST3.zip\"},"
            "{\"name\":\"Vivid-Fever-Dreams-Suite-v9.9.9-Beta-Linux-x64.tar.gz\",\"size\":9,\"browser_download_url\":\"" + prefix + "Vivid-Fever-Dreams-Suite-v9.9.9-Beta-Linux-x64.tar.gz\"},"
+           "{\"name\":\"Vivid-Fever-Dreams-Suite-v9.9.9-Beta-Intel-Mac.zip\",\"size\":90,\"browser_download_url\":\"" + prefix + "Vivid-Fever-Dreams-Suite-v9.9.9-Beta-Intel-Mac.zip\"},"
            "{\"name\":\"Vivid-Fever-Dreams-Suite-v9.9.9-Beta-Install.zip\",\"size\":100,\"browser_download_url\":\"" + prefix + "Vivid-Fever-Dreams-Suite-v9.9.9-Beta-Install.zip\"},"
            "{\"name\":\"Vivid-Fever-Dreams-Suite-v9.9.9-Beta-Windows-Setup.exe\",\"size\":32,\"browser_download_url\":\"" + prefix + "Vivid-Fever-Dreams-Suite-v9.9.9-Beta-Windows-Setup.exe\"}]}";
 }
@@ -46,10 +47,16 @@ void testLogic()
     check(isVersion("v1.5.0") && isVersion("2.0") && ! isVersion("latest") && ! isVersion("") && ! isVersion("1.5;rm"),
           "only real version tags count");
 
+    // The Intel zip is listed before the Apple Silicon one, so a build that took the wrong chip's file would fail here.
+   #if JUCE_MAC && defined(__x86_64__)
+    const juce::String macAsset = "Vivid-Fever-Dreams-Suite-v9.9.9-Beta-Intel-Mac.zip"; const juce::int64 macSize = 90;
+   #else
+    const juce::String macAsset = "Vivid-Fever-Dreams-Suite-v9.9.9-Beta-Install.zip"; const juce::int64 macSize = 100;
+   #endif
     const auto mac = parseRelease(juce::JSON::parse(releaseJson("v9.9.9")), Platform::mac);
-    check(mac.version == "9.9.9" && mac.assetName == "Vivid-Fever-Dreams-Suite-v9.9.9-Beta-Install.zip" && mac.assetSize == 100
+    check(mac.version == "9.9.9" && mac.assetName == macAsset && mac.assetSize == macSize
               && mac.sumsUrl == base + "SHA256SUMS.txt" && mac.canInstall(),
-          "Mac picks the installer zip and the checksums");
+          "Mac picks its own chip's installer zip (" + macAsset + ") and the checksums");
     const auto windows = parseRelease(juce::JSON::parse(releaseJson("v9.9.9")), Platform::windows);
     check(windows.assetName == "Vivid-Fever-Dreams-Suite-v9.9.9-Beta-Windows-Setup.exe" && windows.assetSize == 32,
           "Windows picks Setup.exe, not the VST3 zip");

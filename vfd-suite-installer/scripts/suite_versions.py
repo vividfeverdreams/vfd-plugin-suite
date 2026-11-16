@@ -14,6 +14,7 @@ Run from anywhere; paths are relative to the repo root. Standard library only.
 """
 import argparse
 import json
+import os
 import plistlib
 import re
 import sys
@@ -30,7 +31,8 @@ PLUGINS = [
     ("energy-harvester", "EnergyHarvester", "ENERGY HARVESTER", "energyharvester"),
     ("stutter-step", "StutterStep", "STUTTER-STEP", "stutterstep"),
 ]
-BUILD_DIR = "build"  # one build folder per plug-in; release-mac.sh rebuilds it before signing
+# one build folder per plug-in; release-mac.sh rebuilds it before signing (release-mac-intel.sh uses "build-intel")
+BUILD_DIR = os.environ.get("VFD_BUILD_DIR", "build")
 
 SUITE_SPOTS = [
     # file, pattern whose group 1 is the suite version
