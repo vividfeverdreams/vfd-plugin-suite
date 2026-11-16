@@ -1,21 +1,18 @@
-VIVID FEVER DREAMS SUITE 1.6.4 - BETA INSTALL
+VIVID FEVER DREAMS SUITE 1.6.5 - BETA INSTALL
 
-Includes YOI-BOI 0.2.5, THROW-UP 0.2.4, BACK-SCRATCH 0.11.4,
-SHIFTY 0.6.0, ENERGY HARVESTER 0.4.4, and STUTTER-STEP 0.5.0.
+Includes YOI-BOI 0.3.0, THROW-UP 0.2.5, BACK-SCRATCH 0.11.5,
+SHIFTY 0.6.1, ENERGY HARVESTER 0.4.4, and STUTTER-STEP 0.5.1.
 
-NEW IN 1.6.4
-SHIFTY 0.6.0: four DRIVE characters (SOFT, TAPE, TUBE, FUZZ) on a
-new DRIVE page, and SMASH, a three-band OTT-style finisher at the
-end of the chain. Factory presets are re-voiced; Classic is untouched.
-STUTTER-STEP 0.5.0: GATE | SLAP, NUDGE and DOTTED | TRIPLET under the
-step lane, 32 new SIMPLE and HATS grooves, and no dark window corners.
-YOI-BOI 0.2.5: the amp Release is back on screen. Open MOD and find it
-under ATTACK / RELEASE (75 ms is the original; lower is tighter).
-Old projects open and sound exactly as before.
-Also new since 1.6.2: duplicating a track keeps its preset in
-THROW-UP and BACK-SCRATCH, BACK-SCRATCH's screen follows your changes
-while it's switched off, and preset menus work in Bitwig on Linux
-(thanks to RufusIbiza).
+NEW IN 1.6.5
+YOI-BOI 0.3.0: louder and thicker out of the box. A built-in finisher
+(OTT-style compression into a clipper) brings every sound to about
+-10 LUFS, and on the current engine the sub plays at the note you
+hold instead of an octave down. No new knobs. Old projects open and
+sound exactly as before.
+New eye icons for THROW-UP, BACK-SCRATCH, SHIFTY and STUTTER-STEP.
+Also new since 1.6.3: SHIFTY's four DRIVE characters and SMASH,
+STUTTER-STEP's GATE | SLAP, NUDGE, DOTTED | TRIPLET and 32 new
+grooves, and YOI-BOI's Release on the MOD page.
 Already on 1.6.0 or later? Open any plug-in's INFO page and click
 INSTALL.
 Every plug-in comes as a VST3 and as an Audio Unit (AU) on the Mac,

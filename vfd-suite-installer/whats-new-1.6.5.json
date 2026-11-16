@@ -1,0 +1,45 @@
+{
+  "YOI-BOI": [
+    "Louder and thicker out of the box: a built-in finisher (OTT-style compression into a clipper) brings every sound to about -10 LUFS. No new knobs.",
+    "Factory sounds, NEW YOI and the die are all voiced to the same loudness, so switching sounds doesn't jump in level. OUTPUT now starts at 0 dB.",
+    "On the current engine the sub plays at the note you hold instead of an octave down, and the low cut follows the note.",
+    "Your projects and saved presets from 0.2.5 and older open and sound exactly as before.",
+    "Release is on screen: MOD > ATTACK / RELEASE sets how long notes ring after you let go."
+  ],
+  "THROW-UP": [
+    "New icon: spiral eyes.",
+    "Duplicating a track keeps the preset you picked instead of going back to the default.",
+    "Your DAW keeps its keys. The arrow keys step through presets, factory and yours, with the preset box always naming the one you hear.",
+    "THROW! can no longer stick on when the window closes mid-hold.",
+    "Safer project saves in hosts that save from a background thread."
+  ],
+  "BACK-SCRATCH": [
+    "New icon: happy ^ ^ eyes.",
+    "Duplicating a track keeps its preset and pattern instead of going back to the default.",
+    "The screen shows your changes while the device is switched off.",
+    "Your DAW keeps its keys, Cmd-Z included. The arrow keys browse presets like the screen's arrows, into the selected slot. Escape only cancels what's open.",
+    "Long status messages wrap instead of squeezing.",
+    "The plug-in's BYPASS and your DAW's bypass are now one switch."
+  ],
+  "SHIFTY": [
+    "New icon: side-eye.",
+    "DRIVE has four characters on the new DRIVE page: SOFT (the 0.5 drive, exactly as before), TAPE, TUBE and FUZZ.",
+    "SMASH: a three-band OTT-style finisher at the end of the chain, with TIME and UP/DOWN. It keeps your level and never clips.",
+    "Factory presets re-voiced with the new drives and SMASH; the 24 Classic sounds are untouched. RANDOM picks a model and SMASH too.",
+    "Your projects and saved presets from 0.5.4 and older load on SOFT with SMASH off, so they sound exactly as before.",
+    "Your DAW keeps its keys, Cmd-Z included. The arrow keys browse the PRESETS list, as filtered, from any page."
+  ],
+  "ENERGY HARVESTER": [
+    "Your DAW keeps its keys. The arrow keys browse presets; they no longer nudge a fader you clicked.",
+    "A window resized by dragging its corner keeps its size. Loading a preset keeps your project's sound setting.",
+    "The STOP>START mode has one name everywhere."
+  ],
+  "STUTTER-STEP": [
+    "New icon: stepped-bar eyes.",
+    "New tool row: GATE | SLAP edits the slap sends (with levels), NUDGE moves the groove a step, DOTTED | TRIPLET changes the step length.",
+    "32 new grooves: SIMPLE (quarter chugs to triplets) and HATS (8th and 16th hats, shuffles, rolls), plus a HATS family in ROLL FROM.",
+    "DRAG MIDI writes dotted and triplet grooves as whole 4/4 bars. The window shows only the device: no dark corners.",
+    "Projects and grooves from 0.4.3 and older open and sound exactly as before.",
+    "New DRAG MIDI key: drag it onto a MIDI track to drop the groove as a MIDI clip, swing and ghosts included."
+  ]
+}
